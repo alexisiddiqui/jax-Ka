@@ -1,0 +1,53 @@
+{
+  "version": "set2-screen-v1",
+  "status": "screened_leads_not_scored_labels",
+  "systems": [
+    {
+      "id": "barnase_barstar",
+      "target": "2b",
+      "source": "https://pubmed.ncbi.nlm.nih.gov/8494892/",
+      "doi": "10.1021/bi00070a025",
+      "evidence": "Primary abstract reports pH-sensitive binding; full pH series requires primary-table verification.",
+      "structure_seeds": [{"pdb_id": "1brs", "chains": ["A", "D"], "role": "reservation_proxy"}],
+      "structure_source": "https://www.rcsb.org/structure/1BRS",
+      "status": "reserve_family_pending_quantitative_curation",
+      "blockers": ["Verify full affinity series and salt/buffer matching", "Confirm experimental barstar construct against C40A/C82A in the structure"],
+      "temperature_K": 298.15,
+      "numeric_labels_accepted": false,
+      "set2a_evidence": "No paired residue pKa measurements verified"
+    },
+    {
+      "id": "protein_g_fc",
+      "target": "2b",
+      "source": "https://pmc.ncbi.nlm.nih.gov/articles/PMC2673305/",
+      "doi": "10.1074/jbc.M809236200",
+      "evidence": "Figure 5b supplies a multi-pH SPR affinity series; soluble protein G binds immobilized Fc using a 1:1 fit.",
+      "pH_conditions": [4.0, 4.5, 5.5, 6.5, 7.4, 8.5],
+      "NaCl_M": 0.15,
+      "temperature_K": null,
+      "constructs": ["GB01", "GB09", "GB0919"],
+      "structure_seeds": [{"pdb_id": "1fcc", "chains": ["A", "C"], "role": "reservation_proxy"}],
+      "structure_source": "https://www.rcsb.org/structure/1FCC",
+      "status": "reserve_family_prioritize_wild_type",
+      "blockers": ["Map measured B1 sequence to deposited C2 domain and trastuzumab Fc to deposited MO61 Fc", "Digitize or obtain Figure 5b values with uncertainty", "Verify binding assay temperature", "Exclude modeled mutant complexes from the no-reprediction round"],
+      "numeric_labels_accepted": false,
+      "set2a_evidence": "No paired residue pKa measurements verified"
+    },
+    {
+      "id": "fcrn_igg",
+      "target": "2b",
+      "source": "https://pubmed.ncbi.nlm.nih.gov/7578107/",
+      "doi": "10.1021/bi00045a005",
+      "additional_primary_source": "https://pmc.ncbi.nlm.nih.gov/articles/PMC11164218/",
+      "evidence": "Original study measures SPR kinetics/equilibrium pH dependence. A later study separates affinity and avidity over pH 5.8–7.4.",
+      "structure_seeds": [{"pdb_id": "1frt", "chains": ["A", "B", "C"], "role": "rat_family_reservation_proxy"}, {"pdb_id": "4n0u", "chains": ["A", "B", "E"], "role": "human_FcRn_YTE_sequence_proxy_only"}],
+      "structure_source": "https://www.rcsb.org/structure/1FRT",
+      "human_structure_source": "https://www.rcsb.org/structure/4N0U",
+      "human_structure_limit": "Ternary albumin complex; only FcRn/beta-2-microglobulin/Fc author chains A/B/E used for sequence reservation, not a matched binary experimental input",
+      "status": "hold_structural_and_assay_scope",
+      "blockers": ["Separate rat and human constructs and variants", "Use affinity rather than avidity for equilibrium linkage", "Preserve receptor beta-2-microglobulin and Fc stoichiometry", "1FRT has glycans and 4.5 A resolution; not admitted as a current protein-only reference", "Do not convert koff alone into binding free energy"],
+      "numeric_labels_accepted": false,
+      "set2a_evidence": "No paired residue pKa measurements verified"
+    }
+  ]
+}

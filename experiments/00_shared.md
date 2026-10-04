@@ -5,6 +5,50 @@ needs a different rule adds a row to the decision log at the bottom and says why
 
 Step 1 builds everything in this file. Steps 02–04 consume it.
 
+**Latest component policy (2026-10-04):**
+[Stripped protein-only reference](1_benchmark/07_stripped_reference_policy.md)
+uses **15 Å training / 20 Å evaluation for eligible buffer/additive candidates**,
+following the [corrected buffer pilot](1_benchmark/14_buffer_sensitivity.md) and
+explicit user approval. Resolved neutral glycans with checked attachments retain
+**20/25 Å**; other eligible noncovalent ligands retain **15/25 Å**. Exposed,
+uncoordinated monatomic metals/ions retain **25/25 Å**; buried/coordinated metals
+remain excluded. Buffer exposure and bridging remain annotations, not new entry
+rejection gates. Existing chemical eligibility is preserved.
+
+The buffer experiment supports neutral alcohol/ether additives; application to
+other eligible buffer species remains an operational extrapolation. Individual
+buffer deletions can produce outliers beyond 15 Å. These masks are uncertainty
+flags, not proven physical error bounds. Source components and removal provenance
+are retained. Full ligand-aware modeling remains in section 05.
+
+The `buffer-15-20-v3-pool1` and `buffer-15-20-v3-pool5000` campaigns supply the
+[verified structural freeze v1](1_benchmark/16_structural_split_freeze.md):
+**778 train / 151 validation / 523 test** usable interface pairs. The protein G–Fc
+reference groups are reserved in test; the entire 41-candidate training group
+moved together, costing one usable training interface pair. Structural inputs,
+current masks, assignments and refreshed antibody novelty are frozen at
+`universe/structural-freeze-v1`. Consumers must use its split-aware
+`training_eligible` / `evaluation_eligible` site masks and verify input hashes.
+
+The [preceding buffer recount](1_benchmark/15_buffer_mask_revision.md) is preserved
+as historical evidence. [The frozen-input gate/scorer and 50-pair smoke](1_benchmark/17_frozen_smoke_and_scoring.md)
+are complete and verified. The [completed numerical follow-up report](1_benchmark/21_smoke_validation_report.md)
+records 50/50 completed teacher calculations, 47/50 usable teacher interface pairs,
+and convergence in all 150 JAX states at 1024 iterations. Remaining invalid sites
+stay flagged. A separately versioned production wrapper passed its equivalence
+gate; [production labeling is now running](1_benchmark/22_production_launch.md)
+on all 1452 usable complexes, prioritizing a fixed 500-complex training pilot.
+Full production predictions and experimental Set 2 curation remain unfinished. New experimental
+references require an overlap audit before independent claims. Production remains
+subject to explicit coverage/failure review before training; the current-preparation
+gates passed without claiming historical pKPDB equivalence.
+
+The first dataset-generation round covers protein–protein systems through the
+backbone-only stage. [Section 05](5_ligands/05_ligand_complexes.md) defers small-molecule,
+drug and ligand complexes, including bound/unbound pairs, to a later extension.
+Retain their source inventory for that extension; initial exclusion is task scope,
+not a claim that those systems are unusable for training.
+
 ---
 
 ## Glossary
@@ -32,10 +76,14 @@ Two passes. Metadata first (cheap, whole universe), coordinates second (only wha
 **Metadata:** PDB biological assembly 1 + SAbDab. X-ray or cryo-EM. Total ≤1500 residues
 (provisional — reset from smoke-set timings, see Jobs).
 
-**Partner rule (v1):** exactly two partners.
+**Partner rule (revised pilot):** exactly two explicitly defined partners.
 - two-chain assemblies → one chain each; homomers kept and flagged `homomeric`
 - SAbDab → H+L vs a single antigen chain
-- anything else → reject `multi_partner`
+- manageable larger assemblies may supply declared partner sets; preserve omitted
+  protein context and identify labels as the selected prepared pair's response.
+  Do not infer an assignment of extra chains. The full observed assembly retains
+  the 1,500-residue cap. The historical `prepare` command retains its strict
+  binary baseline; use `curation-pilot` for this revision.
 
 **Coordinates:** half-sum buried area (per side) ≥ 500 Å²; ≥10 interface residues on the complex.
 
@@ -48,10 +96,10 @@ are method-internal. Provenance dict stored with each structure.
 
 | Decision | Policy |
 |---|---|
-| Altlocs | Highest occupancy; tie → first; record which |
-| Missing backbone atoms in a residue | Reject `missing_backbone` |
-| Chain gaps | Any gap whose flanking residue lies in the interface zone → reject `interface_gap`. Distal gaps allowed: record list + length; break termini are **never scored**; jax-Ka runs `gap_policy="cap"` |
-| Missing side-chain atoms | Any affected residue in the interface zone → reject `interface_missing_sidechain`. Distal: complete once in prep with PDB2PQR's rebuild (already a teacher dependency), write heavy atoms only; flag `was_completed` |
+| Altlocs | First deposited positive-occupancy alt ID per residue, shared atoms retained. Same selected geometry in AB/A/B. Alternatives are provenance only: no extra masks or conformer teacher campaign. Zero-occupancy atoms are not observed inputs |
+| Missing backbone atoms in a residue | Attempt PDB2PQR repair before topology checks; retain successful, identity-preserving preparations. Do not manually remove the residue to force success |
+| Chain gaps | Retain when PDB2PQR preparation succeeds, including interface gaps. Record physical segments and artificial termini; do not score artificial termini as native targets |
+| Missing side-chain atoms | Attempt PDB2PQR repair regardless of interface distance; retain successful preparations with `was_completed` provenance. Missing-coordinate proximity is metadata, not a rejection radius |
 | Hydrogens | Strip |
 | Waters | Remove |
 | Ions | Remove (PypKa default `keep_ions=False`) |
@@ -59,12 +107,108 @@ are method-internal. Provenance dict stored with each structure.
 | Nonstandard residues | Reject `nonstandard_residue` |
 | Disulfides within a partner | Keep; jax-Ka `freeze_disulfides=True` |
 | Disulfides across partners | Reject `interpartner_disulfide` |
-| Multiple models (NMR) | Model 1 only |
+| Multiple models | Revised pilot refuses silent model-1 selection; explicit model-specific paired examples required. Initial metadata scope excludes NMR |
 
-Why distal defects are tolerated: they are identical in both states, so most of their error
-cancels in ΔpKa. Interface-zone defects don't cancel, so they are rejected.
+Why distal defects are candidates for tolerance: their representation is identical
+in both states, so some error may cancel in ΔpKa. This is a hypothesis to validate,
+not a guarantee: electrostatic coupling can propagate beyond a local defect.
+The current inclusive experiment measures this error instead of pre-rejecting
+interface-zone defects.
 
 jax-Ka then runs with `missing_sidechain="error"` as a check that completion worked.
+
+### Revised supervision policy for incomplete structures
+
+The user selected retaining usable examples with distal missing coordinates and
+excluding unreliable **site targets**, rather than copying neighbouring shifts or
+requiring a label for every residue. The latest decision supersedes radius-based
+admission: **include structures PDB2PQR can prepare within the protein–protein
+scope, then measure error versus distance using controlled whole-residue deletions.**
+No 5/8/10/15/20 Å missing-coordinate exclusion is active in the inclusive policy.
+Repaired observed sites can receive conditional teacher targets; absent residues
+cannot. Artificial termini are not native supervision targets. Preparation and
+teacher failures remain explicit coverage outcomes.
+
+Start from complete/near-complete references. Delete 1 or 3 residues at either
+terminus and a buried internal residue or three-residue segment. Determine burial
+and deleted-atom positions from the intact reference, not from the damaged model.
+Compare AB pKa, free-state pKa, and paired ΔpKa errors in 0–5, 5–10, 10–15,
+15–20, 20–30 and >=30 Å bands, plus cumulative outside-radius summaries. Distance
+is the minimum from a retained target's functional atoms to any deleted reference
+heavy atom. Include repeated intact calculations to check reproducibility; fixed-
+seed repeats do not estimate independent-seed Monte Carlo variance.
+Select any future masking radius from these measurements, separately for exposed
+terminal and buried deletions; the initial small pilot cannot establish a
+population-wide safe radius.
+
+The following describe retained **historical diagnostic mask comparisons**, not
+current admission/training exclusions:
+
+- Separate `input_atom_mask` (coordinates available to the student) from
+  `supervision_mask` (targets included in loss/evaluation). Preserve full sequence
+  identity and distinguish observed, reconstructed and absent coordinates.
+- For real unresolved residues/atoms, do not invent pKa or ΔpKa labels. In
+  particular, neither sequence neighbours nor spatial neighbours provide valid
+  replacement labels. Mask affected sites and nearby observed targets.
+- Compare 10, 15 and 20 Å exclusion radii before freezing a default. Measure from
+  target functional-group atoms to the **uncertain region**, and use the same
+  union mask for AB and its matching free-state site. Include artificial break/
+  truncation termini in that uncertain region; never score them as native termini.
+- Compare smaller **5/8/10 Å** radii for exposed-tail candidates against the
+  corresponding **10/15/20 Å** general-defect radii. The current candidate screen
+  is deliberately narrow: terminal gap of at most five residues, three complete
+  observed attachment residues each with exposure fraction >=0.4 in both AB and
+  the matching free partner, all >20 Å from the other partner, no alternate
+  uncertainty in those flanks, and no missing ionisable residue. These numerical
+  thresholds are pilot choices, not established physical cutoffs. Exposure is
+  residue SASA divided by SASA of that same isolated residue; <=0.1 is recorded
+  as a buried-anchor proxy, with intermediate/unknown cases kept conservative.
+  Missing-residue burial is not observed. Absent neighbours may inflate flank
+  exposure, and the current exposure measurement is for the selected partners.
+  Longer or charged tails need explicit sensitivity evidence rather than being
+  assumed safe or permanently excluded from future work.
+- A missing side chain occupies a region beyond its remaining atoms. Expand its
+  uncertain region using plausible side-chain extent or reconstruction variability.
+  For a whole missing segment, flanking coordinates alone do not locate it. Use
+  an explicitly modelled envelope, or keep its localisation unresolved rather
+  than asserting that it is distal or buried. Long unconstrained segments may
+  leave no defensible supervised sites in that example.
+- Keep the possible-location envelope when testing the smaller exposed-tail
+  radius: 3.8 Å per missing backbone step plus a provisional 8 Å heavy-atom
+  extent. This avoids disguising a localisation assumption as a radius change.
+- Alternate conformations contribute the union of their deposited heavy-atom
+  positions to uncertainty masks; incomplete alternatives receive an additional
+  8 Å extent. Targets on ambiguous residues are masked pending conformer-specific
+  teacher validation. Full alternatives are retained in `conformers.json` so this
+  is not irreversible data removal. Local alt IDs do not imply a global A/B
+  ensemble or equilibrium weights. Test local alternatives with matched AB/A/B
+  inputs and retain conformer-specific responses; never occupancy-average pKas.
+  Distinct deposited structures remain separate examples in the same sequence
+  split component, not independently assigned train/test conformations.
+- Backbone-only reconstruction may supply approximate input geometry and help
+  localise this envelope. It is not a restored atomistic electrostatic model and
+  does not make a missing side-chain target valid. The PB teacher still needs a
+  chemically parameterisable input: validated completion or an explicitly defined
+  capped/truncated representation, identical across paired states. Record that
+  representation and label provenance; teacher failures remain coverage failures.
+- Before adopting a radius, use a small repair/truncation sensitivity pilot to
+  measure how much paired shifts change outside it. Report retained sites and
+  complexes by radius, residue type, size and interface distance. A distance mask
+  is a locality approximation, not proof of unchanged reference values.
+- Synthetic coordinate dropout is different: when a reliable complete-structure
+  teacher target exists, hide student coordinates while retaining that target.
+  Real unresolved structure has no such known complete-structure label.
+
+These partial labels can support site-level ΔpKa training. They cannot by themselves
+support whole-system charge/linkage evaluation, which requires complete accounting.
+Being buried is not by itself evidence that a defect is harmless or distal to the
+binding interface.
+
+The assembly-chain restriction is independent of this policy. The audit found
+123/139 excluded multi-chain assemblies within the existing 1,500-residue cap;
+replacing a two-chain restriction requires defining two interacting partners and
+their retained/omitted context, not treating extra chains as missing-coordinate
+fragments.
 
 ### Rejection codes
 
@@ -73,6 +217,7 @@ Machine-readable, one row per rejected candidate: `(candidate_id, stage, code, d
 ```
 selection:  multi_partner, size_cap, buried_area, interface_residues
 prep:       missing_backbone, interface_gap, interface_missing_sidechain,
+            missing_titratable_sidechain,
             ligand, glycan, metal, nonstandard_residue, interpartner_disulfide,
             ambiguous_disulfide, ambiguous_residue_key, cyclic_peptide, covalent_crosslink
 teacher:    teacher_timeout, teacher_failed
@@ -95,14 +240,18 @@ never translated inside the complex box. The sites of `A` are the A-chain sites 
 
 ## Teacher config (locked)
 
-Must match pKPDB, or tier A and tier B are different teachers:
+Current generated labels use the explicit configuration below. Historical pKPDB labels retain their original provenance; equivalence to this current teacher is not assumed:
 
 - internal dielectric 15, solvent 80, ionic strength 0.1 M
 - 81-point grid, `pbc_dimensions=0`
 - GROMOS 54a7, PDB2PQR with H optimisation, no ions
 - temperature 298.15 K
+- explicitly disable SER/THR titration (`ser_thr_titration=False`) for the
+  nine-group benchmark site schema. Shared server metadata also says false,
+  but does not establish historical per-entry settings; see the
+  [historical evidence amendment](1_benchmark/18_historical_pkpdb_settings.md).
 
-> Verify against the pKPDB deposit manifest, not just the docs (gate G2).
+> G2_current verifies our frozen preparation, inputs, configuration and runtime evidence. G2_historical remains unresolved and applies only to claims of reproducing deposited pKPDB labels. See [the gate revision](1_benchmark/17_frozen_smoke_and_scoring.md).
 
 **pH grid for every curve, every method:** −2 to 16, step 0.25 (73 points). Same grid as
 jax-Ka's `pka_from_grid` default usage.
@@ -114,6 +263,35 @@ double-back this file exists to prevent.
 ---
 
 ## Split
+
+**2026-10-04 revision approved for feasibility:** separate antigen-family split
+assignment from antibody CDR novelty reporting. Target 500 test and 150 validation
+pairs with usable interface sites, retaining the rest for training; keep sequence
+groups intact even when they exceed the original 5% size target. The former
+80/10/10-by-candidate-count rule below is historical. The historical proposal is in [08_usable_split_proposal.md](1_benchmark/08_usable_split_proposal.md).
+[Structural freeze v1](1_benchmark/16_structural_split_freeze.md) is verified; method coverage and production readiness remain separate.
+
+**Representation decision (2026-10-04):** retain the current usable-size proposal
+without further balancing or data removal. Primary aggregation computes each
+complex's score, averages complexes within each sequence component, then weights
+components equally. Report pooled scores and antibody/general breakdowns as
+secondary results; bootstrap sequence components, not sites or complexes
+independently. Missing/undefined scores and method coverage must be reported,
+not converted to zero. The new frozen-input scorer implements this aggregation and reports engineering-smoke results separately from production estimates; the legacy scorer remains historical.
+
+**Approved experimental exception (2026-10-04):** retain the antigen-held-out
+assignments and exclude the overlapping 1AXT H/P01865 antibody reference family
+from independent PKAD evaluation claims. The runtime
+`usable-proposal-v2/independent-experimental-scope-v2.json` records reference-level
+eligibility; experimental scoring must use it and review unknown references
+before inclusion. Excluded references may be shown only as non-independent
+diagnostics. This exception supersedes the blanket PKAD reservation below for
+this family; all other experimental reservations remain required.
+
+The official downloaded PKAD-3 release has now been reconciled and its additional
+reference-chain matches are all in test. See [10_experimental_inventory.md](1_benchmark/10_experimental_inventory.md)
+for release hashes, parent-sequence proxy coverage and model-peptide exclusions.
+Experimental set-2 literature curation and reservations remain separate work.
 
 Frozen once in step 1, on the whole candidate universe after metadata selection, before
 any prep or teacher run. Later stages never re-split.
@@ -266,7 +444,8 @@ over `ground_truth_1522.tar`.
 |---|---|---|
 | G1 | PypKa installs (DelPhi licence), runs one smoke pair in all three states, returns curves | Stop and re-plan. There is no fallback teacher. |
 | G1b | PypKa exposes intrinsic pKa + pair terms | Not fatal. Decide whether 03 calls DelPhi directly. Tier B schema keeps the columns nullable either way. |
-| G2 | Teacher config matches the pKPDB deposit | Fix config before any production run |
+| G2_current | Verified frozen preparation/masks, explicit current teacher config, hashed runtime and successful native teacher states | Fix reproducibility evidence before current-label runs |
+| G2_historical | Exact historical pKPDB configuration/preparation equivalence | Do not claim historical reproduction; does not block independently generated current labels |
 | G3 | Each core method treats a multi-chain file as one system | Drop that method from the core tier |
 | G4 | pKAI weights + training code usable for fine-tuning | 02 picks another fine-tune target |
 | G5 | PDB2PQR completion keeps residue identity and heavy-atom naming | Fall back to rejecting any titratable residue with missing atoms |
@@ -274,6 +453,10 @@ over `ground_truth_1522.tar`.
 ---
 
 ## Decision log
+
+Latest missing-residue policy: [10 Å training / 20 Å evaluation and coverage audit](1_benchmark/06_missing_residue_policy.md).
+This supersedes the historical no-radius and adaptive-radius decisions below for
+downstream selection; frozen teacher campaigns remain unchanged.
 
 | Date | Decision | Why |
 |---|---|---|
@@ -284,3 +467,19 @@ over `ground_truth_1522.tar`.
 | 2026-10-03 | Set 2 split into 2a (site ΔpKa) and 2b (linkage ΔΔG(pH)); 1 person-day, curated once for both 01 and 03 | Linkage is the application claim and is a weaker, separately-testable claim than per-site ΔpKa |
 | 2026-10-03 | `ΔQ` exposed unintegrated for direct Δn(H⁺) comparison | Avoids integration error and reference-pH choice; cleanest test of the linkage path |
 | 2026-10-03 | Mutation ranking added to 03 as a first-class evaluation, with the gradient-sanity tier requiring no experimental data | Per-site RMSE does not test the design use case; the soft-sequence path is otherwise unexercised |
+| 2026-10-03 | Prep removes standalone Na/K/Cl only; other metal-containing components are rejected | User-selected resolution of the ions/metals ambiguity |
+| 2026-10-03 | G5 fallback rejects incomplete titratable residues; distal incomplete nontitratable residues remain eligible and strict-method failures count against coverage | User explicitly chose the titratable-only fallback; interface defects remain excluded |
+| 2026-10-03 | All workloads, installs, tests, prep and analysis run in Slurm allocations excluding comp1400; pending plus running user CPU requests capped at 400; 2 GB per requested CPU | User's resource constraint. Eligible partitions are generalaccess and amd96; oc contains only comp1400 |
+| 2026-10-03 | Runtime work requests 2 CPUs/4 GB while predictors use one thread; installations request 4 CPUs/8 GB | Initial prep exceeded 2 GB and some nodes allocate CPUs in pairs; reserve and count both CPUs |
+| 2026-10-03 | Parquet curves use nullable variable-length float32 lists, validated to exactly 73 elements | Arrow 20 fixed-size-list nulls failed Parquet round-trip for failed predictions |
+| 2026-10-03 | Retain native teacher SER/THR outputs in raw artifacts and flag linkage incomplete until the teacher configuration/schema is reconciled | PypKa 2.10 emits additional titratable groups by default; silently omitting their charge is invalid |
+| 2026-10-03 | Set current teacher to explicit `ser_thr_titration=False`; preserve previous smoke artifacts | Shared server constants and responses say false, but are not independent per-entry evidence. Historical SER/THR remains unresolved; the 2026-10-04 evidence amendment qualifies the original rationale. Current benchmark configuration remains explicit and unchanged. |
+| 2026-10-03 | Enforce the existing binary-assembly rule in FoldBench prep | Audit found two of seven original accepted pairs came from larger assemblies. Same 50 candidates yield five conforming accepted pairs; no chemical exclusions were relaxed |
+| 2026-10-03 | Keep ARG in the shared schema and record missing teacher titration as coverage; do not fabricate midpoints/curves | PypKa 2.10 `TITRABLETAUTOMERS` excludes ARG. Corrected smoke has two ARG sites without curves; full linkage stays incomplete pending explicit fixed-charge accounting |
+| 2026-10-03 | Audit all 279 local general protein–protein FoldBench pairs and cleanup/partner-scope scenarios without changing production policy | User requested measuring combined curation and sequence-similarity effects. Strict prep retains 28 pairs/27 components; broader additive cleanup 35/34 at 30% identity. The 30% rule groups split units rather than deleting examples |
+| 2026-10-03 | Defer small-molecule/drug/ligand training and bound/unbound pairs to section 05, after protein–protein backbone-only work | User explicitly requested this later extension; no ligand label generation is included in the first round |
+| 2026-10-03 | Adopt site-level supervision masking as the next prep/training revision for real distal missing coordinates; no neighbour-label imputation | User proposed retaining examples and excluding labels within a radius of defects. Candidate radii 10/15/20 Å require sensitivity validation; backbone-only reconstruction supplies geometry, not complete PB chemistry. Existing executable audits remain strict baselines |
+| 2026-10-03 | Implement provisional exposure-dependent radii and explicit alternate-conformer accounting | User requested smaller masks for exposed tails than buried defects and proper alternate-conformation coverage. Preserve uniform-mask comparisons, coherent paired conformers, full alternative coordinates/occupancies, and separate locality/teacher sensitivity evidence |
+| 2026-10-03 | Use the first deposited alternate conformation consistently; alternatives are provenance only | User simplified the conformer policy. No additional exclusion or teacher ensemble for altlocs |
+| 2026-10-03 | Admit missing-coordinate structures on successful PDB2PQR preparation and measure radial error before choosing masks | User requested inclusive admission and controlled whole-residue deletions at termini and buried positions, starting from complete/near-complete references. Supersedes interface-defect rejection and provisional radius exclusions; retains scope, geometry and identity checks |
+| 2026-10-03 | Audit a bounded 1,000-assembly PDB/SAbDab sample and expand controlled deletions across size, interface type and charge | 296 pairs survive protein-only inclusive preparation. Reference search yields 23 distinct complete/near-complete entries against a target of 30; shortfall and source defects remain explicit. Perturbations bypass only interface admission thresholds to avoid censoring area-reducing deletions; intact references retain all gates. No distance mask or production split is chosen |

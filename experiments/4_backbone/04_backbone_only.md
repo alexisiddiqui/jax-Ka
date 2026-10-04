@@ -4,6 +4,16 @@
 **Hardware:** 3090 (+ A40s if an ensemble-label run is triggered)
 **Depends on:** a trained all-atom model from 03
 
+**AFDB scope (2026-10-03):** Consider AFDB structures and associated pKa data at
+this backbone-only tuning stage. The current pKPDB coverage audit uses AFDB only
+as sequence/coverage evidence; it does not predict structures, replace PDB
+coordinates, or transfer pKPDB labels onto AFDB geometry. See
+[the missing-residue policy](../1_benchmark/06_missing_residue_policy.md).
+
+**Later extension:** [05 — small-molecule and ligand complexes](../5_ligands/05_ligand_complexes.md).
+The first dataset-generation round remains protein–protein; ligand-containing
+training examples and bound/unbound pairs are deferred until after this stage.
+
 ---
 
 ## The thing that makes this cheap
@@ -70,6 +80,26 @@ curation currently rejects outright.
 Mask by zeroing the side-chain channel **plus a learned "absent" embedding** — not by
 zeroing alone, which is ambiguous with a genuinely zero-valued feature. One shared
 encoder, one set of weights, both modes.
+
+### Real missing coordinates versus synthetic dropout
+
+For synthetic dropout, calculate trustworthy teacher labels from the complete
+structure first, then hide student coordinates without discarding those labels.
+For genuinely unresolved experimental atoms/residues, there is no corresponding
+complete-structure label to inherit. Retain usable examples but apply the shared
+[defect supervision policy](../00_shared.md#revised-supervision-policy-for-incomplete-structures):
+mask the affected and nearby site targets identically in the bound/free pair.
+
+Backbone-only reconstruction can provide approximate context or locate a missing
+segment for masking. It does not restore missing side-chain charges or justify
+assigning the neighbouring residue's pKa shift. The teacher must still operate on
+an explicit chemically valid completed or capped/truncated representation.
+
+Compare exclusion radii of 10/15/20 Å in a repair-sensitivity pilot. Freeze the
+radius only after measuring target stability and retained-site bias. A prediction
+may be emitted at a masked site, but it has no supervised loss or benchmark score.
+Report site-level and whole-complex coverage separately; incomplete charge labels
+are insufficient for full linkage supervision.
 
 ### Heteroscedastic head
 
