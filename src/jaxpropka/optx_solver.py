@@ -54,8 +54,11 @@ class SolverConfig:
     gmres_restart: int = 30
     gmres_max_steps: int = 300
     sweep: str = "up"              # "up" or "both" (adds descending sweep + hysteresis gap)
+    coupling: str = "dense"        # "dense": active-set K extracted once; "operator": full field per call
 
     def __post_init__(self):
+        if self.coupling not in ("dense", "operator"):
+            raise ValueError("coupling must be 'dense' or 'operator'")
         if self.method not in ("lm", "newton"):
             raise ValueError("method must be 'lm' or 'newton'")
         if self.linear not in ("iterative", "dense"):
@@ -78,6 +81,39 @@ def _solver(scfg):
     return optx.Newton(rtol=scfg.rtol, atol=scfg.atol, linear_solver=linear)
 
 
+def active_system(arrays, terms, active):
+    """(intrinsic, field0, K) restricted to the active channels, with Phi_a = field0 + K h_a.
+
+    K is gathered from terms.coupling [N,Kc,9,9] (row (i,g), column
+    neighbors[i,k]*9+t); memory O(M*Kc*9). Exact for the active rows provided
+    excluded channels carry zero weight (checked by the caller via the leak flag).
+    """
+    gm = arrays["group_mask"]; dtype = terms.intrinsic.dtype
+    m = active.shape[0]
+    rows_i, rows_g = active//9, active%9
+    inverse = jnp.full(gm.size, -1, active.dtype).at[active].set(jnp.arange(m, dtype=active.dtype))
+    cols = inverse[(arrays["neighbors"][rows_i][:, :, None]*9+jnp.arange(9)[None, None, :])]   # [M,Kc,9]
+    vals = jnp.where(cols >= 0, terms.coupling[rows_i, :, rows_g, :], 0)                     # [M,Kc,9]
+    rowid = jnp.broadcast_to(jnp.arange(m)[:, None, None], cols.shape)
+    coupling = jnp.zeros((m, m), dtype).at[rowid, jnp.maximum(cols, 0)].add(vals)
+    return terms.intrinsic.reshape(-1)[active], terms.field0.reshape(-1)[active], coupling
+
+
+def free_energy(h, ph, intrinsic, field0, coupling, weights):
+    """Mean-field free energy (units kT ln10) on the active set, up to a pH-dependent constant.
+
+    F = sum_i w_i [ (h ln h + (1-h) ln(1-h))/ln10 + h (pH - pKint_i) + field0_i h ]
+        + 1/2 sum_ij w_i K_ij h_i h_j.
+    Its stationary points are the fixed points h = sigmoid(ln10 (pKint - pH - Phi)),
+    because w_i K_ij = w_i w_j (C + Hd + Hr)_ij is symmetric. K is symmetrized
+    here to remove float roundoff in the stored reciprocal kernels.
+    """
+    log10 = jnp.log(jnp.asarray(10, h.dtype))
+    entropy = (jax.scipy.special.xlogy(h, h)+jax.scipy.special.xlogy(1-h, 1-h))/log10
+    wk = weights[:, None]*coupling; wk = (wk+wk.T)/2
+    return jnp.sum(weights*(entropy+h*(ph-intrinsic)+field0*h))+0.5*h@wk@h
+
+
 def _sweep(arrays, terms, ph, field, active, scfg):
     """Warm-started root solves along ``ph`` (any order). Returns per-pH states."""
     gm = arrays["group_mask"]
@@ -91,15 +127,28 @@ def _sweep(arrays, terms, ph, field, active, scfg):
     def target(h, x):
         return jnp.where(gm, jax.nn.sigmoid(log10*(terms.intrinsic-x-field(terms, h))), 0)
 
-    def residual_fn(u, args):
-        t, x = args
-        drive = t.intrinsic - x - field(t, full(u))
-        return u - log10*drive.reshape(-1)[active]
+    if scfg.coupling == "dense":
+        # The field is linear in occupancy: Phi = field0 + K h, with K fixed for a
+        # given sequence. Gather the active-set block of K directly from
+        # terms.coupling [N,Kc,9,9] (row (i,g), column neighbors[i,k]*9+t);
+        # memory O(M*Kc*9). Each solver step is then an [M,M] matvec/solve.
+        # K, field0 and intrinsic enter via args, so the implicit adjoint
+        # differentiates through them.
+        base = active_system(arrays, terms, active)
+        def residual_fn(u, args):
+            (intrinsic, f0, k), x = args
+            return u - log10*(intrinsic - x - f0 - k@jax.nn.sigmoid(u))
+    else:
+        base = terms
+        def residual_fn(u, args):
+            t, x = args
+            drive = t.intrinsic - x - field(t, full(u))
+            return u - log10*drive.reshape(-1)[active]
 
     solver = _solver(scfg)
 
     def step(u, x):
-        sol = optx.root_find(residual_fn, solver, u, args=(terms, x),
+        sol = optx.root_find(residual_fn, solver, u, args=(base, x),
                              max_steps=scfg.max_steps, throw=False)
         u = sol.value
         # Channels outside the active set do not feed back (zero weight), so

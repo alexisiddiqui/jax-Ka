@@ -79,11 +79,27 @@ Six-method common support. Other methods’ role rows are in scores_set1.csv.
 
 Complete accepted charge coverage permits linkage for 493 of 8,712 complex-method combinations; 7,416 are blocked by masks and 803 by incomplete charge coverage.
 
+## Solution uniqueness diagnostic
+
+The mean-field equations can have more than one stable solution under strong coupling. A follow-up diagnostic solved 42 complexes (30 size quantiles plus, separately, the 12 with a nonconverged v2 state) at every pH with optimistix Newton from the cold start, ascending and descending pH continuation and Levenberg–Marquardt, and evaluated the mean-field free energy of each converged solution. The published v2 curves were included as a candidate. No production prediction was changed.
+
+| Size-quantile set (90 states) | Result |
+|---|---:|
+| States with ≥ 2 converged solutions at some pH | 15 / 90 |
+| Titrating sites with ≥ 2 solutions | 148 / 8,246 (1.8%) |
+| v2-converged pH points where v2 is the lowest free-energy solution | 6,553 / 6,570 (99.7%) |
+| Largest free-energy excess of v2 where it is not lowest | 0.16 kT ln 10 |
+| Non-monotonic bracketed sites: v2 / lowest-free-energy curves | 281 / 283 |
+
+Where v2 converged it almost always found the lowest free-energy solution, so the v2 predictions are retained. Non-monotonic curves are mostly genuine features of single solutions rather than jumps between solutions; selecting the lowest-energy solution does not remove them.
+
+A lowest-free-energy rule over optimistix candidates only (no damped solver) reproduced v2 at 6,559 of 6,570 pH points on the quantile set, finding lower-energy solutions at the remainder and never missing one, with 7,889 versus 7,891 valid sites. On the 12 harder complexes it rescued pH points where v2 did not converge (valid site-midpoints 2,145 to 4,208) but missed v2's lower-energy solution at 85 pH points in 9 strongly coupled bound states (excess ≤ 0.34). It was 5.2× faster in total but only 1.4× on the largest state. Because a full v2 rerun now costs about 30 worker-hours after cache vectorization, the solver is not a bottleneck; the damped 1024-step solver remains the production solver, and the optimistix path remains an opt-in tool for implicit-gradient design work.
+
 ## Interpretation and next work
 
 JAX-Ka reproduces the PROPKA-family behaviour it approximates and is now operationally viable on every benchmark complex within a 4 GB worker. It is not more accurate than PROPKA out of the box. Its value is differentiability; any accuracy claim requires fine-tuning on training-split labels only, with validation for selection and test held out. As for all methods here, agreement is with PypKa 2.10.0 labels, not experimental ground truth.
 
-Structural cache construction (pure Python) is now the dominant JAX-Ka cost and the next optimization target. The opt-in optimistix Levenberg–Marquardt solver with implicit gradients converges on all profiled complexes but is not used for these predictions.
+Structural cache construction was the dominant JAX-Ka cost in this run (68.2 of 92.8 worker-hours). It has since been vectorized (commit `89b414c`). The loop implementation is retained as `build_cache_reference`, and every cache array is bitwise identical: all 4,356 production state fingerprints recorded in the v2 receipts are reproduced, and the production worker gives identical predictions on the six largest complexes. Cache time across the campaign falls from 68.2 to 6.25 worker-hours (10.9×; 605 s to 43 s for the largest state), with peak memory ≤ 2.03 GB per state. The predictions reported here are unchanged; a rerun would cost about 30 worker-hours, now dominated by the 1024-step solver. The opt-in optimistix Levenberg–Marquardt solver with implicit gradients converges on all profiled complexes but is not used for these predictions.
 
 ## Artifacts and provenance
 
@@ -91,6 +107,8 @@ Structural cache construction (pure Python) is now the dominant JAX-Ka cost and 
 - [Scores and intervals](/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/campaigns/production-full-v2/scores_set1.csv) and [coverage](/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/campaigns/production-full-v2/coverage.csv).
 - [JAX-Ka v2 release gate](/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/campaigns/production-1024-v2/release_gate.json) and [v1 comparison](/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/campaigns/production-1024-v2/v1_comparison.json).
 - [JAX-Ka v2 receipts](/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/campaigns/production-1024-v2/jobs/jaxka) with per-state cache fingerprints, timings and peak memory.
+- [Solution-uniqueness diagnostic](/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/diagnostics/solution-branches/br2/summary.json) and [solver comparison](/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/diagnostics/solver-compare/cmp1/summary.json).
+- [Vectorized-cache fingerprint sweep](/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/diagnostics/cache-sweep/sweep1/summary.json) and [worker comparison](/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/diagnostics/worker-vectorized/run1/comparison.json).
 
 Six-method manifest SHA-256: `b92e282631320a15ee79767ba3bada83a38e038b9f7e5deba17bae29706727cd`.
 JAX-Ka v2 manifest SHA-256: `611c6ce7e7e85592bedde81572361c3332567558290e373d1e1432b01530bde8`.

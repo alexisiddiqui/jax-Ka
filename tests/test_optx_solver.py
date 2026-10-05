@@ -45,14 +45,15 @@ def test_uncoupled_matches_henderson_hasselbalch(cache):
     assert np.all(out.converged) and np.all(extra["optx_success"])
 
 
+@pytest.mark.parametrize("coupling", ["dense", "operator"])
 @pytest.mark.parametrize("method,linear", [("lm", "dense"), ("lm", "iterative"),
                                            ("newton", "dense"), ("newton", "iterative")])
-def test_coupled_matches_converged_damped_solver(coupled, method, linear):
+def test_coupled_matches_converged_damped_solver(coupled, method, linear, coupling):
     cfg = ModelConfig(steps=4096)
     p = native(coupled)
     ref = curve_kernel(arrays_of(coupled), p, jnp.asarray(PH), config=cfg)
     assert np.all(ref.converged)
-    out, extra = run(coupled, p, cfg, SolverConfig(method=method, linear=linear))
+    out, extra = run(coupled, p, cfg, SolverConfig(method=method, linear=linear, coupling=coupling))
     assert np.all(out.converged)
     np.testing.assert_allclose(out.protonated, ref.protonated, atol=2e-6)
     # Warm-started continuation needs only a few solver steps per pH.
@@ -81,7 +82,8 @@ def test_packed_field_matches_dense(coupled):
     np.testing.assert_allclose(a.protonated, b.protonated, atol=1e-9)
 
 
-def test_implicit_gradient_matches_finite_difference_and_unrolled(coupled):
+@pytest.mark.parametrize("coupling", ["dense", "operator"])
+def test_implicit_gradient_matches_finite_difference_and_unrolled(coupled, coupling):
     cfg = ModelConfig(steps=4096)
     d = arrays_of(coupled); act = jnp.asarray(active_channels(coupled))
     ph = jnp.asarray([4., 7., 10.])
@@ -90,7 +92,7 @@ def test_implicit_gradient_matches_finite_difference_and_unrolled(coupled):
 
     def charge_optx(z):
         out, _ = optx_curve_kernel(d, jax.nn.softmax(z, -1), ph, act, None,
-                                   config=cfg, solver_config=SolverConfig())
+                                   config=cfg, solver_config=SolverConfig(coupling=coupling))
         return jnp.sum(out.total_charge*jnp.asarray([1., -2., .5]))
 
     def charge_damped(z):
@@ -138,3 +140,22 @@ def test_real_structure_matches_damped_solver(name):
     out, extra = run(cache, p, cfg, active=active_channels(cache, p), packed=True)
     assert np.all(out.converged) and np.all(extra["optx_success"])
     np.testing.assert_allclose(out.protonated, ref.protonated, atol=2e-6)
+
+
+def test_free_energy_gradient_is_weighted_fixed_point_residual(coupled):
+    from jaxpropka.model import _local_terms, _field
+    from jaxpropka.optx_solver import active_system, free_energy
+    cfg = ModelConfig(); d = arrays_of(coupled)
+    rng = np.random.default_rng(3)
+    p = jnp.asarray(rng.dirichlet(np.ones(20), size=coupled.n_residues))   # soft sequence: w != 1
+    terms = _local_terms(d, p, cfg)
+    act = jnp.asarray(active_channels(coupled))
+    intrinsic, f0, k = active_system(d, terms, act)
+    w = terms.weights.reshape(-1)[act]
+    h = jnp.asarray(rng.uniform(.05, .95, size=act.shape[0]))
+    ph = 6.3
+    grad = jax.grad(free_energy)(h, ph, intrinsic, f0, k, w)
+    full = jnp.zeros(d["group_mask"].size).at[act].set(h).reshape(d["group_mask"].shape)
+    phi = _field(d, terms, full).reshape(-1)[act]
+    expected = w*(jnp.log(h/(1-h))/jnp.log(10.)+ph-intrinsic+phi)
+    np.testing.assert_allclose(grad, expected, rtol=1e-6, atol=1e-6)
