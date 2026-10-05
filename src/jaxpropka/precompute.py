@@ -9,7 +9,7 @@ import time
 import numpy as np
 from scipy.spatial import cKDTree
 from .cache import StructureCache
-from .parameters import (CLASSES, AA_CLASSES, NEUTRAL_AA, AA_TO_INDEX, BB_RANGES,
+from .parameters import (ALPHABET, CLASSES, AA_CLASSES, NEUTRAL_AA, AA_TO_INDEX, BB_RANGES,
                          hbond_range)
 
 
@@ -67,13 +67,43 @@ def radius_graph(anchors,reach,cutoff,*,include_self=False,max_neighbors=None):
     return indices,mask
 
 
+def native_identities(topology):
+    """Allowed-identity mask for native-sequence-only evaluation."""
+    return np.eye(20,dtype=bool)[np.asarray(topology.native_index)]
+
+
 def build_cache(topology, candidates, *, max_env_neighbors=None, max_pair_neighbors=None,
-                dtype=np.float32):
+                dtype=np.float32, identities=None):
+    """Structural cache. ``identities``: optional bool [N,20] allowed-identity mask.
+
+    Environmental terms are computed and STORED only for allowed neighbor
+    identities (compact [N,Ke,9,A] tensors with ``identity_columns``), so the
+    cache is valid only for sequences P with no mass elsewhere (checked by
+    TitrationModel). Graphs and
+    pair kernels are identity-independent and unchanged. ``native_identities``
+    gives the benchmark case, removing ~19/20 of the radial and neutral H-bond work.
+    """
     start=time.perf_counter()
     dtype=np.dtype(dtype)
     if dtype not in (np.dtype("float32"),np.dtype("float64")):
         raise ValueError("kernel dtype must be float32 or float64")
     lib=candidates;n=topology.n_residues
+    if identities is None:
+        identity_mask=np.ones((n,20),bool)
+    else:
+        identity_mask=np.asarray(identities)
+        if identity_mask.shape!=(n,20) or identity_mask.dtype!=bool or not identity_mask.any(-1).all():
+            raise ValueError("identities must be a bool [N,20] mask with one allowed identity per row")
+        frozen=np.asarray(topology.disulfide)
+        if not identity_mask[frozen,np.asarray(topology.native_index)[frozen]].all():
+            raise ValueError("fixed-covalent residues must allow their native identity")
+    # column_of[j,a]: env column holding identity a of source residue j (-1 = not stored).
+    allowed_count=identity_mask.sum(-1)
+    width=20 if identities is None else int(allowed_count.max())
+    columns=np.zeros((n,width),np.int32);column_of=np.full((n,20),-1,np.int64)
+    for j in range(n):
+        ids=np.flatnonzero(identity_mask[j]) if identities is not None else np.arange(20)
+        columns[j,:len(ids)]=ids;columns[j,len(ids):]=ids[0];column_of[j,ids]=np.arange(len(ids))
     reach=np.zeros(n)
     for i in range(n):
         points=[lib.centers[i],lib.backbone_xyz[i]]
@@ -84,7 +114,7 @@ def build_cache(topology, candidates, *, max_env_neighbors=None, max_pair_neighb
     env_idx,env_mask=radius_graph(lib.anchors,reach,20,max_neighbors=max_env_neighbors)
     idx,row_mask=radius_graph(lib.anchors,reach,10,include_self=True,max_neighbors=max_pair_neighbors)
     ke=env_idx.shape[1];kc=idx.shape[1]
-    volume=np.zeros((n,ke,9,20),dtype);mass=np.zeros_like(volume);hb=np.zeros_like(volume)
+    volume=np.zeros((n,ke,9,width),dtype);mass=np.zeros_like(volume);hb=np.zeros_like(volume)
     bbv=np.zeros((n,9),dtype);bbm=np.zeros_like(bbv);bbhb=np.zeros_like(bbv);reorg=np.zeros_like(bbv)
     localhb=np.zeros((n,9,20),dtype)
     pro=AA_TO_INDEX["P"]
@@ -107,19 +137,25 @@ def build_cache(topology, candidates, *, max_env_neighbors=None, max_pair_neighb
             v,m=radial_summary(lib.centers[i],lib.backbone_xyz[j],lib.backbone_volume[j])
             bbv[i]+=v;bbm[i]+=m
             for a,candidate in enumerate(lib.residues[j]):
+                if not identity_mask[j,a]:
+                    continue
                 v,m=radial_summary(lib.centers[i],candidate.side_xyz,candidate.side_volume)
-                volume[i,k,:,a]=v;mass[i,k,:,a]=m
+                volume[i,k,:,column_of[j,a]]=v;mass[i,k,:,column_of[j,a]]=m
             for g in range(9):
                 if not lib.group_mask[i,g]:
                     continue
                 target=lib.polar[i][g]
                 bbhb[i,g]+=hbond_strength(target,lib.backbone_co[j],BB_RANGES[g])
                 bbn=hbond_strength(lib.backbone_nh[j],target,BB_RANGES[g])
-                hb[i,k,g,:]-=bbn;hb[i,k,g,pro]+=bbn
+                hb[i,k,g,:]-=bbn
+                if column_of[j,pro]>=0:
+                    hb[i,k,g,column_of[j,pro]]+=bbn
                 for a in NEUTRAL_AA:
+                    if not identity_mask[j,a]:
+                        continue
                     neutral=lib.residues[j][a].polar
                     ranges=hbond_range(CLASSES[g],AA_CLASSES[a])
-                    hb[i,k,g,a]+=hbond_strength(target,neutral,ranges)-hbond_strength(neutral,target,ranges)
+                    hb[i,k,g,column_of[j,a]]+=hbond_strength(target,neutral,ranges)-hbond_strength(neutral,target,ranges)
         # Source PROPKA 3.0 reorganization: a geometric factor, scaled by burial later.
         for j in [i]+env_idx[i,env_mask[i]].tolist():
             c,o=topology.backbone[j,2:4]
@@ -156,10 +192,16 @@ def build_cache(topology, candidates, *, max_env_neighbors=None, max_pair_neighb
               "environment_cutoff_angstrom":20.,"burial_cutoff_angstrom":15.,
               "coulomb_cutoff_angstrom":[4.,10.],"env_K":ke,"pair_K":kc,
               "precompute_seconds":time.perf_counter()-start}
+    if identities is not None:
+        # Backbone-NH terms fill every column; padded columns must hold exact zeros.
+        hb*=(np.arange(width)[None,:]<allowed_count[:,None])[env_idx][:,:,None,:]
+        # Only added when restricted, so unrestricted cache fingerprints are unchanged.
+        metadata["allowed_identities"]=["".join(ALPHABET[a] for a in np.flatnonzero(row)) for row in identity_mask]
     return StructureCache(keys=topology.keys,chain_ids=topology.chain_ids,
                           native_index=topology.native_index,chain_index=topology.chain_index,
                           group_mask=lib.group_mask,frozen=topology.disulfide,
                           env_neighbors=env_idx,env_mask=env_mask,volume=volume,mass=mass,hbond=hb,
                           local_hbond=localhb,bb_volume=bbv,bb_mass=bbm,bb_hbond=bbhb,reorganization=reorg,
                           neighbors=idx,pair_mask=pair_mask,coulomb_geometry=cg,hb_donor=hd,hb_reverse=hr,
-                          metadata=metadata).validate()
+                          metadata=metadata,
+                          identity_columns=None if identities is None else columns).validate()
