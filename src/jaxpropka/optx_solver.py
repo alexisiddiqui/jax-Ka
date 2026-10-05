@@ -33,7 +33,7 @@ direct evidence of multiple stable mean-field solutions (hysteresis), which
 the damped solver cannot distinguish from slow convergence.
 """
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 import jax
 import jax.numpy as jnp
@@ -214,3 +214,106 @@ def active_channels(cache, probabilities=None):
     p[frozen] = np.eye(20)[np.asarray(cache.native_index)[frozen]]  # as in _local_terms
     weights = np.concatenate((p[:, GROUP_AA], np.ones((len(p), 2))), axis=1)*gm
     return np.flatnonzero(weights.reshape(-1) > 0).astype(np.int32)
+
+
+@partial(jax.jit, static_argnames=("config", "solver_config", "initialization", "seed_steps"))
+def local_terms_curve_kernel(arrays, terms, ph, active, active_valid, *, config,
+                             solver_config, initialization="production", gradient_mask=None,
+                             seed_steps=None):
+    """Shared LocalTerms -> curves path, with optimistix's implicit adjoint.
+
+    Production initialization is a detached damped solve at each pH. Dummy active
+    channels have identity residuals. gradient_mask is supplied only in the
+    backward evaluation after a separate forward validity audit: rejected pH
+    points solve a parameter-independent identity system, so an invalid implicit
+    Jacobian is never hidden by multiplying its loss by zero.
+
+    The seeding solve is vmapped over the whole pH grid BEFORE the continuation
+    scan, not run inside it. Run per-pH inside the scan it is config.steps * len(ph)
+    sequential iterations on one small [N,9] state (~150k for a two-branch step at
+    73 pH); vmapped it is config.steps iterations on [H,N,9], the same arithmetic
+    with H times fewer loop trips, which is how the production readout does it
+    (model._over_ph). The seed is stop_gradient'd either way, so it never enters
+    the adjoint, and the converged root -- hence every number downstream -- is
+    unchanged. ``seed_steps`` overrides config.steps for the seed only; None keeps
+    the production count and leaves the branch selection bit-identical.
+    """
+    from .model import _solve_with_field
+    if solver_config.coupling != 'dense' or solver_config.linear != 'dense':
+        raise ValueError('Shared training kernel currently requires dense active coupling')
+    if initialization not in ('production', 'up', 'down'):
+        raise ValueError('Unknown root initialization')
+    ph = jnp.asarray(ph, dtype=terms.intrinsic.dtype)
+    if gradient_mask is None:
+        gradient_mask = jnp.ones(ph.shape, dtype=bool)
+    gm = arrays['group_mask']; dtype = terms.intrinsic.dtype
+    log10 = jnp.log(jnp.asarray(10., dtype)); valid = jnp.asarray(active_valid, bool)
+    intrinsic, field0, coupling = active_system(arrays, terms, active)
+    coupling = jnp.where(valid[:, None] & valid[None, :], coupling, 0)
+    base = (jnp.where(valid, intrinsic, 0), jnp.where(valid, field0, 0), coupling)
+    field = lambda h: _field(arrays, terms, h)
+
+    def full(u):
+        values = jnp.where(valid, jax.nn.sigmoid(u), 0)
+        return jnp.zeros(gm.size, dtype).at[active].set(values).reshape(gm.shape)
+
+    def target(h, x):
+        return jnp.where(gm, jax.nn.sigmoid(log10 * (terms.intrinsic-x-field(h))), 0)
+
+    def residual(u, args):
+        (pk, f0, k), x = args
+        return jnp.where(valid, u-log10*(pk-x-f0-k@jax.nn.sigmoid(u)), u)
+
+    solver = _solver(solver_config)
+    initial = jnp.where(valid, log10*(base[0]-ph[0]-base[1]), 0)
+
+    reverse = initialization == 'down'
+    xx = ph[::-1] if reverse else ph
+    mm = gradient_mask[::-1] if reverse else gradient_mask
+    if reverse:
+        initial = jnp.where(valid, log10*(base[0]-xx[0]-base[1]), 0)
+
+    if initialization == 'production':
+        # Seed every pH at once: config.steps wide iterations rather than
+        # config.steps * len(ph) narrow ones. Detached, so it never reaches the
+        # adjoint and cannot change the converged root.
+        seed_config = config if seed_steps is None else replace(config, steps=seed_steps)
+
+        def seed_one(x):
+            state, _, _ = _solve_with_field(arrays, terms, x, seed_config, field)
+            h = jnp.clip(state.reshape(-1)[active], 1e-14, 1-1e-14)
+            return jnp.where(valid, jnp.log(h)-jnp.log1p(-h), 0)
+
+        seeds = jax.lax.stop_gradient(jax.vmap(seed_one)(xx))
+    else:
+        seeds = jnp.zeros((xx.shape[0], active.shape[0]), dtype)
+
+    def step(previous, inputs):
+        x, accepted, seed = inputs
+        u0 = seed if initialization == 'production' else jax.lax.stop_gradient(previous)
+        # All rejected systems are well-conditioned, independent of model params.
+        args = (jax.tree.map(lambda a: jnp.where(accepted, a, 0), base),
+                jnp.where(accepted, x, 0))
+        u0 = jnp.where(accepted, u0, 0)
+        sol = optx.root_find(residual, solver, u0, args=args,
+                            max_steps=solver_config.max_steps, throw=False)
+        occupied = target(full(sol.value), x)
+        error = jnp.abs(target(occupied, x)-occupied)
+        finite = jnp.all(jnp.isfinite(occupied)) & jnp.all(jnp.isfinite(sol.value))
+        return sol.value, (occupied, jnp.max(error), jnp.max(error*terms.weights),
+                           sol.result == optx.RESULTS.successful, sol.stats['num_steps'], finite)
+
+    _, outputs = jax.lax.scan(step, initial, (xx, mm, seeds))
+    if reverse:
+        outputs = jax.tree.map(lambda a: a[::-1], outputs)
+    h, residuals, wresiduals, success, steps, finite = outputs
+    included = jnp.zeros(gm.size, bool).at[active].set(valid)
+    leak = jnp.max(jnp.where(included, 0, terms.weights.reshape(-1)))
+    converged = finite & (residuals < config.residual_tolerance) & (leak == 0) & gradient_mask
+    charge = terms.weights[None]*(jnp.asarray(Q_DEPROT, dtype)[None, None]+h)
+    residue_charge = charge.sum(-1)
+    effective = jax.vmap(lambda state: terms.intrinsic-field(state))(h)
+    result = SiteCurveResult(ph, h, charge, residue_charge, residue_charge.sum(-1),
+        terms.weights, terms.intrinsic, effective, residuals, wresiduals, converged)
+    return result, dict(optx_success=success, newton_steps=steps, active_set_leak=leak,
+                        finite=finite, gradient_mask=gradient_mask)
