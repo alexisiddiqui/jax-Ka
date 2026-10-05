@@ -134,20 +134,68 @@ over both near-zero and top-scoring directions (`--fd-top 5`).
   `gap_vs_magnitude_correlation = -0.71` — it does not grow with the signal. On the
   top-ranked candidates this is <= 0.05% relative; the 9.9% figure that first drew
   attention is 0.00247 divided by the smallest derivative in the set.
-  Ruled out as causes, with evidence:
-  - *Non-convergence* — all residuals 5e-10 (optx), 1e-16 (damped), zero pH points over
-    the 2e-5 tolerance.
-  - *Burial-clip saturation* — saturation is pervasive and does not track the error.
-    1fcc has 770/1810 AB channels at the lower clip and shows the offset; 1brs has
-    527/1369 (plus 110 at the upper clip) and 1frt has 1304/3947 (plus 206 upper), and
-    both are clean. 1frt is the most saturated and the most accurate.
-  - *A solution-branch flip* — would make the FD scale as `delta/eps` and differ tenfold
-    between the two step sizes; the two agree to 1e-5.
 
-  **Mechanism unresolved.** A fixed 0.00247 recurring across unrelated directions looks
-  like one omitted term of fixed size, but no candidate survives the 1brs comparison. It
-  is recorded as a characterised, bounded discrepancy rather than attributed to a cause
-  that has not been demonstrated.
+### Resolution: the objective is kinked, the gradient is not wrong
+
+`gradient_crosscheck.py` settles it with two measurements the earlier comparisons could
+not make. Both are at a single pH (6.5), where derivatives answer the same question at a
+ninth of the cost; the re-derived damped solve is checked against `packed_curve_kernel`
+to 8.9e-16 so a transcription bug cannot masquerade as a gradient discrepancy.
+
+**1. Two independent analytic gradients agree to 1e-13.** The optimistix implicit adjoint
+and reverse mode through the unrolled 1024-step damped loop — different code paths, one
+with no implicit-function step at all — give the same number on every probe (1fcc
+`L->A`: -0.02849192 both ways, difference -1.6e-13). The adjoint is correct. Both finite
+differences likewise agree with *each other*, so the disagreement was never between
+solvers: it is between the analytic derivative and the one-sided secant.
+
+**2. The gap does not shrink with the step.** For smooth `L`, `secant - derivative =
+(eps/2) L''`, so the gap must scale linearly with `eps`:
+
+| ratio gap(1e-2)/gap(1e-3) | 1brs | 1fcc |
+|---|---|---|
+| four probes | 10.1, 10.0, 10.0, 10.0 | 0.97, 1.00, 1.01, 1.00 |
+
+1brs scales as `eps` — ordinary truncation error, nothing to explain. 1fcc does not: the
+gap is identical at both step sizes. A constant `c` with `secant(eps) = L' + c` means
+`L(eps) - L(0) = (L' + c) eps` exactly, i.e. **L is kinked at the base point**. The true
+right-derivative is `L' + c`; the analytic value is the derivative on the other side.
+At a kink the adjoint returns a valid one-sided derivative and the forward difference
+measures the opposite side — neither is a bug.
+
+The kink comes from a `jnp.clip` boundary. `_local_terms` has two:
+
+    burial      = clip((mass - nmin)/(nmax - nmin), 0, 1)
+    pair_burial = clip((pair_mass - 2 nmin)/(2 (nmax - nmin)), 0, 1)
+
+`clip` has zero gradient when saturated, so a `+eps` step that crosses the boundary picks
+up a slope the analytic value does not carry.
+
+**Which clip, and which channel, is not identified here.** `benchmarks/clip_margin.py`
+censuses both boundaries and neither discriminates between the systems: for the
+single-site clip 1frt has 25 AB channels within 1 mass unit of the boundary against
+1fcc's 10, and for the pair clip 1066 against 666 — yet 1frt is the accurate one. That
+is expected on reflection. A kink bites only if the *particular* perturbation direction
+moves a channel across a boundary AND that crossing reaches dQ inside the pH window, so
+the discriminating quantity is per-direction, not a per-system census. The `eps`-ratio
+test above is direction-specific and is what carries the conclusion; localising the
+individual crossing would need a per-direction comparison of clip state at `p0` and
+`p0 + eps d`, which was not run because it changes nothing actionable — the remedy is
+the same whichever clip is responsible.
+
+Excluded, with evidence:
+- *Non-convergence* — residuals 5e-10 (optx) and 1e-16 (damped), zero pH points over the
+  2e-5 tolerance.
+- *A solution-branch flip* — would make the gap scale as `delta/eps`, a ratio of 0.1.
+  Observed 1.0.
+- *A defect in the optx adjoint* — excluded by the 1e-13 agreement above.
+
+**Consequence for design.** Experiment 03's own smoothness checklist asks for switching
+over a soft window and no hard cutoffs. The eligibility gate already complies via
+`gate_width = 20.0`; the two burial clips never got the same treatment. Replacing them
+with smooth saturating functions is the principled fix if design gradients are to be
+trusted below ~1e-3 kcal/mol. Nothing in this tier depends on it: the kink contributes at
+most 2.5e-3 kcal/mol, <= 0.05% on the candidates that drive the ranking.
 
 ## Status
 

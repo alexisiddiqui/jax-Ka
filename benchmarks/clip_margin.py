@@ -78,6 +78,12 @@ def main(argv=None):
             # How far below nmin a saturated channel sits: 0 means it is ON the kink,
             # where a +eps step crosses and the analytic gradient does not follow.
             margin_low = np.where(burial <= 0, config.nmin-mass, np.inf)
+            # The SECOND clip: pair_burial gates the dielectric that scales every
+            # Coulomb coupling. pair_mass = mass_i + mass_j against 2*nmin.
+            nb = np.asarray(cache.neighbors)
+            pair_mass = mass[:, None, :, None]+mass[nb][:, :, None, :]
+            pm = np.asarray(cache.pair_mask)
+            pair_margin = np.where(pm, np.abs(pair_mass-2*config.nmin), np.inf)
             index = {k: i for i, k in enumerate(keys_full)}
             rows = np.array([index[k] for k in keys])
             is_design = np.zeros(len(keys), bool)
@@ -91,6 +97,13 @@ def main(argv=None):
                     within_20=int((m <= 20).sum()), within_50=int((m <= 50).sum()),
                     min_margin=(float(m.min()) if m.size else None),
                     at_upper_clip=int(((burial >= 1) & sel).sum()))
+            pmv = pair_margin[np.isfinite(pair_margin)]
+            out['pair_clip'] = dict(
+                entries=int(pm.sum()),
+                below_boundary=int((pm & (pair_mass <= 2*config.nmin)).sum()),
+                within_1=int((pmv <= 1).sum()), within_5=int((pmv <= 5).sum()),
+                within_20=int((pmv <= 20).sum()),
+                min_margin=(float(pmv.min()) if pmv.size else None))
             record['states'][label] = out
         records.append(record)
         print(json.dumps(record, indent=1), flush=True)
