@@ -17,6 +17,12 @@ def main():
     p = sub.add_parser('production')
     p.add_argument('stage',choices=['init','gate','pool','status','collect'])
     p.add_argument('--campaign',type=Path,required=True)
+    p = sub.add_parser('production-full-v2')
+    p.add_argument('--campaigns',type=Path,required=True)
+    p = sub.add_parser('production-jax-v2')
+    p.add_argument('stage',choices=['init','validate','gate','pool','status','collect'])
+    p.add_argument('--campaign',type=Path,required=True)
+    p.add_argument('--complex-id')
     p = sub.add_parser('isolated-solver')
     p.add_argument('stage',choices=['init','run','teacher-report','collect'])
     p.add_argument('--campaign',type=Path,required=True)
@@ -161,6 +167,14 @@ def main():
     elif args.command == 'production':
         from .production import initialise,gate,pool,status,collect
         {'init':initialise,'gate':gate,'pool':pool,'status':status,'collect':collect}[args.stage](args.campaign)
+    elif args.command == 'production-full-v2':
+        from .production_full_v2 import run
+        run(args.campaigns)
+    elif args.command == 'production-jax-v2':
+        from . import production_jax_v2 as v2
+        if args.stage == 'init': v2.initialise(args.campaign)
+        elif args.stage == 'validate': v2.validate(args.campaign,args.complex_id)
+        else: {'gate':v2.gate,'pool':v2.pool,'status':v2.status,'collect':v2.collect}[args.stage](args.campaign)
     elif args.command == 'isolated-solver':
         from .isolated_solver import initialise,run,teacher_report
         if args.stage=='init': initialise(args.campaign)
