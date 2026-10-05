@@ -483,3 +483,29 @@ downstream selection; frozen teacher campaigns remain unchanged.
 | 2026-10-03 | Use the first deposited alternate conformation consistently; alternatives are provenance only | User simplified the conformer policy. No additional exclusion or teacher ensemble for altlocs |
 | 2026-10-03 | Admit missing-coordinate structures on successful PDB2PQR preparation and measure radial error before choosing masks | User requested inclusive admission and controlled whole-residue deletions at termini and buried positions, starting from complete/near-complete references. Supersedes interface-defect rejection and provisional radius exclusions; retains scope, geometry and identity checks |
 | 2026-10-03 | Audit a bounded 1,000-assembly PDB/SAbDab sample and expand controlled deletions across size, interface type and charge | 296 pairs survive protein-only inclusive preparation. Reference search yields 23 distinct complete/near-complete entries against a target of 30; shortfall and source defects remain explicit. Perturbations bypass only interface admission thresholds to avoid censoring area-reducing deletions; intact references retain all gates. No distance mask or production split is chosen |
+| 2026-10-05 | Experiment 02 fits the fixed pilot's training-interface sites, selects neural checkpoints on frozen validation groups, and leaves test untouched | Verified handoff and frozen pKAI gate passed. Three seeds per trained arm; diagnostic CPU jobs reserve 8 cores/16 GB and use two numerical threads. Existing prediction guards and frozen benchmark artifacts remain unchanged. See 2_finetune/04_diagnostic_protocol.md. |
+
+# Status update — 2026-10-05, full structural benchmark
+
+The initial non-JAX structural benchmark is complete and verified: 1,452 frozen
+complexes, 7,260 method receipts, and 1,358 complexes with usable teacher interface
+labels. See [the consolidated report](1_benchmark/23_full_benchmark_report.md)
+for group-bootstrap scores, coverage, antibody/general strata and limitations.
+Experimental Set 2 remains outstanding; JAX-Ka remains deferred.
+
+Experiment 02 handoff verification and the 13-run diagnostic are complete;
+targeted pilot timeout recovery is complete and versioned separately.
+The fixed 500 training IDs and 151 frozen validation IDs are retained, with no test
+inputs in the handoff. See [the handoff contract](2_finetune/03_handoff.md).
+The frozen-model gate, twelve trained runs and independent 468-metric audit passed.
+Fine-tuning gains are small and their paired confidence intervals include zero;
+see [the diagnostic results](2_finetune/05_diagnostic_results.md). Recovery
+labels are versioned separately. Experimental Set 2 remains pending primary
+measurement and construct checks; see [the follow-up](1_benchmark/24_set2_followup.md).
+
+Experiment 03's [native teacher export](3_paired_complex/05_native_export_results.md)
+contains 44,202 training paired labels and 8,365 unchanged validation pairs, plus
+2,738 validated native-state energy exports. Saved-energy replay requires retaining
+the original site order; the verified wrapper reproduces a 16-site complex exactly.
+Native tautomer interactions must not be treated as an already validated scalar
+binary-site coupling matrix. Test data remains excluded from this training export.

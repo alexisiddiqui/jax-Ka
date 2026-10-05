@@ -82,3 +82,51 @@ complexes to have receipts for these methods, including explicit failure receipt
 A `production-nojax-v1` report follows the full pool. Both verify input/output
 receipts, preserve frozen masks and independently recompute group macro scores.
 JAX resource recovery is deferred; no larger JAX allocation has been launched.
+
+## Pilot scorer scheduling
+
+The user authorized comp1400 for one scoring run only. Before relocation,
+six production workers were retired safely after their final receipts were
+written, holding the queue lock so they could not claim another task. This
+restored the 400-core cap after unrelated account jobs were submitted. Their
+IDs are recorded in `workers-retired-for-core-cap.json`; no in-flight prediction
+was interrupted and no claimed task was lost.
+
+Freeing the first four slots let the original pilot scorer 731160 start on
+comp0650. It was left running there, so the comp1400 exception was not used.
+The general comp1400 exclusion remains unchanged. Full-report collector 731161
+still follows the array via afterany, including the intentionally retired workers.
+
+The original pilot scorer subsequently exceeded 4 GB after 2 min 56 s. Its
+assembled predictions survived. The user's one-time comp1400 exception was
+then used for scoring retry 731178, with 8 CPUs / 16 GB (still 2 GB/core).
+The retry resumes scoring from the assembled pilot predictions and validates
+source receipts and masks before scoring. No predictions are recomputed.
+The exception is confined to the one-time scoring interpreter and recorded
+in `one-time-comp1400-scoring.json`; global runtime exclusions are unchanged.
+Additional workers were retired only after completing their tasks to make
+room under the 400-core cap as unrelated account jobs increased their requests.
+
+Before retry 731178 started, comp1400 became fully allocated (48/48 CPUs).
+The same queued job was moved to comp0650/amd96 with unchanged 8 CPUs / 16 GB,
+using the normal compute guard on that node. The one-time exception receipt
+records `exception_used` from the actual node; comp1400 was not used by this
+fallback. Global exclusions remain unchanged.
+
+## Receipt audit and recovery (2026-10-05)
+
+Pilot scoring retry 731178 completed and verified: 2500 receipts, 984 group
+metrics, 458/500 usable teacher interface pairs, 24646 teacher paired sites and
+23818 all-method common sites. JAX remains excluded.
+
+A later audit found 20 non-JAX tasks without receipts on retired workers.
+This corrects the earlier assertion that worker retirement interrupted no
+claims. Holding the queue lock while requesting cancellation did not establish
+that all workers had terminated before the lock was released; cancellation
+completion was not checked. The task/worker ledger is preserved. Recovery jobs
+731201–731220 rerun only these missing tasks with unchanged science and retained
+old attempts. One other original worker was still active at audit time.
+Collector 731161 was cancelled and replaced by a collector dependent on all
+recovery jobs and the original array. The full collector requests 16 CPUs /
+32 GB, maintains 2 GB/core, excludes comp1400 and enforces the 400-core cap.
+Existing failure receipts remain explicit; they are not made valid by recovery.

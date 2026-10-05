@@ -1,8 +1,16 @@
 # 03 — Generate the paired dataset and train the model
 
 **Timebox:** 3 days (0.5 pilot, 1.5 generation on CPU in background, 1 training)
-**Hardware:** 600+ CPU node for generation; 3090 for the main run; 4× A40 for HPO
+**Hardware:** CPU jobs capped at 400 queued/running requested cores across the user account, 2 GB/core; accelerator allocation is checked when needed.
 **Depends on:** curation pipeline from 01
+
+**2026-10-05 entry gate:** existing labels and native Monte Carlo intermediates are
+exported and verified for the frozen 778 train / 151 validation complexes. See the
+[native data contract](04_native_data_contract.md). Native interactions are between
+tautomer states; the scalar intrinsic/pair design below is a proposal requiring a
+validated reduction or a change to the output representation. Do not launch new
+large-scale label generation or scalar-pair training before that gate passes.
+The 20,000-complex generation target and timing estimates below remain aspirational.
 
 ---
 
@@ -39,8 +47,9 @@ For a 450-residue complex with ~100 titratable sites:
 **~50× the signal for the same PB solve.** And the gradient path is one layer deep
 instead of backpropagating a scalar through the whole fixed-point solve.
 
-> **Verify PypKa exposes these before committing to the full run.** If it won't, you may
-> need to call the underlying DelPhi step directly. Settle this during the pilot.
+PypKa exposes and the existing runs retain `mc-energies.json` and per-tautomer
+intrinsics. Their units, state mapping and downstream solver compatibility are
+checked in the native export; a direct scalar-per-site reduction is not assumed.
 
 ---
 
@@ -53,28 +62,32 @@ instead of backpropagating a scalar through the whole fixed-point solve.
 | Complexes | ~20,000 after curation losses |
 | States each | 2 (complex, rigid-separated) |
 | Core-hours | ~10,000 (≈0.5 core-h per Fv-scale triple) |
-| On 600 cores | ~17 h |
+| Current admission cap | At most 200 two-CPU jobs, fewer while other user jobs are queued/running |
 | Ionic-strength subset | 1/3 of complexes × 3 values (0.05 / 0.15 / 0.5 M) → +~7,000 core-h |
-| **Total** | **~17,000 core-h ≈ 28 h wall** |
+| **Total legacy estimate** | **~17,000 numerical core-hours; not a validated wall-time estimate** |
 
-Comfortably inside 1.5 days. Headroom exists; don't spend it on MD.
+Re-estimate after measuring the admitted population. Allocated cores and numerical
+worker cores differ, and the pilot showed a substantial long-running tail. The
+earlier 28-hour claim must not be used for scheduling this generation target.
 
 ### Scheduling
 
-Run **1 core per job, 600 concurrent jobs**, not 16-core jobs. PypKa's internal
-parallelism is for latency; you want throughput. A 450-residue complex takes ~20 min on
-one core — irrelevant for throughput, but set a **per-job timeout (60 min) and let the
-tail die**. A handful of pathological structures will otherwise hold the whole run.
+Default teacher jobs request **2 CPUs and 4 GB**, with one numerical worker. Count
+all queued/running requests against the user-wide **400-core cap**; exclude comp1400.
+Use measured size/runtime data before estimating throughput. The pilot's statewise
+recovery required up to three hours per state and still retained seven failures;
+the original one-hour assumption is not a demonstrated production budget.
 
 Checkpoint per job to its own file. No shared database during generation; merge after.
 
 ### Conditions
 
-Everything must match pKPDB's defaults or tiers A and B are different teachers:
+Use an explicitly versioned current teacher. Exact historical pKPDB equivalence
+is unresolved and must not be claimed. The current settings are:
 internal dielectric 15, solvent 80, ionic strength 0.1 M, 81-point grid,
 `pbc_dimensions=0`, GROMOS 54a7, PDB2PQR with H optimisation, no ions.
 
-> Verify these against the pKPDB deposit manifest, not just the docs. Note that
+> Historical entries require per-entry settings for exact reconciliation. Note that
 > εᵢₙ = 15 is high and implicitly absorbs conformational relaxation — it compresses
 > shifts toward model values, so the teacher systematically under-predicts large shifts.
 
@@ -105,8 +118,10 @@ Disk: pair matrices ~2–3 GB; coordinates dominate at a few hundred GB.
 
 ### Splits
 
-MMseqs2 at 30% identity on **both** partners, split by cluster *pair*. Holding out only
-the antigen leaks badly on antibody sets where frameworks repeat.
+Inherit the already frozen sequence-component and antigen-family assignments from
+01, including separate antibody novelty annotations. Do not resplit by cluster pair
+or PDB ID. Additional data must be checked against existing experimental/test family
+reservations before admission.
 
 Held out and never touched until the end:
 - tier-B clusters

@@ -11,6 +11,33 @@ def main():
     require_compute()
     parser = argparse.ArgumentParser(prog="pkabench")
     sub = parser.add_subparsers(dest="command", required=True)
+    p = sub.add_parser('native-intrinsic-features')
+    p.add_argument('--out',type=Path,required=True)
+    p.add_argument('--shard',type=int,default=0)
+    p.add_argument('--shards',type=int,default=32)
+    p = sub.add_parser('tierb-ready')
+    p.add_argument('--out',type=Path,required=True)
+    p = sub.add_parser('tierb-export')
+    p.add_argument('stage',choices=['init','export','collect'])
+    p.add_argument('--out',type=Path,required=True)
+    p.add_argument('--shard',type=int,default=0)
+    p.add_argument('--shards',type=int,default=32)
+    p = sub.add_parser('benchmark-report')
+    p.add_argument('--campaign',type=Path,required=True)
+    p.add_argument('--output',type=Path,required=True)
+    p = sub.add_parser('finetune-handoff')
+    p.add_argument('stage',choices=['init','features','verify'])
+    p.add_argument('--out',type=Path,required=True)
+    p.add_argument('--shard',type=int,default=0)
+    p.add_argument('--shards',type=int,default=32)
+    p = sub.add_parser('pilot-label-recovery')
+    p.add_argument('stage',choices=['init','run','collect'])
+    p.add_argument('--out',type=Path,required=True)
+    p.add_argument('--index',type=int)
+    p = sub.add_parser('production-recovery')
+    p.add_argument('--campaign',type=Path,required=True)
+    p.add_argument('--complex-id',required=True)
+    p.add_argument('--method',required=True)
     p = sub.add_parser('production-nojax')
     p.add_argument('--scope',choices=['pilot','full'],required=True)
     p.add_argument('--campaign',type=Path,required=True)
@@ -155,6 +182,33 @@ def main():
         elif args.stage=='collect': collect(args.out)
         elif args.stage=='verify': verify(args.out)
         else: plots(args.out)
+    elif args.command == 'native-intrinsic-features':
+        from .native_intrinsic import features
+        features(args.out,args.shard,args.shards)
+    elif args.command == 'tierb-ready':
+        from .tierb_ready import main as ready
+        ready(args.out)
+    elif args.command == 'tierb-export':
+        from .tierb_export import init,export,collect
+        if args.stage=='init': init(args.out)
+        elif args.stage=='export': export(args.out,args.shard,args.shards)
+        else: collect(args.out)
+    elif args.command == 'benchmark-report':
+        from .benchmark_report import run
+        run(args.campaign,args.output)
+    elif args.command == 'finetune-handoff':
+        from .finetune_handoff import initialise,features,verify
+        if args.stage=='init': initialise(args.out)
+        elif args.stage=='features': features(args.out,args.shard,args.shards)
+        else: verify(args.out)
+    elif args.command == 'pilot-label-recovery':
+        from .pilot_label_recovery import initialise,run,collect
+        if args.stage=='init': initialise(args.out)
+        elif args.stage=='run': run(args.out,args.index)
+        else: collect(args.out)
+    elif args.command == 'production-recovery':
+        from .production_recovery import run
+        run(args.campaign,args.complex_id,args.method)
     elif args.command == 'production-nojax':
         from .production_nojax import run
         run(args.campaign,args.scope)

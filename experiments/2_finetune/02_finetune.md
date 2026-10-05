@@ -1,5 +1,9 @@
 # 02 — Fine-tune an existing model on paired ΔpKa
 
+**Initial diagnostic complete:** [results and interpretation](05_diagnostic_results.md).
+All 13 runs passed. Fine-tuning did not establish a reliable validation improvement
+over frozen pKAI under the registered interface-only pilot protocol.
+
 **Timebox:** 1 day (a few hours on the 3090, rest is analysis)
 **Hardware:** 1× 3090
 **Runs concurrently with:** 03's dataset generation on the CPU node. No contention.
@@ -21,9 +25,9 @@ much of 03 is actually necessary.
   is enough
 - Permissive tooling, no web-service rate limits
 
-**KaML-CBtree as the second arm.** Not fine-tuned — retrained from scratch on paired
-features (see Delta-learning below). It is cheap enough that there's no reason not to,
-and given CatBoost beat the GAT on absolute pKa it may well beat everything here.
+**Standalone CatBoost as the second arm.** Train on paired geometric features
+(see Delta-learning below). This is a new baseline, not the released KaML-CBtree
+wrapper, whose single-chain limitation excluded it from this benchmark.
 
 Do **not** pick DeepKa (web-server-mediated) or KaML-GAT (heavier, worse than the trees
 on the task it was designed for).
@@ -49,11 +53,22 @@ The only input difference between the two passes is the thing being measured.
 
 ### Data
 
-Use the 500-complex pilot from 03 (available end of day 1 of that track) for the
-initial run, then the full set when it lands. ~500 complexes × ~40 interface sites
-≈ 20k paired examples is enough to answer the diagnostic question.
+Use 01's fixed 500-complex training pilot and 151 frozen validation complexes.
+The initial handoff contains 24,646 training and 8,365 validation teacher site pairs;
+3,241 and 1,459 respectively are interface sites. Model-specific representation
+checks may reduce these counts. There are usable teacher interface sites in 458
+training and 144 validation complexes. Failed examples are not replaced.
 
-Split by sequence cluster pair at 30% identity. Never by PDB ID.
+Inherit the existing frozen sequence/antigen-family split and uncertainty masks;
+do not resplit. Test inputs and labels are excluded from the handoff. Fit scaling,
+residue normalization and weighting on training data only. Check paired pKAI
+features against frozen predictions before fitting. The versioned handoff is
+`_runtime/jax-Ka/pkabench/finetune/handoff-v2` outside the repository.
+Timeout recovery produces a separate label version; it does not silently change
+this handoff. The handoff passed 64,114 frozen-state prediction checks. The frozen
+paired model gate also passed; training was launched on 2026-10-05 under the
+[fixed diagnostic protocol](04_diagnostic_protocol.md). Initial fitting uses
+3,105 training-interface sites; broader shell rows are retained for evaluation.
 
 ### Loss
 
@@ -80,19 +95,24 @@ extra steps.
 Do not fine-tune anything. Predict the *residual* of the physics.
 
 ```
-target = ΔpKa_true − ΔpKa_PROPKA3     (or − ΔpKa_PypKa)
+target = ΔpKa_PypKa − ΔpKa_PROPKA3
 ```
 
-Features, all computed at the site from the two-state pair:
+PypKa is the teacher here, so using it as both teacher and residual baseline would
+produce a trivial zero target. Features computed from the two-state geometry:
 
 - ΔSASA of the site on binding
-- change in burial depth / coordination number
-- new salt bridges across the interface (count, distances)
-- new H-bond donors/acceptors within 4 Å from the partner
-- change in local net charge within 6 / 10 Å
+- partner heavy-atom coordination counts within 6 / 10 Å
+- opposite-formal-charge contact counts and nearest distance
+- potential donor/acceptor atom counts within 4 Å from the partner
+- change in local formal-charge proxy within 6 / 10 Å
 - change in local dielectric-ish proxy (heavy-atom density)
 - residue type, one-hot
 - distance to interface centroid
+
+These are geometric proxies, not measured burial depth, directional hydrogen bonds
+or inferred protonation states. Charge features use fixed residue identities and
+never teacher labels. Preserve full chain/residue/insertion/group keys when joining.
 
 CatBoost, separate models for acids and bases (KaML found this materially helps).
 

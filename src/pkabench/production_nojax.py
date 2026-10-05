@@ -88,3 +88,49 @@ def run(campaign,scope):
         'note':'JAX excluded by scope. Failed/unreported teacher sites remain excluded; process completion does not imply usable training coverage.'})
     shutil.copyfile(Path(__file__),out/'production_nojax.py')
     print(json.dumps({'report':str(out),'verification':audit,'coverage':json.loads((out/'coverage_gate.json').read_text())},indent=2),flush=True)
+
+
+def resume_pilot(campaign):
+    require_compute(); campaign=Path(campaign).resolve()
+    from .production import check
+    check(campaign)
+    from .frozen_score import score
+    from .frozen_score_secondary import run as secondary
+    out=campaign.parent/'training-pilot-nojax-v1'
+    manifest=json.loads((out/'manifest.json').read_text())
+    assert manifest['methods']==METHODS and manifest['scope']=='pilot'
+    assert manifest['parent_manifest_sha256']==digest(campaign/'manifest.json')
+    assert digest(out/'site_masks.parquet')==manifest['site_masks_sha256']
+    assert digest(out/'assignments.parquet')==manifest['assignments_sha256']
+    statuses=json.loads((out/'merge_report.json').read_text())['jobs']
+    assert len(statuses)==2500
+    for item in json.loads((out/'derivation.json').read_text())['source_receipts']:
+        path=Path(item['receipt']); assert digest(path)==item['sha256']
+        receipt=json.loads(path.read_text())
+        assert digest(path.with_suffix('.parquet'))==receipt['output_sha256']
+    atomic_json(out/'scoring-retry.json',{'reason':'Original 4 GB scorer exceeded memory after assembled predictions were written.',
+        'prediction_sha256':digest(out/'predictions.parquet'),'resume_code_sha256':digest(Path(__file__))})
+    score(out); secondary(out)
+    # Independently recompute every reported group macro from per-complex CSV.
+    with (out/'scores_per_complex.csv').open() as f: complexes=list(csv.DictReader(f))
+    buckets=defaultdict(list)
+    for r in complexes: buckets[tuple(r[k] for k in ('method','split','scope','subset'))].append(r)
+    checks=0
+    for r in json.loads((out/'scores_set1.json').read_text()):
+        rr=buckets[tuple(r[k] for k in ('method','split','scope','subset'))]
+        assert sum(int(x['n']) for x in rr)==r['sites']
+        for metric in ('mae','rmse','skill','spearman','sign_accuracy','error_cancellation'):
+            groups=defaultdict(list)
+            for x in rr:
+                if x[metric]!='': groups[x['component_id']].append(float(x[metric]))
+            means=[sum(v)/len(v) for v in groups.values()]
+            if means: assert math.isclose(sum(means)/len(means),r[metric],rel_tol=1e-10,abs_tol=1e-10)
+            else: assert r[metric] is None
+            checks+=1
+    audit={'passed':True,'receipts_checked':2500,'group_metrics_checked':checks,'scope':'pilot','jax_excluded':True,
+        'prediction_sha256':digest(out/'predictions.parquet'),'mask_sha256':digest(out/'site_masks.parquet')}
+    atomic_json(out/'verification.json',audit)
+    atomic_json(out/'completion.json',{'complete':True,'failed_jobs':[r for r in statuses if r['status']!='complete'],
+        'process_status_counts':dict(Counter(r['method']+':'+r['status'] for r in statuses)),
+        'note':'JAX excluded by scope. Scoring resumed from assembled predictions after memory failure.'})
+    print(json.dumps({'report':str(out),'verification':audit,'coverage':json.loads((out/'coverage_gate.json').read_text())},indent=2),flush=True)
