@@ -36,9 +36,9 @@ class StructureCache:
     frozen: np.ndarray             # [N], fixed-covalent identities
     env_neighbors: np.ndarray      # [N,Ke], safe padding index zero
     env_mask: np.ndarray           # [N,Ke]
-    volume: np.ndarray             # [N,Ke,9,20], variable sidechain volume
+    volume: np.ndarray             # [N,Ke,9,A], variable sidechain volume (A=20 unless compact)
     mass: np.ndarray               # [N,Ke,9,20], variable heavy-atom count
-    hbond: np.ndarray              # [N,Ke,9,20], neutral + backbone NH terms
+    hbond: np.ndarray              # [N,Ke,9,A], neutral + backbone NH terms
     local_hbond: np.ndarray        # [N,9,20], own backbone donor identity dependence
     bb_volume: np.ndarray          # [N,9]
     bb_mass: np.ndarray            # [N,9]
@@ -50,6 +50,10 @@ class StructureCache:
     hb_donor: np.ndarray           # [N,Kc,9,9], directed i-donor -> j-acceptor
     hb_reverse: np.ndarray         # [N,Kc,9,9], j-donor -> i-acceptor
     metadata: dict
+    # Compact identity-restricted storage: identity_columns[j,c] is the alphabet
+    # index held in env column c for SOURCE residue j (padded columns repeat an
+    # allowed identity and hold exact zeros). None = all 20 identities in order.
+    identity_columns: np.ndarray | None = None  # [N,A] int
 
     @property
     def n_residues(self):
@@ -73,8 +77,17 @@ class StructureCache:
         shapes = {"native_index": (n,), "chain_index": (n,), "frozen": (n,),
                   "group_mask": (n,9), "env_neighbors": (n,ke), "env_mask": (n,ke),
                   "neighbors": (n,kc), "local_hbond": (n,9,20)}
+        if self.identity_columns is None:
+            columns = 20
+        else:
+            ic = np.asarray(self.identity_columns)
+            if ic.ndim != 2 or ic.shape[0] != n or not 1 <= ic.shape[1] <= 20:
+                raise ValueError("identity_columns must have shape [N,A] with 1 <= A <= 20")
+            if not np.issubdtype(ic.dtype, np.integer) or np.any((ic < 0) | (ic >= 20)):
+                raise ValueError("identity_columns must hold alphabet indices")
+            columns = ic.shape[1]
         for name in ("volume", "mass", "hbond"):
-            shapes[name] = (n,ke,9,20)
+            shapes[name] = (n,ke,9,columns)
         for name in ("bb_volume", "bb_mass", "bb_hbond", "reorganization"):
             shapes[name] = (n,9)
         for name in ("pair_mask", "coulomb_geometry", "hb_donor", "hb_reverse"):
@@ -134,6 +147,20 @@ class StructureCache:
             if np.any(getattr(self,name)<0):
                 raise ValueError(f"{name} must be nonnegative")
         return self
+
+    def expanded_env(self, name):
+        """Environment tensor ``name`` in the full [N,Ke,9,20] identity layout."""
+        x = getattr(self, name)
+        if self.identity_columns is None:
+            return x
+        out = np.zeros(x.shape[:3]+(20,), x.dtype)
+        cols = self.identity_columns[self.env_neighbors]           # [N,Ke,A]
+        for c in range(x.shape[-1]):
+            # Padded columns duplicate an identity but hold zeros: add, never overwrite.
+            idx = np.broadcast_to(cols[:, :, None, c], x.shape[:3])
+            np.put_along_axis(out, idx[..., None],
+                              np.take_along_axis(out, idx[..., None], -1)+x[..., c:c+1], -1)
+        return out
 
     def select(self, residues=None):
         if residues is None:
