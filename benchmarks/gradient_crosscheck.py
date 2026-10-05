@@ -9,10 +9,19 @@ independent ~2.5e-3 kcal/mol. That comparison cannot separate two explanations:
       the slope on the far side of a kink.
 
 A second, INDEPENDENT analytic gradient discriminates. Reverse mode through the damped
-1024-step fixed-point loop is a different code path with no implicit-function step. The
-objective weights only the 9 grid points in [5.5, 7.5], and the damped solver treats each
-pH independently (no continuation), so restricting the grid to those points leaves L
-unchanged and makes the unrolled adjoint affordable (1024 * [9, N, 9] float64).
+fixed-point loop is a different code path with no implicit-function step.
+
+Two things make it affordable. (1) A SINGLE pH point: comparing derivatives of dQ(pH)
+answers the question just as well as the pH-integrated L, at 1/9 the cost. (2)
+``jax.checkpoint`` on the loop body, so the tape holds only the [N,9] carry per step
+rather than the per-edge products -- reverse mode through the PACKED field stores
+n_edges * steps values and OOMs at terabyte scale, which is why the production design
+uses the implicit adjoint in the first place.
+
+The damped solve here is re-derived from ``_local_terms`` and the dense ``_field`` rather
+than called through ``packed_curve_kernel``. Being an independent implementation is the
+point; its forward value is asserted against the production kernel to ~1e-10 so a
+transcription bug cannot masquerade as a gradient discrepancy.
 
 Reports a 2x2 of {optx, damped} x {analytic, finite difference} on the same directions.
   damped-analytic == damped-FD, both != optx-analytic  ->  the optx adjoint is at fault.
@@ -50,7 +59,8 @@ def main(argv=None):
     import jax.numpy as jnp
     from jaxpropka.parameters import ModelConfig, ALPHABET
     from jaxpropka.optx_solver import SolverConfig, active_channels, optx_curve_kernel
-    from jaxpropka.model import packed_curve_kernel
+    from jaxpropka.model import packed_curve_kernel, _local_terms
+    from jaxpropka.parameters import Q_DEPROT
     from jaxpropka.topology import load_topology
     from pkabench.prep import read_cif
     from pkabench.schema import PH
@@ -63,7 +73,6 @@ def main(argv=None):
     quad = np.zeros_like(inside)
     quad[:-1] += np.diff(inside)/2
     quad[1:] += np.diff(inside)/2
-    w_window = jnp.asarray(1.364*quad)                 # weights on the 9 window points
     window_index = jnp.asarray(np.flatnonzero(window))
 
     records = []
@@ -98,31 +107,62 @@ def main(argv=None):
                   for l in ('AB', 'A', 'B')}
         models = {l: states[l][2] for l in ('AB', 'A', 'B')}
 
-        def L_optx(p):
-            # Full 73-point grid: the continuation sweep starts at PH[0], as in production.
+        # One pH point, mid-window. Derivatives of dQ(ph_probe) answer the same question.
+        ph_probe = float(inside[len(inside)//2])
+
+        def dq_optx(p):
             total = 0.
             for sign, l in ((1., 'AB'), (-1., 'A'), (-1., 'B')):
                 q = p[rows[l]]
                 out, _ = optx_curve_kernel(models[l].arrays, q, jnp.asarray(ph_full, q.dtype),
                                            active[l], config=config, solver_config=scfg)
-                total = total + sign*out.total_charge
-            return jnp.sum(total[window_index]*w_window)
+                total = total + sign*out.total_charge[window_index][len(inside)//2]
+            return total
 
-        def L_damped(p):
-            # Only the 9 weighted points: each pH is solved independently, so this is the
-            # same L, and reverse mode through 1024 steps stays affordable.
+        def charge_damped(arrays, p, ph):
+            """Damped fixed point, re-derived; mirrors _solve_with_field + total_charge."""
+            terms = _local_terms(arrays, p, config)
+            gm = arrays['group_mask']
+            log10 = jnp.log(jnp.asarray(10, terms.intrinsic.dtype))
+
+            def target(h):
+                field = terms.field0 + jnp.einsum('nkgt,nkt->ng', terms.coupling,
+                                                  h[arrays['neighbors']])
+                return jnp.where(gm, jax.nn.sigmoid(log10*(terms.intrinsic-ph-field)), 0)
+
+            h = jnp.where(gm, jax.nn.sigmoid(log10*(terms.intrinsic-ph-terms.field0)), 0)
+
+            @jax.checkpoint          # rematerialize the body; keep only the [N,9] carry
+            def step(_, old):
+                return old + config.damping*(target(old)-old)
+
+            h = jax.lax.fori_loop(0, config.steps, step, h)
+            charge = terms.weights*(jnp.asarray(Q_DEPROT, h.dtype)+h)
+            return jnp.sum(charge), jnp.max(jnp.abs(target(h)-h))
+
+        def dq_damped(p):
             total = 0.
             for sign, l in ((1., 'AB'), (-1., 'A'), (-1., 'B')):
-                q = p[rows[l]]
-                out = packed_curve_kernel(models[l].arrays, q, jnp.asarray(inside, q.dtype),
-                                          models[l]._edges, config=config)
-                total = total + sign*out.total_charge
-            return jnp.sum(total*w_window)
+                total = total + sign*charge_damped(models[l].arrays, p[rows[l]], ph_probe)[0]
+            return total
 
         p0 = jnp.asarray(np.eye(20, dtype=np.float64)[native])
-        base_optx = float(L_optx(p0)); base_damped = float(L_damped(p0))
-        g_optx = np.asarray(jax.grad(L_optx)(p0), float)
-        g_damped = np.asarray(jax.grad(L_damped)(p0), float)
+        base_optx = float(dq_optx(p0)); base_damped = float(dq_damped(p0))
+        # A transcription bug in charge_damped must not look like a gradient discrepancy.
+        reference = 0.
+        for sign, l in ((1., 'AB'), (-1., 'A'), (-1., 'B')):
+            q = p0[rows[l]]
+            out = packed_curve_kernel(models[l].arrays, q, jnp.asarray([ph_probe], q.dtype),
+                                      models[l]._edges, config=config)
+            reference = reference + sign*float(out.total_charge[0])
+        forward_mismatch = abs(base_damped-reference)
+        if forward_mismatch > 1e-8:
+            raise ValueError(f'{name}: re-derived damped solve disagrees with the production '
+                             f'kernel by {forward_mismatch:.3g}')
+        residuals = {l: float(charge_damped(models[l].arrays, p0[rows[l]], ph_probe)[1])
+                     for l in ('AB', 'A', 'B')}
+        g_optx = np.asarray(jax.grad(dq_optx)(p0), float)
+        g_damped = np.asarray(jax.grad(dq_damped)(p0), float)
 
         probes = []
         for i in positions[:args.probes]:
@@ -136,8 +176,8 @@ def main(argv=None):
                        analytic_optx=float(g_optx[i, col]-g_optx[i, native[i]]),
                        analytic_damped=float(g_damped[i, col]-g_damped[i, native[i]]))
             for eps in (1e-2, 1e-3):
-                row[f'fd_optx_{eps}'] = (float(L_optx(p0+eps*dj))-base_optx)/eps
-                row[f'fd_damped_{eps}'] = (float(L_damped(p0+eps*dj))-base_damped)/eps
+                row[f'fd_optx_{eps}'] = (float(dq_optx(p0+eps*dj))-base_optx)/eps
+                row[f'fd_damped_{eps}'] = (float(dq_damped(p0+eps*dj))-base_damped)/eps
             row['optx_adjoint_minus_damped_adjoint'] = row['analytic_optx']-row['analytic_damped']
             row['damped_adjoint_minus_damped_fd'] = row['analytic_damped']-row['fd_damped_0.001']
             probes.append(row)
@@ -146,13 +186,15 @@ def main(argv=None):
                   'damped_adj %.7f' % row['analytic_damped'],
                   'damped_fd %.7f' % row['fd_damped_0.001'], flush=True)
 
-        record = dict(system=name, base_L_optx=base_optx, base_L_damped=base_damped,
-                      base_gap=base_optx-base_damped, steps=args.steps,
-                      n_window_points=int(window.sum()), probes=probes,
+        record = dict(system=name, ph_probe=ph_probe, base_dq_optx=base_optx,
+                      base_dq_damped=base_damped, base_gap=base_optx-base_damped,
+                      forward_mismatch_vs_production=forward_mismatch,
+                      damped_residuals=residuals, steps=args.steps, probes=probes,
                       wall_seconds=time.monotonic()-started)
         atomic_json(args.output/f'{name}.json', record)
         print(json.dumps({k: record[k] for k in
-                          ('system', 'base_L_optx', 'base_L_damped', 'base_gap')}, indent=1),
+                          ('system', 'ph_probe', 'base_dq_optx', 'base_dq_damped', 'base_gap',
+                           'forward_mismatch_vs_production', 'damped_residuals')}, indent=1),
               flush=True)
         records.append(record)
     atomic_json(args.output/'summary.json', dict(records=records))
