@@ -3,11 +3,24 @@
 ## Execution status
 
 Initialization job 733248 completed. First feature shard 733292 completed with
-10,156 tautomer-state rows and no missing functional-atom geometry. Submission of
-the remaining jobs is blocked by the automatic approval service reporting model
-capacity exhaustion; the requests were not executed. This is not a safety finding.
-No baseline fitting or validation scoring has run yet, and the new aggregation
-regression test is staged but not yet executed.
+10,156 tautomer-state rows and no missing functional-atom geometry. The approval
+service interruption has cleared. Slurm initially rejected the expired dependency
+IDs; both prerequisites were confirmed COMPLETED/0:0 in accounting, and the
+launcher now omits those stale dependencies while retaining artifact checks.
+
+Remaining feature shards were submitted as 733396–733426. Assembly and the
+aggregation regression test were initially job 733427, which stopped before
+assembly because the runner environment lacked pandas. The test now uses the
+existing training environment and passed in replacement job 733435. Completed
+features are reused, and the fitting dependencies were updated to 733435.
+Seed fits 733428–733430 and evaluation 733431 completed successfully. The verified
+dataset contains 292,438 training and 55,995 validation tautomer-state rows.
+Validation interface intrinsic MAE is 0.495–0.505 pKa across seeds, compared with
+0.838 for model-compound values and 0.806 for the training-only constant. Paired
+intrinsic-shift MAE is 0.478–0.498, compared with 0.808 for either constant control.
+These are intrinsic values, not final coupled midpoints. The next diagnostic is
+registered in [07_hybrid_mc_protocol.md](07_hybrid_mc_protocol.md). All jobs exclude
+comp1400 and retain the user-wide 400-core admission checks.
 
 Resume through `_HPC/submission/jax-Ka/pkabench/launch-intrinsic-v1.sh` in the parent
 workspace. It records each successful submission and schedules assembly, three

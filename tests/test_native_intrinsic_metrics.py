@@ -21,3 +21,8 @@ def test_site_then_complex_then_group():
     assert result.loc['g2', 'mae'] == 8.
     assert result.mae.mean() == 6.
     assert np.isclose(result.loc['g1', 'rmse'], (np.sqrt(5.) + 6.) / 2)
+
+
+if __name__ == '__main__':
+    test_site_then_complex_then_group()
+    print('PASS: equal site weighting across unequal tautomer counts and group-macro aggregation')

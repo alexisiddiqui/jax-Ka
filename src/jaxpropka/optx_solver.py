@@ -74,7 +74,7 @@ def _solver(scfg):
     tol = dict(rtol=scfg.rtol*1e-2, atol=scfg.atol*1e-2)
     if scfg.method == "lm":
         linear = (lx.QR() if scfg.linear == "dense"
-                  else lx.NormalCG(**tol, max_steps=scfg.gmres_max_steps))
+                  else lx.Normal(lx.CG(**tol, max_steps=scfg.gmres_max_steps)))
         return optx.LevenbergMarquardt(rtol=scfg.rtol, atol=scfg.atol, linear_solver=linear)
     linear = (lx.AutoLinearSolver(well_posed=True) if scfg.linear == "dense"
               else lx.GMRES(**tol, restart=scfg.gmres_restart, max_steps=scfg.gmres_max_steps))
