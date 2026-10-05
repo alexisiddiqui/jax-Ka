@@ -33,7 +33,7 @@ direct evidence of multiple stable mean-field solutions (hysteresis), which
 the damped solver cannot distinguish from slow convergence.
 """
 from __future__ import annotations
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from functools import partial
 import jax
 import jax.numpy as jnp
@@ -216,10 +216,11 @@ def active_channels(cache, probabilities=None):
     return np.flatnonzero(weights.reshape(-1) > 0).astype(np.int32)
 
 
-@partial(jax.jit, static_argnames=("config", "solver_config", "initialization", "seed_steps"))
+@partial(jax.jit, static_argnames=("config", "solver_config", "initialization",
+                                   "seed_steps", "seed_dtype"))
 def local_terms_curve_kernel(arrays, terms, ph, active, active_valid, *, config,
                              solver_config, initialization="production", gradient_mask=None,
-                             seed_steps=None):
+                             seed_steps=None, seed_dtype=None):
     """Shared LocalTerms -> curves path, with optimistix's implicit adjoint.
 
     Production initialization is a detached damped solve at each pH. Dummy active
@@ -238,7 +239,6 @@ def local_terms_curve_kernel(arrays, terms, ph, active, active_valid, *, config,
     unchanged. ``seed_steps`` overrides config.steps for the seed only; None keeps
     the production count and leaves the branch selection bit-identical.
     """
-    from .model import _solve_with_field
     if solver_config.coupling != 'dense' or solver_config.linear != 'dense':
         raise ValueError('Shared training kernel currently requires dense active coupling')
     if initialization not in ('production', 'up', 'down'):
@@ -277,11 +277,37 @@ def local_terms_curve_kernel(arrays, terms, ph, active, active_valid, *, config,
         # Seed every pH at once: config.steps wide iterations rather than
         # config.steps * len(ph) narrow ones. Detached, so it never reaches the
         # adjoint and cannot change the converged root.
-        seed_config = config if seed_steps is None else replace(config, steps=seed_steps)
+        steps = config.steps if seed_steps is None else seed_steps
+        # The seed iterates the ACTIVE-SET system, not the full [N,Kc,9,9] field. The
+        # two agree exactly on the active channels whenever excluded channels carry
+        # zero weight -- the premise of active_system, enforced by the leak check
+        # below -- and inactive channels are filled closed-form from the root anyway.
+        # Per iteration that is an [M,M] matvec instead of an N*Kc*81 contraction:
+        # ~730x less work at N=256/M=64, ~100x at N=1472/M=480. The seed can then
+        # afford the full production step count on complexes where a short Picard
+        # run does not reach the solver's basin of attraction.
+        if seed_dtype is None:
+            seed_base, seed_log10 = base, log10
+        else:
+            seed_base = jax.tree.map(lambda a: a.astype(seed_dtype), base)
+            seed_log10 = log10.astype(seed_dtype)
+        pk_s, f0_s, k_s = seed_base
+        valid_s = valid
+
+        # The logit transform needs a bound the WORKING dtype can represent either side
+        # of: 1-1e-14 rounds to exactly 1.0 in float32, so a saturated occupancy would
+        # give log1p(-1) = -inf and the LM linear solve would return NaN. float64 keeps
+        # its original 1e-14 because that is already far above its eps.
+        bound = max(1e-14, float(np.finfo(dtype).eps))
 
         def seed_one(x):
-            state, _, _ = _solve_with_field(arrays, terms, x, seed_config, field)
-            h = jnp.clip(state.reshape(-1)[active], 1e-14, 1-1e-14)
+            xs = x.astype(pk_s.dtype)
+            target = lambda h: jnp.where(
+                valid_s, jax.nn.sigmoid(seed_log10*(pk_s-xs-f0_s-k_s@h)), 0)
+            h = target(jnp.zeros_like(pk_s))
+            h = jax.lax.fori_loop(0, steps,
+                                  lambda _, old: old+config.damping*(target(old)-old), h)
+            h = jnp.clip(h.astype(dtype), bound, 1-bound)
             return jnp.where(valid, jnp.log(h)-jnp.log1p(-h), 0)
 
         seeds = jax.lax.stop_gradient(jax.vmap(seed_one)(xx))
