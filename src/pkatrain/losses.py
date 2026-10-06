@@ -25,3 +25,9 @@ def coverage(eligible, accepted):
     missing = int((~accepted).sum())*count
     total = accepted.size*count
     return {'missing':missing,'total':total,'fraction':missing/max(total,1)}
+
+
+def scalar_loss(predicted, reference, eligible):
+    """Output-pKa MSE; scalar labels are never converted into synthetic curves."""
+    error=jnp.where(eligible,predicted-jnp.where(eligible,reference,0),0)
+    return jnp.sum(error**2)/jnp.maximum(jnp.sum(eligible),1)

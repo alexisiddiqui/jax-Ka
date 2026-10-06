@@ -9,7 +9,7 @@ import numpy as np
 import optax
 from pkabench.runtime import atomic_json, digest
 from .forward import solve_branches
-from .losses import curve_loss, coverage
+from .losses import curve_loss, coverage, scalar_loss
 
 
 class Engine:
@@ -65,6 +65,23 @@ class Engine:
         gradient=jax.tree.map(lambda *g:jnp.mean(jnp.stack(g),axis=0),*gradients)
         updates,state=self.optimizer.update(gradient,state,params)
         return optax.apply_updates(params,updates),state
+
+
+class ScalarEngine:
+    """Shared output-label pretraining for any pytree model, without a physical solve."""
+    update=Engine.update
+
+    def __init__(self,predict,learning_rate=.001):
+        self.optimizer=optax.chain(optax.clip_by_global_norm(1.),optax.adam(learning_rate))
+        self.forward=jax.jit(predict)
+        self.value_grad=jax.jit(jax.value_and_grad(
+            lambda p,x,y,m:scalar_loss(predict(p,x),y,m)))
+
+    def audited_gradient(self,params,inputs,reference,eligible):
+        loss,gradient=self.value_grad(params,inputs,reference,eligible)
+        if not np.isfinite(float(loss)) or not all(np.isfinite(np.asarray(x)).all() for x in jax.tree.leaves(gradient)):
+            raise FloatingPointError('Nonfinite scalar loss/gradient')
+        return gradient,float(loss)
 
 
 def save_checkpoint(folder,params,state,metadata):

@@ -28,6 +28,8 @@ def code_hashes():
 
 
 def train(out,seed,smoke=False):
+    if (out/'TRAINING_HOLD.json').exists():
+        raise RuntimeError(read(out/'TRAINING_HOLD.json'))
     manifest=read(out/'manifest.json'); config=manifest['config']
     if not smoke:
         gates=('release.json','profiles/verification.json') if config.get('dtype')=='float32' else ('real_gate.json','smoke/verification.json','profiles/verification.json')

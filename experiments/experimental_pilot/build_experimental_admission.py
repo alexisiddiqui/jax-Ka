@@ -6,6 +6,7 @@ or promote unverified secondary labels to experimental truth.
 import csv
 import json
 import os
+import shutil
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -23,11 +24,20 @@ recovery = runtime/'experimental/pkadr-dsba-reduced-v1'
 trx_recovery = runtime/'experimental/pkadr-human-thioredoxin-recovery-v4'
 repo = Path(os.environ['PKABENCH_SOURCE'])
 decisions_path = repo/'experiments/1_benchmark/curation/primary_label_checks_v1.json'
-out = runtime/'experimental/experimental-admission-v7'
+fit_gates_path = repo/'experiments/1_benchmark/curation/experimental_fit_gates_v1.json'
+out = runtime/'experimental/experimental-admission-v8'
+if out.exists():
+    if (out/'release.json').exists():
+        raise FileExistsError(f'completed immutable release already exists: {out}')
+    shutil.rmtree(out)
 out.mkdir(parents=True, exist_ok=False)
 
 joined = json.loads((source/'joined-records.json').read_text())
 checks = json.loads(decisions_path.read_text())
+fit_gates = json.loads(fit_gates_path.read_text())
+fit_gate_by_record = {item['record_id']: item for item in fit_gates['decisions']}
+if len(fit_gate_by_record) != len(fit_gates['decisions']):
+    raise ValueError('duplicate experimental fit-gate decision')
 scored = {r['record_id']:r for r in csv.DictReader((baselines/'scored_records.csv').open())}
 check_by_record = {}
 for check in checks['checks']:
@@ -63,6 +73,14 @@ def primary_state(record_id):
         return 'surrogate', check['reason'], check
     return 'held', check['reason'], check
 
+def numeric_or_none(value):
+    if value in (None,''):
+        return None
+    try:
+        return float(value)
+    except (TypeError,ValueError):
+        return None
+
 ledger=[]
 for r in joined:
     raw=r['raw']; record_id=r['record_id']
@@ -92,6 +110,12 @@ for r in joined:
     shift=abs(float(r['value'])-null) if r['label_kind']=='point' and r['value'] is not None and null is not None else None
     priority=0 if check else 1 if shift is not None and shift>=2 else 2 if shift is not None and shift>=.5 else 3
     pred=scored.get(record_id,{})
+    fit_gate=fit_gate_by_record.get(record_id)
+    fit_eligible=bool(fit_gate and fit_gate['fit_eligible'] and status in ('exact_candidate','recovered_exact_candidate')
+                      and local_point and train_mask and eval_mask)
+    curated_pka=(fit_gate or {}).get('curated_experimental_pka',r['value'])
+    curated_uncertainty=(fit_gate or {}).get('curated_experimental_uncertainty',raw.get('Expt_Uncertainty'))
+    curated_uncertainty=numeric_or_none(curated_uncertainty)
     ledger.append(dict(
         record_id=record_id,family_id=r.get('family_id'),original_pdb=r['pdb'],author_chain=r['author_chain'],
         structure_pdb=structure_pdb,structure_task_id=structure_task_id,structure_replacement=replacement,
@@ -99,6 +123,7 @@ for r in joined:
         protein_name=raw.get('Protein_Name'),species=raw.get('Species'),mutation=raw.get('Mut_Pos'),
         label_kind=r['label_kind'],experimental_pka=r['value'],raw_label=raw.get('Expt_pKa'),
         experimental_uncertainty=raw.get('Expt_Uncertainty'),experimental_temperature=raw.get('Expt_Temp'),
+        curated_experimental_pka=curated_pka,curated_experimental_uncertainty=curated_uncertainty,
         experimental_pH=raw.get('Expt_pH'),experimental_salt=raw.get('Expt_Salt_Concentration'),
         experimental_method=raw.get('Expt_Method'),reference=raw.get('Reference'),archive_warning=raw.get('Warning'),
         archive_notes=raw.get('Notes'),null_pka=null,null_relative_shift=shift,
@@ -111,12 +136,17 @@ for r in joined:
         remaining_gate=None if check is None else check.get('remaining_gate'),manual_review_priority=priority,
         primary_metadata_corrections=None if check is None else json.dumps(check.get('metadata_corrections',{}),sort_keys=True),
         label_interpretation=None if check is None else check.get('label_interpretation'),
+        fit_gate_status=None if fit_gate is None else fit_gate['status'],
+        fit_gate_resolution=None if fit_gate is None else fit_gate['resolution'],
+        fit_gate_metadata_corrections=None if fit_gate is None else json.dumps(fit_gate.get('metadata_corrections',{}),sort_keys=True),
         interpretation_panel=bool(local_point and (check is not None or (shift is not None and shift>=2))),
         propka_status=pred.get('propka_status'),pkai_status=pred.get('pkai_status'),
         pkai_plus_status=pred.get('pkai_plus_status'),jaxka_status=pred.get('jaxka_status'),pypka_status=pred.get('pypka_status'),
-        eligible_for_model_fit=False,eligible_for_headline_evaluation=False))
+        eligible_for_model_fit=fit_eligible,eligible_for_headline_evaluation=False))
 
 assert len(ledger)==1024 and len({r['record_id'] for r in ledger})==1024
+gate_population={r['record_id'] for r in ledger if r['admission_status'] in ('exact_candidate','recovered_exact_candidate')}
+assert set(fit_gate_by_record)==gate_population, (sorted(set(fit_gate_by_record)-gate_population), sorted(gate_population-set(fit_gate_by_record)))
 
 # Five deterministic family folds over the locally independent point-label
 # candidate universe. These are candidate folds: label admission remains a
@@ -229,35 +259,43 @@ with (out/'primary_review_queue.csv').open('w',newline='') as handle:
     writer.writerows({k:r[k] for k in review_fields} for r in review_queue)
 atomic_json(out/'folds.json',folds)
 atomic_json(out/'primary_checks_snapshot.json',checks)
+atomic_json(out/'fit_gates_snapshot.json',fit_gates)
 
 status_counts=Counter(r['admission_status'] for r in ledger)
 candidate_status=Counter(r['admission_status'] for r in candidates)
 summary=dict(records=len(ledger),local_independent_point_candidates=len(candidates),candidate_families=len(families),
     status_counts=dict(status_counts),candidate_status_counts=dict(candidate_status),primary_checked_records=len(check_by_record),
     interpretation_panel_records=sum(r['interpretation_panel'] for r in ledger),fold_assignment_cost=assignment_cost(family_fold),folds=folds,
-    admitted_for_model_fit=0,admitted_for_headline_evaluation=0,
-    note='Fold assignment does not imply label admission. Candidate and recovered-candidate decisions retain their named remaining gates.')
+    fit_gate_status_counts=dict(Counter(r['fit_gate_status'] for r in ledger if r['fit_gate_status'])),
+    admitted_for_model_fit=sum(r['eligible_for_model_fit'] for r in ledger),admitted_for_headline_evaluation=0,
+    fit_eligible_record_ids=[r['record_id'] for r in ledger if r['eligible_for_model_fit']],
+    note='Fit admission is a separate, audited gate. Headline evaluation remains disabled because these admitted rows are intended for fitting.')
 atomic_json(out/'summary.json',summary)
 
-lines=['# Experimental admission ledger and candidate folds — v7','',
- '**No label is admitted to model fitting or headline evaluation by this release.** The ledger separates structural candidacy, primary-source status and fold assignment so downstream code cannot equate one with another.','',
+lines=['# Experimental admission ledger and candidate folds — v8','',
+ f"**This release admits {summary['admitted_for_model_fit']} verified point labels to model fitting and none to headline evaluation.** The ledger separates structural candidacy, primary-source status, fit-gate status and fold assignment.",'',
  '## Candidate population','', '| Quantity | Count |','|---|---:|',
  f"| Archive records | {len(ledger)} |",f"| Locally independent structural point candidates | {len(candidates)} |",
  f"| Candidate sequence families | {len(families)} |",f"| Records covered by current primary checks | {len(check_by_record)} |",
  f"| Interpretation-panel records | {summary['interpretation_panel_records']} |",'',
  '## Admission state for the candidate population','', '| State | Records |','|---|---:|']
 for status,n in candidate_status.most_common(): lines.append(f'| {status} | {n} |')
-lines += ['', 'An `exact_candidate` still has the explicit `remaining_gate` recorded by its primary check. `recovered_exact_candidate` applies to DsbA Cys30 on reduced 1A2L and the three prepared human-thioredoxin replacements; every original mismatched mapping remains preserved in the ledger. `pending_primary` records have not been promoted from the secondary archive.','',
+lines += ['', 'Primary candidate status records provenance; the independent fit gate decides whether a row may enter the first fit. `recovered_exact_candidate` applies to DsbA Cys30 on reduced 1A2L and the three prepared human-thioredoxin replacements; every original mismatched mapping remains preserved in the ledger. `pending_primary` records have not been promoted from the secondary archive.','',
+ '## First-fit gate','', '| Gate status | Records |','|---|---:|']
+for status,n in Counter(r['fit_gate_status'] for r in ledger if r['fit_gate_status']).most_common(): lines.append(f'| {status} | {n} |')
+lines += ['', 'Fit-eligible record IDs: ' + ', '.join(summary['fit_eligible_record_ids']) + '.',
+ 'Rows held for a condition domain, approximate or corrected label, unresolved evidence, or construct mixture remain in the ledger with a machine-readable reason. Curated values preserve the primary-source precision without overwriting the archive columns. No fit row is also marked for headline evaluation.','',
  '## Frozen candidate folds','', '| Fold | Families | Records | Shifted >=0.5 | Large shift >=2 |','|---:|---:|---:|---:|---:|']
 for f in folds: lines.append(f"| {f['fold']} | {f['families']} | {f['records']} | {f['shifted_records']} | {f['large_shift_records']} |")
 lines += ['', 'Every sequence family occurs in exactly one fold. The deterministic greedy assignment balances family size, null-relative signal and residue composition. These folds cover all candidate labels without making an admission decision; future primary-source decisions change eligibility columns, not fold membership.','',
  '## Required next gate','',
- 'Review `manual_review_priority` in order: already checked records, shifts of at least 2 pKa, shifts of at least 0.5 pKa, then near-null records. Exact construct, mutation, state and primary measurement provenance must be resolved before setting either eligibility flag. Censored observations remain outside the point-label folds until an interval-aware objective is released.','',
+ 'The next expansion reviews `manual_review_priority` in order: unchecked shifts of at least 0.5 pKa, then near-null records. Exact construct, mutation, state and primary measurement provenance must be resolved before enabling a row. Censored and approximate observations remain outside the point-label fit until an interval-aware objective is released.','',
  '`candidate_ledger.csv` is the fold population and `primary_review_queue.csv` orders its unchecked labels by information content. Other machine-readable outputs are `admission_ledger.parquet`, `admission_ledger.csv`, `folds.json`, `summary.json` and the immutable primary-check snapshot.']
 (out/'report.md').write_text('\n'.join(lines)+'\n')
-atomic_json(out/'release.json',dict(version='experimental-admission-v7',created='2026-10-06',
+atomic_json(out/'release.json',dict(version='experimental-admission-v8',created='2026-10-06',
     source_joined_sha256=digest(source/'joined-records.json'),baseline_scored_sha256=digest(baselines/'scored_records.csv'),
     dsba_release_sha256=digest(recovery/'release.json'),trx_recovery_sha256=digest(trx_recovery/'manifest.json'),primary_checks_sha256=digest(decisions_path),
+    fit_gates_sha256=digest(fit_gates_path),
     code_sha256=digest(Path(__file__)),outputs={p.name:digest(p) for p in out.iterdir() if p.is_file() and p.name!='release.json'},
-    model_fit=False,eligibility_changed=False,job=os.environ['SLURM_JOB_ID']))
+    model_fit=False,eligibility_changed=True,job=os.environ['SLURM_JOB_ID']))
 print(json.dumps(summary,indent=2),flush=True)

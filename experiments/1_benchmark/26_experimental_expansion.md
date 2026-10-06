@@ -196,3 +196,25 @@ These decisions are machine readable in
 later fit cannot discard concentration, isotope solvent, coupling, metal or
 molecular-state information. Candidate status still does not enable model-fit
 or headline-evaluation eligibility.
+
+## First experimental fit gate
+
+The exact and recovered-exact candidates were reviewed as a separate admission
+gate. This gate asks whether the current point-label objective can represent
+the measurement, after the structure, construct, redox state and assay context
+have been matched. Twelve records pass. None is also enabled for headline
+evaluation, because labels used for fitting are not independent test evidence.
+
+| Decision | Records | Reason |
+|---|---|---|
+| Fit eligible | 142, 311, 317, 584, 585, 589, 590, 916, 917, 1021, 1022, 1023 | Exact or state-corrected structure, direct point label, adequate conditions and both structural masks |
+| Condition/context hold | 102, 110, 169 | Concentration-dependent association, D2O pK-prime, or nonaqueous membrane-mimetic solvent is outside the first aqueous structure-only objective |
+| Approximate/corrected-label hold | 318, 1020 | Asp70 was reported only as approximately 0.5; archive record 1020's 7.2 was corrected to 6.7 and is not an independent observation |
+| Evidence pending | 595, 944, 978 | Exact Mg2+ condition, assay details, or expression/tag-cleavage evidence remains unresolved |
+| Construct-mixture hold | 918 | The reduced M74T structure matches, but the measured sample had heterogeneous N-terminal methionine processing |
+
+For ResA, the curated values retain the primary paper's precision: CPHC Cys74
+6.33 +/- 0.07 and Cys77 5.71 +/- 0.05; CEHC Cys74 7.4 +/- 0.1 and Cys77
+7.5 +/- 0.2, all at 298 K. The archive columns remain untouched and the
+curated values are stored separately. The decisions and their explicit reasons
+are machine readable in `curation/experimental_fit_gates_v1.json`.

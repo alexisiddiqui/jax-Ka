@@ -20,6 +20,9 @@ def run(out):
     began=time.monotonic();missing={};last=None
     def folder(action,arg):return out/('baseline' if action=='baseline' else f'seed-{arg}')
     while True:
+        if (out/'TRAINING_HOLD.json').exists():
+            atomic_json(dest/'status.json',{'complete':False,'held':True,'reason':read(out/'TRAINING_HOLD.json')})
+            return
         live=queue();active=set()
         for job in jobs:
             if job.get('retired'):continue

@@ -138,7 +138,9 @@ point labels. A whole sequence family is assigned to exactly one fold. The
 deterministic assignment balances record count, residue type and null-relative
 shift, then applies local moves and swaps to reduce imbalance caused by large
 families. Receiving a fold never admits a label: both model-fit and headline
-evaluation flags remain false until the recorded primary-source gates close.
+evaluation flags remain independent of the fold assignment. The v8 fit gate
+admits only rows whose recorded primary-source, construct, state, condition and
+structural checks pass; headline-evaluation eligibility remains false.
 
 `primary_review_queue.csv` orders unchecked candidates by information content:
 shifts of at least 2 pKa first, then shifts of at least 0.5, then near-null
@@ -149,5 +151,30 @@ primary-source batch. v5 adds the second review batch and explicitly represents
 alternate-structure recoveries. v6 records the prepared, state-correct human
 thioredoxin replacements. v7 resolves the remaining six large-shift records and
 adds machine-readable primary-condition corrections and label interpretations.
-Family membership and fold assignment are unchanged; v7 is the current candidate
-freeze.
+v8 applies the first fit gate to all 21 exact or recovered-exact candidates,
+admits 12 verified point labels, and records explicit holds for the other nine.
+Family membership and fold assignment are unchanged; v8 is the current
+candidate freeze.
+
+## First experimental JAX-Ka fit
+
+`fit_experimental_jaxka.py` exercises the shared `LocalTerms` and implicit
+solver path on the 12 v8 fit-eligible scalar labels. It changes only the three
+global JAX-Ka physical scales and uses a Huber loss on
+`effective_pka(pH=label) - label`; it does not synthesize titration curves.
+Each of the five sequence families receives equal total weight.
+
+The unconstrained v1 endpoint lowered the weighted scalar objective from
+2.0999 to 0.5795, but reduced valid production midpoint coverage from 10/12
+to 6/12. That endpoint fails the readout gate: a target-pH residual can improve
+while the full titration curve becomes invalid elsewhere. The immutable v2
+audit checks all 81 saved states and selects update 3, the lowest-loss state
+that retains every initially valid midpoint. Its scales are 0.9208
+desolvation, 1.0868 hydrogen-bond/reorganization and 1.0867 Coulomb.
+
+On the ten-label common support, frozen versus selected training MAE is 2.526
+versus 2.487 pKa and RMSE is 3.433 versus 3.349. Family-macro MAE changes from
+1.870 to 1.916, so this fit does not establish an improvement across families.
+These are all-data resubstitution diagnostics. Leave-one-family-out fitting is
+required before estimating transfer, and the two initially invalid labels
+(DsbA Cys30 and T4 lysozyme His31) remain invalid.

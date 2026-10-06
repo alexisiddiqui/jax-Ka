@@ -1,5 +1,12 @@
 # Shared LocalTerms training pilot
 
+**2026-10-06 priority change:** direct JAX-Ka parameter training is on hold at
+the user's request. The automatic launch controller was stopped before seeds
+started, and a durable hold file guards both dispatch and direct training.
+Proceed first with the [small graph-query pretraining pilot](11_graph_query_pretraining.md).
+The registered dataset, numerical checks, baseline and loss profiles below are
+retained; they do not authorize restarting JAX-Ka training.
+
 ## Current production decision
 
 The full campaign is registered under `training/shared-v4-float32`, derived
