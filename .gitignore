@@ -23,3 +23,5 @@ coverage.xml
 # Keep small delivery benchmark reports and fixtures under version control.
 *.zip
 *.tar
+
+*.out

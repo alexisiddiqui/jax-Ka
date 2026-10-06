@@ -79,10 +79,16 @@ def main():
     elif method == "jaxka":
         import numpy as np
         from jaxpropka import TitrationModel, prepare
+        from jaxpropka.parameters import ModelConfig
         from pkabench.prep import read_cif
         from pkabench.schema import GROUPS, PH
         cache = prepare(read_cif(request["cif"]), topology_options={"gap_policy":"cap", "freeze_disulfides":True}, geometry_options={"missing_sidechain":"error"})
-        model = TitrationModel(cache, backend="packed")
+        # Adapter callers must opt into a non-default numerical configuration.
+        # The frozen production model uses 1,024 damped steps; retaining the
+        # dataclass default here supports diagnostics while making the executed
+        # choice explicit in the request and result.
+        steps = int(request.get("config", {}).get("steps", ModelConfig().steps))
+        model = TitrationModel(cache, config=ModelConfig(steps=steps), backend="packed")
         curves = model.curves(PH)(model.native_probabilities)
         midpoints = model.pka_from_grid(PH)(model.native_probabilities)
         for i, key in enumerate(cache.keys):
@@ -100,6 +106,7 @@ def main():
                     "curve_source":"native","intrinsic_pka":float(curves.intrinsic_pka[i,g])})
         version = importlib.metadata.version("jax-propka")
         extra["max_residual"] = float(np.max(curves.residual))
+        extra["solver_steps"] = steps
     elif method == "kaml":
         raise RuntimeError("G3: released KaML-CBtree supports only single-chain inputs; excluded until a joint-system gate passes")
     else:

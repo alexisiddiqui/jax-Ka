@@ -1,0 +1,501 @@
+{
+  "checks": [
+    {
+      "decision": "hold_construct_mismatch",
+      "evidence": [
+        "https://www.gmclore.org/clore/Pub/pdf/266.pdf",
+        "https://www.rcsb.org/structure/1TRW",
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC2144256/"
+      ],
+      "pdb": "1ERT",
+      "pka": 9.9,
+      "reason": "The primary titration used the C62A/C69A/C73A construct; the matching deposited reduced NMR construct 1TRW also carries M74T. It is a monomeric state-correct replacement for wild-type 1ERT, whose crystal has a Cys73 intermolecular disulfide.",
+      "records": [
+        916
+      ],
+      "recovery_decision": "admit_candidate_as_new_1TRW_structure_task",
+      "recovery_result": "Prepared 1TRW is complete, has no detected disulfide, and matches the C62A/C69A/C73A/M74T reduced monomer used by the primary NMR construct series.",
+      "recovery_structure": "1TRW",
+      "site": "Asp26",
+      "system": "human thioredoxin, reduced"
+    },
+    {
+      "decision": "hold_construct_mismatch",
+      "evidence": [
+        "https://www.gmclore.org/clore/Pub/pdf/266.pdf",
+        "https://www.rcsb.org/structure/1TRS",
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC2144256/"
+      ],
+      "pdb": "1ERU",
+      "pka": 8.1,
+      "reason": "The primary titration used the C62A/C69A/C73A construct; the matching deposited oxidized NMR construct 1TRS also carries M74T. It is the construct- and state-correct replacement for wild-type 1ERU.",
+      "records": [
+        917
+      ],
+      "recovery_decision": "admit_candidate_as_new_1TRS_structure_task",
+      "recovery_result": "Prepared 1TRS is complete, has exactly the expected Cys32-Cys35 active-site disulfide, and matches the C62A/C69A/C73A/M74T oxidized monomer used by the primary NMR construct series.",
+      "recovery_structure": "1TRS",
+      "site": "Asp26",
+      "system": "human thioredoxin, oxidized"
+    },
+    {
+      "decision": "admit_candidate",
+      "evidence": [
+        "https://doi.org/10.1021/bi00113a006",
+        "https://www.rcsb.org/structure/1L54"
+      ],
+      "pdb": "1L54",
+      "pka": 6.5,
+      "reason": "The structure and pKa measurement are reported together in the primary paper. Lys102 pKa 6.5 was estimated independently by differential titration and 13C NMR; 1L54 is the M102K structure from that study.",
+      "records": [
+        311
+      ],
+      "remaining_gate": "Verify that the background substitutions in the deposited entity match the protein used for both titration methods.",
+      "site": "Lys102",
+      "system": "T4 lysozyme M102K buried-charge mutant"
+    },
+    {
+      "decision": "hold_redox_state_mismatch",
+      "evidence": [
+        "https://pubs.acs.org/doi/10.1021/bi00185a039",
+        "https://www.rcsb.org/structure/1DSB",
+        "https://www.rcsb.org/structure/1A2L"
+      ],
+      "pdb": "1DSB",
+      "pka": 3.5,
+      "reason": "The pKa belongs to reduced Cys30 thiol. 1DSB is explicitly oxidized and contains the Cys30-Cys33 disulfide, so treating Cys30 as non-titrating is chemically correct for that coordinate state. The original mapping remains held; the prepared, sequence-checked 1A2L task is the state-correct recovery candidate.",
+      "records": [
+        142
+      ],
+      "recovery_decision": "admit_candidate_as_new_1A2L_structure_task",
+      "recovery_result": "1A2L has the same deposited sequence as 1DSB, is unmutated and reduced, has no detected disulfide after preparation, and retains Cys30 under the anchor-aware structural masks. Primary construct and split-leakage gates still apply.",
+      "recovery_structure": "1A2L",
+      "site": "Cys30",
+      "system": "Escherichia coli DsbA"
+    },
+    {
+      "decision": "hold_state_or_provenance_mismatch",
+      "evidence": [
+        "https://www.rcsb.org/structure/1FVJ",
+        "https://www.rcsb.org/structure/1AC1",
+        "https://www.rcsb.org/structure/1BED"
+      ],
+      "pdb": "1FVJ, 1AC1, 1BED",
+      "reason": "The H32Y and H32L crystal entries are oxidized structures, while the reported low pKa describes a reduced thiol. 1BED is Vibrio cholerae rather than the E. coli mutant series and its archive row cites a review. Each record needs an exact construct, species and redox-state source before admission.",
+      "records": [
+        143,
+        144,
+        145
+      ],
+      "site": "Cys30 or homologous catalytic cysteine",
+      "system": "DsbA-family active-site variants"
+    },
+    {
+      "decision": "hold_construct_mismatch",
+      "evidence": [
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC5320973/",
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC6421430/",
+        "https://www.rcsb.org/structure/2V8N"
+      ],
+      "pdb": "2V8N",
+      "pka": 10.5,
+      "reason": "2V8N is wild-type LacY. The residue-specific 10.5 value was obtained by SEIRAS on the alkaline-stable G46W/G262W construct; it agrees with the apparent wild-type binding pK, but that agreement does not make it an exact wild-type structure-conditioned site label.",
+      "records": [
+        260
+      ],
+      "site": "Glu325",
+      "system": "LacY Glu325"
+    },
+    {
+      "decision": "hold_construct_mismatch",
+      "evidence": [
+        "https://pubmed.ncbi.nlm.nih.gov/16605247/",
+        "https://www.rcsb.org/structure/1JHB"
+      ],
+      "pdb": "1JHB",
+      "pka": 3.6,
+      "reason": "1JHB is fully reduced, unmutated human glutaredoxin, so its redox state is appropriate. PKAD-R itself marks this row 'approx. WT': the 3.6 value was measured on a construct with the three non-active-site cysteines changed to serine, whereas 1JHB contains those cysteines. Keep the record, but do not treat the wild-type coordinates as an exact structure-conditioned label.",
+      "records": [
+        209
+      ],
+      "site": "Cys22 in the measurement; Cys23 in 1JHB author numbering",
+      "system": "human glutaredoxin-1"
+    },
+    {
+      "decision": "hold_redox_state_mismatch",
+      "evidence": [
+        "https://www.rcsb.org/structure/1KTE",
+        "https://pubmed.ncbi.nlm.nih.gov/17681533/",
+        "https://doi.org/10.1089/ars.2012.4521"
+      ],
+      "pdb": "1KTE",
+      "pka": 3.8,
+      "reason": "The deposited 1KTE coordinates explicitly contain the Cys22-Cys25 disulfide (2.079 A), while the iodoacetamide-reactivity pKa belongs to reduced Cys22 thiol. A sequence-matched reduced structure is required.",
+      "records": [
+        208
+      ],
+      "recovery_status": "No deposited reduced pig-glutaredoxin structure was identified in the primary follow-up; that study states that a reduced structure had been lacking and used molecular dynamics.",
+      "site": "Cys22",
+      "system": "pig glutaredoxin"
+    },
+    {
+      "decision": "hold_redox_state_and_construct_mismatch",
+      "evidence": [
+        "https://www.rcsb.org/structure/1FOV",
+        "https://www.rcsb.org/structure/removed/1ILB",
+        "https://www.rcsb.org/structure/3GRX",
+        "https://pubmed.ncbi.nlm.nih.gov/11428900/"
+      ],
+      "pdb": "1FOV",
+      "pka": "4.1, <5.5 and >10.5",
+      "reason": "1FOV is explicitly the fully oxidized structure and contains the Cys11-Cys14 disulfide (2.024 A). The archive's thiol pKas describe reduced sites. The deposited sequence also contains C65Y, which PKAD-R treats only as approximately wild type. Reduced, construct-matched coordinates and exact primary value provenance are required.",
+      "records": [
+        210,
+        211,
+        212
+      ],
+      "recovery_status": "The linked reduced entry 1ILB is a theoretical model removed from the experimental PDB archive in 2002. The experimental 3GRX entry is a C14S glutathione mixed-disulfide complex, not the reduced wild-type state.",
+      "site": "Cys11 and Cys14",
+      "system": "Escherichia coli glutaredoxin-3"
+    },
+    {
+      "decision": "hold_redox_state_mismatch",
+      "evidence": [
+        "https://pubs.acs.org/doi/10.1021/bi9617724",
+        "https://www.rcsb.org/structure/1MEK"
+      ],
+      "pdb": "1MEK",
+      "pka": 4.5,
+      "reason": "The deposited 1MEK coordinates explicitly contain the Cys36-Cys39 disulfide (2.017 A), while the UV-spectrophotometric 4.5 value is a reduced-thiol pKa. A sequence-matched reduced structure is required.",
+      "records": [
+        259
+      ],
+      "site": "Cys36",
+      "system": "human protein disulfide isomerase N-terminal a domain"
+    },
+    {
+      "decision": "hold_construct_mismatch",
+      "evidence": [
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC2760839/",
+        "https://www.rcsb.org/structure/1P5F"
+      ],
+      "pdb": "1P5F",
+      "pka": 5.4,
+      "reason": "The primary experiment assigns the 5.4 +/- 0.1 transition specifically to wild-type Cys106 using the C106S control. The measured tag-cleaved protein retains three vector-derived GSH residues at its N-terminus, whereas 1P5F is the unmutated 189-residue deposited protein. The structure is chemically informative but not an exact construct match.",
+      "records": [
+        124
+      ],
+      "site": "Cys106",
+      "system": "human DJ-1"
+    },
+    {
+      "decision": "admit_candidate",
+      "evidence": [
+        "https://pubmed.ncbi.nlm.nih.gov/9416621/",
+        "https://pubmed.ncbi.nlm.nih.gov/11513590/",
+        "https://www.rcsb.org/structure/1XNB"
+      ],
+      "pdb": "1XNB",
+      "pka": "7.2 and 6.7 under separately preserved conditions",
+      "reason": "Both primary NMR studies report the catalytic Glu172 pKa for wild-type BCX. The two values have different documented solution conditions and remain separate observations; 1XNB is the unmutated B. circulans xylanase structure.",
+      "records": [
+        1020,
+        1021
+      ],
+      "remaining_gate": "Confirm the expressed mature-chain termini in each primary methods section against the deposited 1XNB entity.",
+      "site": "Glu172",
+      "system": "Bacillus circulans family-11 xylanase, wild type"
+    },
+    {
+      "decision": "admit_candidate",
+      "evidence": [
+        "https://pubmed.ncbi.nlm.nih.gov/11513590/",
+        "https://www.rcsb.org/structure/1HV1",
+        "https://www.rcsb.org/structure/1HV0"
+      ],
+      "pdb": "1HV1 and 1HV0",
+      "pka": "7.3 (Q127A) and 7.9 (Y80F)",
+      "reason": "The primary study reports direct 13C-NMR pKas and deposits the corresponding Q127A and Y80F structures. The archive mutation labels, catalytic residue and deposited variants agree.",
+      "records": [
+        1022,
+        1023
+      ],
+      "remaining_gate": "Confirm mature-chain termini; the mutation, state and residue mapping otherwise match the primary structure/measurement study.",
+      "site": "Glu172",
+      "system": "Bacillus circulans family-11 xylanase variants"
+    },
+    {
+      "decision": "admit_candidate",
+      "evidence": [
+        "https://pubmed.ncbi.nlm.nih.gov/18422485/",
+        "https://www.rcsb.org/structure/3C71"
+      ],
+      "pdb": "3C71",
+      "pka": "6.3 and 5.7",
+      "reason": "The primary study measures both reduced-state cysteine pKas for the E75P/P76H CPHC variant and deposits its reduced crystal structure as 3C71. The mutation and site identities match.",
+      "records": [
+        584,
+        589
+      ],
+      "remaining_gate": "Confirm the recombinant mature-chain termini against the deposited entity.",
+      "site": "Cys74 and Cys77",
+      "system": "Bacillus subtilis ResA CPHC variant"
+    },
+    {
+      "decision": "admit_candidate",
+      "evidence": [
+        "https://pubmed.ncbi.nlm.nih.gov/18422485/",
+        "https://www.rcsb.org/structure/3C73"
+      ],
+      "pdb": "3C73",
+      "pka": "7.4 and 7.5",
+      "reason": "The primary study measures both reduced-state cysteine pKas for the P76H CEHC variant and deposits its reduced crystal structure as 3C73. The mutation and site identities match.",
+      "records": [
+        585,
+        590
+      ],
+      "remaining_gate": "Confirm the recombinant mature-chain termini against the deposited entity.",
+      "site": "Cys74 and Cys77",
+      "system": "Bacillus subtilis ResA CEHC variant"
+    },
+    {
+      "decision": "admit_candidate",
+      "evidence": [
+        "https://pubmed.ncbi.nlm.nih.gov/2337607/",
+        "https://www.rcsb.org/structure/2LZM"
+      ],
+      "pdb": "2LZM",
+      "pka": "9.1 and approximately 0.5",
+      "reason": "The primary NMR study reports the coupled native-state His31/Asp70 salt-bridge pKas at 10 C. 2LZM is an unmutated, complete T4 lysozyme structure. The paper describes Asp70 as about 0.5, so its archive representation as an ordinary exact point requires an approximation flag.",
+      "records": [
+        317,
+        318
+      ],
+      "remaining_gate": "Preserve Asp70 as approximate rather than overstate its reported precision; confirm the NMR construct sequence against 2LZM.",
+      "site": "His31 and Asp70",
+      "system": "wild-type bacteriophage T4 lysozyme"
+    },
+    {
+      "decision": "admit_candidate",
+      "evidence": [
+        "https://doi.org/10.1021/bi00049a034",
+        "https://www.rcsb.org/structure/1A91"
+      ],
+      "pdb": "1A91",
+      "pka": 7.1,
+      "reason": "The primary NMR measurement and 1A91 structure describe the same unmutated 79-residue subunit-c monomer in chloroform/methanol/water. It is an exact condition-matched label, but it is not a measurement on the intact membrane c-ring.",
+      "records": [
+        169
+      ],
+      "remaining_gate": "Preserve the nonaqueous solvent condition and exclude this label from an aqueous-protein headline analysis unless the model scope explicitly includes membrane-mimetic solvent measurements.",
+      "site": "Asp61",
+      "system": "Escherichia coli F1Fo ATP synthase subunit c in chloroform/methanol/water"
+    },
+    {
+      "decision": "hold_not_site_pka",
+      "evidence": [
+        "https://pubmed.ncbi.nlm.nih.gov/6998977/",
+        "https://www.rcsb.org/structure/3SSI"
+      ],
+      "pdb": "3SSI",
+      "pka": 3.25,
+      "reason": "The primary paper identifies 3.25 as the midpoint of cooperative acid denaturation with a Hill coefficient of about 4.4. It also states that His43 cannot protonate in the native conformation. The number is therefore not a microscopic His43 pKa and must not be used as a site label.",
+      "records": [
+        539
+      ],
+      "site": "archive maps the value to His43",
+      "system": "Streptomyces subtilisin inhibitor"
+    },
+    {
+      "decision": "hold_structure_context_mismatch",
+      "evidence": [
+        "https://pubmed.ncbi.nlm.nih.gov/1554726/",
+        "https://www.rcsb.org/structure/1ERT",
+        "https://www.rcsb.org/structure/4TRX",
+        "https://www.gmclore.org/clore/Pub/pdf/196.pdf"
+      ],
+      "pdb": "1ERT",
+      "pka": 6.3,
+      "reason": "The primary NMR study assigns the 6.3 transition to Cys32 in reduced human thioredoxin and relies on the same reduced solution-structure series. 1ERT has a reduced active site but forms a crystallographic Cys73-Cys73 intermolecular disulfide dimer. 4TRX is the reduced monomeric M74T solution construct and is the appropriate recovery candidate; the experiment also reports heterogeneous N-terminal Met processing, which must remain flagged.",
+      "records": [
+        918
+      ],
+      "recovery_decision": "admit_candidate_as_new_4TRX_structure_task",
+      "recovery_result": "Prepared 4TRX is complete, monomeric, reduced, has no detected disulfide, and preserves the M74T construct used for the solution NMR work. Heterogeneous N-terminal Met processing remains an explicit condition flag.",
+      "recovery_structure": "4TRX",
+      "remaining_gate": "Preserve the M74T construct and heterogeneous N-terminal Met processing reported for the NMR samples.",
+      "site": "Cys32",
+      "system": "reduced recombinant human thioredoxin"
+    },
+    {
+      "decision": "hold_redox_state_and_provenance_mismatch",
+      "evidence": [
+        "https://www.rcsb.org/structure/2FD3",
+        "https://doi.org/10.1089/ars.2012.4521"
+      ],
+      "pdb": "2FD3",
+      "pka": 6.34,
+      "reason": "The archived pKa describes reactivity of reduced Cys32, but 2FD3 explicitly contains the Cys32-Cys35 active-site disulfide in both chains. Its PDB citation is unpublished and the archive points only to a later review, so both a reduced construct-matched structure and the original numeric source are required.",
+      "records": [
+        901
+      ],
+      "site": "Cys32",
+      "system": "Escherichia coli thioredoxin P34H"
+    },
+    {
+      "decision": "admit_candidate",
+      "evidence": [
+        "https://pubmed.ncbi.nlm.nih.gov/17368484/",
+        "https://www.rcsb.org/structure/2O89",
+        "https://doi.org/10.1089/ars.2012.4521"
+      ],
+      "pdb": "2O89",
+      "pka": 6.4,
+      "reason": "The primary structure/function study reports pKa measurements and deposits the P31T/C32S structure as 2O89. C32S leaves Cys29 as the measured nucleophilic thiol; the mutation and monomeric reduced coordinate state match. A later tabulation gives the experimental value as 6.4.",
+      "records": [
+        944
+      ],
+      "remaining_gate": "Extract the exact assay conditions and uncertainty from the full primary article; preserve the vector-derived N-terminal GSHM extension present in the deposited construct.",
+      "site": "Cys29",
+      "system": "Staphylococcus aureus thioredoxin P31T/C32S"
+    },
+    {
+      "decision": "admit_candidate",
+      "evidence": [
+        "https://pubmed.ncbi.nlm.nih.gov/31898/",
+        "https://doi.org/10.1021/bi00615a008",
+        "https://www.rcsb.org/structure/1EX3"
+      ],
+      "label_interpretation": "Direct protein-state pK-prime inferred from the coupled His57-Asp102 proton-NMR titration in D2O; it is isotope- and temperature-conditioned.",
+      "metadata_corrections": {
+        "notation": "pK-prime",
+        "solvent": "D2O",
+        "temperature": "304 K (31 degrees C), not 298 K"
+      },
+      "pdb": "1EX3",
+      "pka": 1.36,
+      "reason": "The primary NMR paper explicitly reports Asp102 pK-prime about 1.4 in bovine chymotrypsinogen A, and the archive precision is 1.36 +/- 0.03. Unmutated, complete 1EX3 represents the same zymogen and contains no non-water component. The archive temperature is wrong and omits D2O, so admission requires the recorded condition correction.",
+      "records": [
+        110
+      ],
+      "remaining_gate": "Carry 304 K, D2O and pK-prime as first-class conditions before eligibility; do not train this as an ordinary 298 K H2O pKa.",
+      "site": "Asp102",
+      "system": "bovine chymotrypsinogen A"
+    },
+    {
+      "decision": "admit_candidate",
+      "evidence": [
+        "https://pubmed.ncbi.nlm.nih.gov/7909691/",
+        "https://doi.org/10.1021/bi00183a034",
+        "https://www.rcsb.org/structure/2RN2"
+      ],
+      "label_interpretation": "Residue-resolved 13C-NMR ionization constant with coupled two-step titration; Asp10 is Mg2+-sensitive.",
+      "metadata_corrections": {
+        "coupling": "Asp10 and Asp70 show two-step titrations",
+        "metal_state": "The 6.1 reference must remain assigned to its magnesium condition; Mg2+ changes Asp10."
+      },
+      "pdb": "2RN2",
+      "pka": 6.1,
+      "reason": "The primary study directly assigns Asp10 pKa 6.1 from pH-dependent carboxyl-carbon NMR in E. coli RNase HI. Complete, unmutated 2RN2 is the corresponding 155-residue protein and contains only water as a nonpolymer. The label is usable once its Mg2+ state and coupled-titration interpretation are explicit.",
+      "records": [
+        595
+      ],
+      "remaining_gate": "Extract the exact magnesium condition and recombinant construct from the primary methods/table before setting model-fit eligibility.",
+      "site": "Asp10",
+      "system": "Escherichia coli ribonuclease HI"
+    },
+    {
+      "decision": "admit_candidate",
+      "evidence": [
+        "https://pubmed.ncbi.nlm.nih.gov/10841761/",
+        "https://doi.org/10.1021/bi992209z",
+        "https://www.rcsb.org/structure/1CDC"
+      ],
+      "label_interpretation": "Concentration-dependent, biphasic NMR titration of Glu41 coupled reciprocally to Glu29 in the isolated N-terminal domain.",
+      "metadata_corrections": {
+        "coupling": "biphasic Glu41/Glu29 titration",
+        "molecular_context": "isolated rat CD2 N-terminal domain",
+        "protein_concentration": "1.2 mM for pKa 6.73; 0.1 mM gives 6.36"
+      },
+      "pdb": "1CDC",
+      "pka": 6.73,
+      "reason": "The primary paper directly assigns Glu41 pKa 6.73 at 1.2 mM CD2d1 and shows a concentration shift to 6.36 at 0.1 mM. Unmutated 1CDC contains the same 99-residue rat domain. The deposited copies are not a bound CD48 complex; the concentration and coupled titration must remain explicit.",
+      "records": [
+        102
+      ],
+      "remaining_gate": "Preserve 1.2 mM protein concentration and the coupled/self-association context in the training row; do not merge the separate 0.1 mM value of 6.36.",
+      "site": "Glu41",
+      "system": "rat CD2 N-terminal domain (CD2d1)"
+    },
+    {
+      "decision": "admit_candidate",
+      "evidence": [
+        "https://pubmed.ncbi.nlm.nih.gov/16342931/",
+        "https://doi.org/10.1021/bi0514459",
+        "https://www.rcsb.org/structure/1JBB"
+      ],
+      "label_interpretation": "Direct spectrophotometric thiol pKa of the exposed active-site cysteine in free Ubc13.",
+      "metadata_corrections": {
+        "molecular_context": "free Ubc13, without ubiquitin, E1, E3 or Mms2"
+      },
+      "pdb": "1JBB",
+      "pka": 11.1,
+      "reason": "The primary study measures active-site cysteine pKas in three free E2 proteins and assigns yeast Ubc13 Cys87 the 11.1 value. Unmutated 1JBB is the native-length yeast Ubc13 structure; its author-assigned biological assemblies are monomers and it contains only water as a nonpolymer.",
+      "records": [
+        978
+      ],
+      "remaining_gate": "Confirm the primary expression construct and affinity-tag cleavage against the native 153-residue sequence deposited in 1JBB.",
+      "site": "Cys87",
+      "system": "Saccharomyces cerevisiae Ubc13, free E2"
+    },
+    {
+      "decision": "hold_state_mismatch",
+      "evidence": [
+        "https://pubmed.ncbi.nlm.nih.gov/33895555/",
+        "https://www.rcsb.org/structure/1AO6"
+      ],
+      "label_interpretation": "The archived 6.9 value is the unfolded-state Cys34 pKa, not the native-state value.",
+      "metadata_corrections": {
+        "native_state_pka": "8.7",
+        "unfolded_state_pka": "6.9"
+      },
+      "pdb": "1AO6",
+      "pka": 6.9,
+      "reason": "The cited primary paper reports Cys34 pKa 8.7 in native albumin and 6.9 after unfolding. Mapping 6.9 to folded native 1AO6 is a state mismatch. Keep the record for provenance, but do not use it as a native structure-conditioned point label.",
+      "records": [
+        753
+      ],
+      "site": "Cys34",
+      "system": "human serum albumin"
+    },
+    {
+      "decision": "hold_label_definition_and_ligand_state_mismatch",
+      "evidence": [
+        "https://pubmed.ncbi.nlm.nih.gov/10677214/",
+        "https://doi.org/10.1021/bi9918745",
+        "https://www.rcsb.org/structure/1MUT"
+      ],
+      "label_interpretation": "Apparent kinetic pKa from the descending limb of the kcat-pH profile in the active MutT-Mg2+-dGTP-Mg2+ quaternary complex; assigned to Lys39 by K39Q mutagenesis.",
+      "metadata_corrections": {
+        "method": "kinetic pH-rate profile, not a direct NMR site titration",
+        "molecular_context": "MutT-Mg2+-dGTP-Mg2+ active quaternary complex"
+      },
+      "pdb": "1MUT",
+      "pka": 8.4,
+      "reason": "The cited paper reports 8.4 +/- 0.4 as an apparent catalytic pKa in the metal- and substrate-bound complex and assigns it to Lys39 from kinetic and mutational evidence. The archive incorrectly calls it NMR and maps it to ligand-free 1MUT. It is not an apo microscopic site pKa.",
+      "records": [
+        362
+      ],
+      "site": "Lys39",
+      "system": "Escherichia coli MutT catalytic complex"
+    }
+  ],
+  "created": "2026-10-06",
+  "policy": {
+    "admit": "The measurement, sequence/construct, structural state and mapped site must describe the same molecular system.",
+    "hold": "Keep the record and provenance, but do not use it as a structure-conditioned training or headline-evaluation label until the named mismatch is resolved.",
+    "surrogate": "A homolog, alternate redox state or related mutant is not an exact experimental structure."
+  },
+  "scope": "First-pass primary-source checks for the largest null-relative PKAD-R shifts",
+  "version": "primary-label-checks-v1"
+}

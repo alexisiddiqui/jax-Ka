@@ -19,6 +19,13 @@ class LocalTerms(NamedTuple):
     burial: jax.Array          # [N,9]
 
 
+class PhysicalScales(NamedTuple):
+    """Dynamic physical parameters; numerical/geometry settings remain static."""
+    desolv: jax.Array
+    hbond: jax.Array
+    coulomb: jax.Array
+
+
 class CurveResult(NamedTuple):
     ph: jax.Array
     protonated: jax.Array      # [H,R,9], conditional on identity, not multiplied by P
@@ -71,7 +78,9 @@ class SiteCurveResult(NamedTuple):
     converged: jax.Array
 
 
-def _local_terms(d, p, cfg):
+def _local_terms(d, p, cfg, scales=None):
+    if scales is None:
+        scales = PhysicalScales(cfg.desolv_scale, cfg.hbond_scale, cfg.coulomb_scale)
     n = d["group_mask"].shape[0]
     if p.shape != (n,20) or not jnp.issubdtype(p.dtype,jnp.floating):
         raise ValueError(f"expected floating P[{n},20]")
@@ -93,8 +102,8 @@ def _local_terms(d, p, cfg):
     burial = jnp.clip((mass-cfg.nmin)/(cfg.nmax-cfg.nmin),0,1)
     desolv = (jnp.asarray(FORMAL_CHARGE,dtype=p.dtype) * cfg.desolv_prefactor * volume
               * (cfg.surface_scale+(1-cfg.surface_scale)*burial))
-    intrinsic = (jnp.asarray(MODEL_PKA,dtype=p.dtype)+cfg.desolv_scale*desolv
-                 +cfg.hbond_scale*(hb+f("reorganization")*burial))
+    intrinsic = (jnp.asarray(MODEL_PKA,dtype=p.dtype)+scales.desolv*desolv
+                 +scales.hbond*(hb+f("reorganization")*burial))
     intrinsic = jnp.where(gm,intrinsic,0)
     weights = jnp.concatenate((p[:,GROUP_AA],jnp.ones((p.shape[0],2),dtype=p.dtype)),axis=-1)*gm
     pair_mass = mass[:,None,:,None]+mass[idx][:,:,None,:]
@@ -109,10 +118,10 @@ def _local_terms(d, p, cfg):
     else:
         eligibility = (pair_mass>=cfg.nmin).astype(p.dtype)
     eligibility = jnp.where(exception,1,eligibility)
-    c = cfg.coulomb_scale * f("coulomb_geometry")/eps * eligibility
+    c = scales.coulomb * f("coulomb_geometry")/eps * eligibility
     c = jnp.where(d["pair_mask"],c,0)
-    hd = cfg.hbond_scale*jnp.where(d["pair_mask"],f("hb_donor"),0)
-    hr = cfg.hbond_scale*jnp.where(d["pair_mask"],f("hb_reverse"),0)
+    hd = scales.hbond*jnp.where(d["pair_mask"],f("hb_donor"),0)
+    hr = scales.hbond*jnp.where(d["pair_mask"],f("hb_reverse"),0)
     wn = weights[idx][:,:,None,:]
     # E_HB = -Hd*h_i*(1-h_j) - Hr*(1-h_i)*h_j.
     # dE/dh_i = -Hd + (Hd+Hr)*h_j. This is not a signed PROPKA determinant.

@@ -6,17 +6,23 @@ from pathlib import Path
 import tempfile
 
 
-def require_compute():
+def require_compute(*, threads=1, gpu_benchmark=False):
     if not os.environ.get("SLURM_JOB_ID") or not os.environ.get("SLURMD_NODENAME"):
         raise RuntimeError("pkabench workloads require a Slurm compute allocation")
-    if os.environ["SLURMD_NODENAME"].split(".")[0] == "comp1400":
+    if gpu_benchmark and not (os.environ.get('SLURM_JOB_GPUS') or os.environ.get('SLURM_STEP_GPUS')):
+        raise RuntimeError('GPU benchmark exception requires an allocated GPU')
+    if os.environ["SLURMD_NODENAME"].split(".")[0] == "comp1400" and not gpu_benchmark:
         raise RuntimeError("comp1400 is excluded")
     if os.environ.get("SLURM_MEM_PER_CPU") != "2048":
         raise RuntimeError("pkabench requires --mem-per-cpu=2G")
-    # Extra requested CPUs provide memory headroom. Scientific workers use one
-    # allocated CPU, including native libraries that ignore OMP thread settings.
+    if not isinstance(threads,int) or not 1<=threads<=int(os.environ.get('SLURM_CPUS_PER_TASK','1')):
+        raise ValueError('threads must fit the allocated Slurm CPUs')
+    # Existing workers stay single-threaded. Explicit training experiments can
+    # retain more allocated CPUs without changing unrelated benchmark jobs.
     if hasattr(os,"sched_getaffinity"):
-        os.sched_setaffinity(0,{min(os.sched_getaffinity(0))})
+        available=sorted(os.sched_getaffinity(0))
+        if threads>len(available):raise RuntimeError('CPU affinity is narrower than requested threads')
+        os.sched_setaffinity(0,set(available[:threads]))
 
 
 def digest(path):

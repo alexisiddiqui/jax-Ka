@@ -59,3 +59,95 @@ Completed prediction directories are immutable inputs. Use a new release directo
 for a new run. The current scripts target their named release; do not resubmit an
 already completed array or assume rerunning preparation refreshes an existing gap
 overlay. The released metadata identifies the exact code used at execution.
+
+## Frozen CatBoost–PypKa hybrid extension
+
+`_runtime/jax-Ka/pkabench/experimental/hybrid-v1/` contains the separate hybrid
+release. The original experimental pilot outputs are read-only inputs.
+
+Run `hybrid_teacher.sbatch`, then `hybrid_inference.sbatch`, then
+`hybrid_replay.sbatch`, then `hybrid_score.sbatch`, with `afterok` dependencies
+and the same submission lock/resource checks. Each task requests two CPUs and
+4 GB. The three structures run concurrently. Each structure's unmodified teacher
+replay must pass before its three hybrid seeds run.
+
+`hybrid_features.py` verifies its extracted feature implementation against a
+saved native-intrinsic feature fixture. `hybrid_predict.py` checks and loads the
+frozen models; it never calls fit. `hybrid_replay.py` reuses the existing energy
+conversion and native-order Monte Carlo implementation. Artificial termini and
+masked sites retain teacher intrinsics. The scorer restricts the comparison to
+identical masked point labels with replaced intrinsic terms and valid outputs
+from all methods. The report distinguishes teacher assistance from standalone
+prediction and retains all experimental source-verification holds.
+
+## Full PKAD-R expansion
+
+The versioned structural audit is in
+`_runtime/jax-Ka/pkabench/experimental/pkadr-full-v1/`. `full_inventory.py`
+creates one immutable task per PDB/author-chain, prepares structures, and applies
+the existing missing-region and removable-component policies. Its Slurm array is
+followed by `collect_full_inventory.sbatch`, which forms sequence-family blocks
+and checks the actual frozen candidate universe at 30% identity and 80%
+bidirectional coverage. Alternative PDB identifiers are written to an explicit
+recovery queue rather than silently substituted.
+
+`full_baselines.py init` creates the frozen-method task list. The corresponding
+array runs PROPKA, pKAI, pKAI+, JAX-Ka and PypKa sequentially for each prepared
+structure and never fits a model. After every task has a complete receipt,
+`score_full_baselines.sbatch` reports the exact common-method intersection.
+Its headline metric is family-macro MAE, its uncertainty unit is a whole sequence
+family, and its shifted subset requires an experimental deviation of at least
+0.5 pKa from the residue-type null. Pooled site metrics are supporting data.
+Censored records remain one-sided constraints. Primary-source and construct
+verification still gate both training and independent headline evaluation.
+
+The original full-baseline JAX-Ka adapter inherited the 64-step constructor
+default. That release remains immutable. `full_jaxka_recovery.sbatch` creates a
+JAX-Ka-only recovery release using the accepted frozen-production configuration
+of 1,024 solver steps and the unchanged residual and midpoint-validity rules.
+After its array completes, `score_full_baselines_v2.sbatch` substitutes only
+those JAX-Ka predictions and records both configurations' coverage. It does not
+fit a model or alter any other method output.
+
+## Redox-state recovery diagnostic
+
+`dsba_reduced_recovery.py` treats the reduced DsbA structure 1A2L as a new,
+immutable structure task for PKAD-R record 142. Preparation requires an exact
+deposited-sequence match to the original 1DSB mapping, a complete Cys30 thiol,
+and no detected disulfide. It does not overwrite the oxidized 1DSB task.
+
+The five-task method array runs frozen PROPKA, pKAI, pKAI+, JAX-Ka and PypKa
+adapters. JAX-Ka uses the accepted 1,024-step configuration. The dependent
+scorer compares the oxidized and reduced predictions to the experimental 3.5
+pKa label and writes a separate anchor-aware natural-gap annotation. That
+annotation uses the calibrated visible-flank rule for the two short terminal
+gaps; the conservative missing-region envelope remains in the report as a
+diagnostic rather than an automatic exclusion. This is a one-record state
+correction check, not a method ranking or a fitted model.
+
+## Experimental admission ledger and candidate folds
+
+`build_experimental_admission.sbatch` builds the versioned admission release
+from the immutable full structural inventory, corrected frozen baselines,
+primary-source decisions and reduced-DsbA recovery. It writes all 1,024 archive
+records to a ledger while keeping structural candidacy, primary verification,
+fold assignment and final eligibility as separate fields.
+
+The five candidate folds contain only locally train/validation-disjoint numeric
+point labels. A whole sequence family is assigned to exactly one fold. The
+deterministic assignment balances record count, residue type and null-relative
+shift, then applies local moves and swaps to reduce imbalance caused by large
+families. Receiving a fold never admits a label: both model-fit and headline
+evaluation flags remain false until the recorded primary-source gates close.
+
+`primary_review_queue.csv` orders unchecked candidates by information content:
+shifts of at least 2 pKa first, then shifts of at least 0.5, then near-null
+records. Censored labels remain outside the point folds pending an interval-aware
+objective. The first greedy-fold release is retained as v1; v2 adds the review
+queue and optimized assignment. v3 incorporates the first prioritized
+primary-source batch. v5 adds the second review batch and explicitly represents
+alternate-structure recoveries. v6 records the prepared, state-correct human
+thioredoxin replacements. v7 resolves the remaining six large-shift records and
+adds machine-readable primary-condition corrections and label interpretations.
+Family membership and fold assignment are unchanged; v7 is the current candidate
+freeze.
