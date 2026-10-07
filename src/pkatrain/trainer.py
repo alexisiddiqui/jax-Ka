@@ -67,15 +67,48 @@ class Engine:
         return optax.apply_updates(params,updates),state
 
 
+def scalar_schedule(config,updates_per_epoch):
+    """Optimizer-update schedule; checkpointed Optax counters govern resumption."""
+    if config.get('schedule') is None:return config['learning_rate']
+    if config['schedule']!='constant_then_cosine':raise ValueError(config['schedule'])
+    hold=config['constant_epochs']*updates_per_epoch
+    decay=(config['epochs']-config['constant_epochs'])*updates_per_epoch
+    assert hold>0 and decay>0
+    return optax.join_schedules([optax.constant_schedule(config['learning_rate']),
+        optax.cosine_decay_schedule(config['learning_rate'],decay,
+            alpha=config['end_learning_rate']/config['learning_rate'])],[hold])
+
+
 class ScalarEngine:
     """Shared output-label pretraining for any pytree model, without a physical solve."""
     update=Engine.update
 
-    def __init__(self,predict,learning_rate=.001):
+    def __init__(self,predict,learning_rate=.001,*,training_predict=None):
         self.optimizer=optax.chain(optax.clip_by_global_norm(1.),optax.adam(learning_rate))
         self.forward=jax.jit(predict)
         self.value_grad=jax.jit(jax.value_and_grad(
             lambda p,x,y,m:scalar_loss(predict(p,x),y,m)))
+        def batch_loss(p,x,y,m,valid,key=None):
+            if training_predict is None:
+                losses=jax.vmap(lambda a,b,c:scalar_loss(predict(p,a),b,c))(x,y,m)
+            else:
+                if key is None:raise ValueError('Stochastic training requires an RNG key')
+                keys=jax.random.split(key,len(valid))
+                losses=jax.vmap(lambda a,b,c,k:scalar_loss(training_predict(p,a,k),b,c))(x,y,m,keys)
+            return jnp.sum(jnp.where(valid,losses,0.))/jnp.maximum(valid.sum(),1)
+        self.batch_value_grad=jax.jit(jax.value_and_grad(batch_loss))
+        self.batch_forward=jax.jit(jax.vmap(predict,in_axes=(None,0)))
+        def batch_step(p,state,x,y,m,valid,key=None):
+            loss,gradient=jax.value_and_grad(batch_loss)(p,x,y,m,valid,key)
+            finite=jnp.isfinite(loss)&jnp.all(jnp.stack([jnp.all(jnp.isfinite(g)) for g in jax.tree.leaves(gradient)]))
+            updates,newstate=self.optimizer.update(gradient,state,p)
+            return optax.apply_updates(p,updates),newstate,loss,finite
+        self.batch_step=jax.jit(batch_step)
+
+    def audited_batch_update(self,params,state,inputs,reference,eligible,valid,key=None):
+        newparams,newstate,loss,finite=self.batch_step(params,state,inputs,reference,eligible,valid,key)
+        if not bool(finite):raise FloatingPointError('Nonfinite batched scalar loss/gradient; update discarded')
+        return newparams,newstate,float(loss)
 
     def audited_gradient(self,params,inputs,reference,eligible):
         loss,gradient=self.value_grad(params,inputs,reference,eligible)

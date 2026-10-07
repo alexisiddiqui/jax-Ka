@@ -178,3 +178,25 @@ versus 2.487 pKa and RMSE is 3.433 versus 3.349. Family-macro MAE changes from
 These are all-data resubstitution diagnostics. Leave-one-family-out fitting is
 required before estimating transfer, and the two initially invalid labels
 (DsbA Cys30 and T4 lysozyme His31) remain invalid.
+
+### Leave-one-family-out result
+
+`experimental_lofo.py` performs five independent fits. Each fold recomputes
+equal-family weights on four training families, selects solely from training
+objective and training midpoint coverage, and loads the fifth family's tasks
+only after its checkpoint is fixed. The result does not support transferring
+the fitted global scales:
+
+| Quantity | Frozen JAX-Ka | LOFO-fitted JAX-Ka |
+|---|---:|---:|
+| Valid held-out labels | 10/12 | 6/12 |
+| Common-support MAE | 0.915 | 0.967 |
+| Common-support RMSE | 1.190 | 1.262 |
+| Common-support family-macro MAE | 0.846 | 0.966 |
+
+When ResA is held out, its four initially valid cysteine midpoints all become
+invalid. This failure is not hidden by the six-label common-support table.
+Among the three families left on common support, xylanase improves by 0.122
+pKa MAE, while lysozyme worsens by 0.282 and thioredoxin by 0.198. The current
+five-family dataset and three global physical scales therefore provide a valid
+training-path test but not a useful transferable experimental fine-tune.

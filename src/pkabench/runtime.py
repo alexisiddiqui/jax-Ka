@@ -6,12 +6,12 @@ from pathlib import Path
 import tempfile
 
 
-def require_compute(*, threads=1, gpu_benchmark=False):
+def require_compute(*, threads=1, gpu_benchmark=False, allow_comp1400=False):
     if not os.environ.get("SLURM_JOB_ID") or not os.environ.get("SLURMD_NODENAME"):
         raise RuntimeError("pkabench workloads require a Slurm compute allocation")
     if gpu_benchmark and not (os.environ.get('SLURM_JOB_GPUS') or os.environ.get('SLURM_STEP_GPUS')):
         raise RuntimeError('GPU benchmark exception requires an allocated GPU')
-    if os.environ["SLURMD_NODENAME"].split(".")[0] == "comp1400" and not gpu_benchmark:
+    if os.environ["SLURMD_NODENAME"].split(".")[0] == "comp1400" and not (gpu_benchmark or allow_comp1400):
         raise RuntimeError("comp1400 is excluded")
     if os.environ.get("SLURM_MEM_PER_CPU") != "2048":
         raise RuntimeError("pkabench requires --mem-per-cpu=2G")

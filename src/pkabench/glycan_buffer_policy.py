@@ -170,8 +170,8 @@ def buffer_screen(atoms, component, partners):
     water = np.isin(atoms.res_name, ['HOH', 'WAT', 'H2O', 'DOD'])
     ids = np.arange(component['start'], component['end']); ids = ids[heavy[ids]]
     a = atoms[ids]
-    distances = {p: float(cKDTree(atoms.coord[heavy & np.isin(atoms.chain_id, chains) & np.isin(atoms.res_name, list(CANONICAL))]).query(a.coord)[0].min()) for p, chains in partners.items()}
-    bridging = max(distances.values()) <= 4.
+    distances = {p: float(cKDTree(atoms.coord[heavy & np.isin(atoms.chain_id, chains) & np.isin(atoms.res_name, list(CANONICAL))]).query(a.coord)[0].min()) for p, chains in partners.items() if chains}
+    bridging = len(distances)>1 and max(distances.values()) <= 4.
     env = heavy & ~water; positions = np.searchsorted(np.flatnonzero(env), ids)
     iso = float(struc.sasa(a, probe_radius=1.4, point_number=1000, ignore_ions=False, vdw_radii='Single').sum())
     bound = float(struc.sasa(atoms[env], probe_radius=1.4, point_number=1000, ignore_ions=False, vdw_radii='Single')[positions].sum())
@@ -209,6 +209,8 @@ def classify_components(atoms, cif, partners):
         a = atoms[c['start']:c['end']]; a = a[~np.isin(np.char.upper(a.element), ['H', 'D'])]
         if (c['chain'], c['name']) in protected:
             raise Rejection('connected_component', f"{c['name']} has a declared covalent/metal connection")
+        if len(a) == 0:
+            raise Rejection('component_without_heavy_atoms', f"{c['name']} has no heavy atoms for distance/SASA screening")
         distance = float(protein_tree.query(a.coord)[0].min())
         record = dict(c, coordinates=a.coord.astype(float).tolist(), min_protein_distance_A=distance, declared_connection=False)
         if c['code'] == 'metal':

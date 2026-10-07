@@ -73,3 +73,43 @@ def test_original_model_equivalence():
     for a,b in zip(jax.tree.leaves(p),jax.tree.leaves(previous)):np.testing.assert_array_equal(a,b)
     g,_=graph()
     np.testing.assert_array_equal(jax.jit(predict)(p,g),jax.jit(old['predict'])(previous,g))
+
+
+def test_sidechain_geometry_and_learning():
+    from pkanet.graph import sidechain_features
+    g,bb=graph();atoms=[{'CB':bb[i,1]+[.5,1.,1.]} for i in range(len(bb))]
+    atoms[0]={}
+    features=sidechain_features(bb,atoms);assert features.shape==(12,128) and not features[0].any()
+    rotation=np.linalg.qr(np.random.default_rng(5).normal(size=(3,3)))[0];shift=np.array([9,-7,3])
+    moved=[{k:v@rotation+shift for k,v in row.items()} for row in atoms]
+    np.testing.assert_allclose(sidechain_features(bb@rotation+shift,moved),features,atol=1e-6)
+    g['nodes']=np.concatenate((g['nodes'],features),axis=-1)
+    params=initialize(jax.random.PRNGKey(17),width=44,ff=68,node_dim=152)
+    assert sum(x.size for x in jax.tree.leaves(params))==50001
+    engine=ScalarEngine(predict);grad,_=engine.audited_gradient(params,g,np.array([4,5,7,8],np.float32),np.ones(4,bool))
+    assert np.linalg.norm(np.asarray(grad['embed']['w'][24:]))>0
+    original=np.asarray(engine.forward(params,g))
+    padded,_,_=pad(g,np.zeros(4),(32,32,16))
+    np.testing.assert_allclose(engine.forward(params,padded)[:4],original,atol=3e-6)
+    g['nodes'][:,24:]=0
+    assert np.max(np.abs(np.asarray(engine.forward(params,g))-original))>1e-6
+
+
+def test_schedule_and_strict_backbone_resume(tmp_path):
+    from pkatrain.trainer import scalar_schedule
+    from pkatrain.graph_data import mask_features
+    cfg=dict(learning_rate=.001,schedule='constant_then_cosine',constant_epochs=20,epochs=100,end_learning_rate=1e-5)
+    schedule=scalar_schedule(cfg,60)
+    np.testing.assert_allclose([schedule(0),schedule(1199),schedule(1200)],[.001]*3,rtol=1e-6)
+    np.testing.assert_allclose(schedule(6000),1e-5,rtol=1e-6)
+    assert float(schedule(3600))<float(schedule(1200))
+    g,_=graph();g['nodes'][:,22]=1
+    before=g['nodes'].copy();mask_features(g,{'strict_backbone':True})
+    assert not g['nodes'][:,22].any()
+    np.testing.assert_array_equal(g['nodes'][:,:22],before[:,:22])
+    p=initialize(jax.random.PRNGKey(17));engine=ScalarEngine(predict,schedule)
+    state=engine.optimizer.init(p);grad,_=engine.audited_gradient(p,g,np.array([4,5,7,8],np.float32),np.ones(4,bool))
+    p,state=engine.update(p,state,[grad]);save_checkpoint(tmp_path/'scheduled',p,state,{'step':1})
+    restored,rs,_=load_checkpoint(tmp_path/'scheduled',(p,state))
+    first=engine.update(p,state,[grad]);second=engine.update(restored,rs,[grad])
+    for a,b in zip(jax.tree.leaves(first),jax.tree.leaves(second)):np.testing.assert_array_equal(a,b)

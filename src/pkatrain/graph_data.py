@@ -77,7 +77,7 @@ def prepare(source,out):
 def pad(graph,labels,capacities):
     n,k,q=capacities; oldn,oldk=graph['neighbors'].shape;oldq=len(labels)
     assert oldn<=n and oldk<=k and oldq<=q
-    shape=dict(nodes=(n,24),node_mask=(n,),neighbors=(n,k),edge=(n,k,20),edge_mask=(n,k),switch=(n,k),query_residue=(q,),query_group=(q,))
+    shape=dict(nodes=(n,graph['nodes'].shape[1]),node_mask=(n,),neighbors=(n,k),edge=(n,k,20),edge_mask=(n,k),switch=(n,k),query_residue=(q,),query_group=(q,))
     result={}
     for name,value in graph.items():
         dest=np.zeros(shape[name],value.dtype)
@@ -96,3 +96,77 @@ def load(out,row,capacities):
 
 
 def bucket(row):return str(384 if row['n']<=384 else 768 if row['n']<=768 else 100000)
+
+
+def mask_features(graph,config):
+    if config.get('zero_sidechains'):graph['nodes'][:,24:]=0
+    if config.get('strict_backbone'):
+        assert graph['nodes'].shape[1]==24
+        graph['nodes'][:,22]=0  # SG-derived disulfide flag; not a backbone observable
+    return graph
+
+
+def prepare_sidechains(source,out):
+    """Augment the exact previous graphs and labels; do not redefine eligibility."""
+    import copy
+    from pkanet.graph import sidechain_features
+    from jaxpropka.topology import load_topology
+    from pkabench.prep import read_cif
+    source=Path(source);out=Path(out);out.mkdir(parents=True,exist_ok=True)
+    parent=read(source/'manifest.json');manifest=copy.deepcopy(parent)
+    for number,r in enumerate(manifest['records']):
+        cid=r['complex_id'];src=source/'data'/cid/'graph.npz';assert digest(src)==r['sha256']
+        folder=out/'data'/cid;receipt_path=folder/'receipt.json'
+        if receipt_path.exists():
+            completed=read(receipt_path)
+            assert completed['parent_graph_sha256']==r['sha256']
+            assert digest(folder/'graph.npz')==completed['sha256']
+            manifest['records'][number]=completed
+            continue
+        if 'record_sha256' in r:
+            recordroot=Path(parent.get('source',parent.get('validation_source')))
+            if not (recordroot/'records').is_dir():recordroot=Path(read(recordroot/'manifest.json')['source'])
+            recordpath=recordroot/'records'/f'{cid}.json';assert digest(recordpath)==r['record_sha256']
+            record=read(recordpath);cif=record['structures']['AB'];assert digest(cif)==record['structure_sha256']['AB']
+            top=load_topology(read_cif(cif),gap_policy='cap',freeze_disulfides=True)
+            atoms=[{str(a.atom_name):a.coord for a in top.residue(i)} for i in range(top.n_residues)]
+            backbone=top.backbone;topkeys=[(k.chain,k.number,k.insertion) for k in top.keys]
+        else:
+            # Historical 5k graphs were built directly from resolved deposited CIFs.
+            # Recover the exact graph-node order from the already audited key export.
+            import biotite.structure as struc
+            from biotite.structure.io import pdbx
+            from pkabench.pkpdb_pilot_refs import cif as read_gzip_cif,sequences
+            from pkabench.conformers import resolve
+            runtime=Path(parent['pilot']).parents[1]
+            cif=runtime/'pretraining/pkpdb-v1/structures'/cid[1:3]/f'{cid}.cif.gz'
+            assert digest(cif)==r['source_sha256']
+            file=read_gzip_cif(cif);chains,_=sequences(file);file,_=resolve(file,[x['chain'] for x in chains])
+            label=pdbx.get_structure(file,model=1,altloc='occupancy',use_author_fields=False)
+            author=pdbx.get_structure(file,model=1,altloc='occupancy',use_author_fields=True)
+            working=label.copy();working.res_id=author.res_id.copy();working.ins_code=author.ins_code.copy()
+            starts=struc.get_residue_starts(working,add_exclusive_stop=True);bykey={}
+            for s,e in zip(starts[:-1],starts[1:]):
+                a=working[s:e];key=(str(author.chain_id[s]),int(author.res_id[s]),str(author.ins_code[s]).strip(),str(author.res_name[s]))
+                bykey[key]={str(x.atom_name):x.coord for x in a}
+            keyfile=runtime/'pretraining/augmentation-v1/contexts/node-keys'/f'{cid}.json'
+            keys=read(keyfile)['keys'];assert len(keys)==r['n']
+            atoms=[bykey[tuple(key)] for key in keys]
+            backbone=np.stack([np.stack([a[name] if name in a else a['C'] for name in ('N','CA','C','O')]) for a in atoms])
+            topkeys=[tuple(key[:3]) for key in keys]
+        extra=sidechain_features(backbone,atoms)
+        with np.load(src,allow_pickle=False) as f:data={k:f[k] for k in f.files}
+        assert len(extra)==len(data['nodes'])
+        for key,i in zip(r['keys'],data['query_residue']):assert tuple(key[1:4])==topkeys[int(i)]
+        data['nodes']=np.concatenate((data['nodes'],extra),axis=-1)
+        folder.mkdir(parents=True,exist_ok=True)
+        np.savez_compressed(folder/'graph.npz',**data)
+        r['parent_graph_sha256']=r['sha256'];r['sha256']=digest(folder/'graph.npz');atomic_json(folder/'receipt.json',r)
+        if (number+1)%50==0:print(json.dumps({'prepared_sidechains':number+1,'total':len(manifest['records'])}),flush=True)
+    manifest['parent']={'path':str(source),'manifest_sha256':digest(source/'manifest.json')}
+    manifest['config'].pop('strict_backbone',None)
+    manifest['config'].update(architecture=dict(width=44,ff=68,node_dim=152),parameter_count=50001,
+        input_features='backbone plus 32 named side-chain heavy-atom local coordinate/presence slots')
+    atomic_json(out/'manifest.json',manifest)
+    receipt=read(source/'preparation.json');receipt['identical_labels_keys_masks_and_graph_edges']=True
+    atomic_json(out/'preparation.json',receipt)
