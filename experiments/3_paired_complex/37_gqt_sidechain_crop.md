@@ -1,5 +1,9 @@
 # Side-chain GQT crop-radius screen
 
+**Cancelled before execution on 2026-10-08.** This plan interpreted the
+requested radii as stochastic query-centred crops. The intended experiment is
+the global neighbour-cutoff screen in `38_gqt_neighbor_cutoff.md`.
+
 Authorized 2026-10-08. This screen compares complete graphs and 5, 15, and
 20 Å query-centred crops using the existing 50,001-parameter side-chain GQT.
 The only model-input change relative to the matched backbone screen is the

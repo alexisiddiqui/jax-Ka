@@ -24,7 +24,14 @@ def sidechain_features(backbone,residue_atoms):
     return result.reshape((len(ca),-1))
 
 
-def geometry(backbone, chain, radius=20.):
+def geometry(backbone, chain, radius=20., rbf_radius=None):
+    """Build an exact radius graph with a separately fixed distance basis.
+
+    ``rbf_radius`` defaults to ``radius`` for backwards compatibility.  A
+    cutoff comparison can instead build one maximum-radius graph and retain
+    the same distance representation in every arm.
+    """
+    if rbf_radius is None:rbf_radius=radius
     ca=backbone[:,1]; x=backbone[:,2]-ca
     y=backbone[:,0]-ca
     xnorm=np.linalg.norm(x,axis=-1,keepdims=True); x=x/np.maximum(xnorm,1e-6)
@@ -39,7 +46,7 @@ def geometry(backbone, chain, radius=20.):
     delta=ca[neighbors]-ca[:,None]; distance=np.sqrt((delta**2).sum(-1)+1e-8)
     direction=np.einsum('nkj,njl->nkl',delta,frames)/distance[...,None]
     direction*=valid[:,None,None]
-    rbf=np.exp(-((distance[...,None]-np.linspace(0,radius,16))/1.5)**2)
+    rbf=np.exp(-((distance[...,None]-np.linspace(0,rbf_radius,16))/1.5)**2)
     edge=np.concatenate((rbf,direction,(chain[neighbors]==chain[:,None])[...,None]),axis=-1)
     # Smooth attention weight goes to zero at the radius boundary.
     switch=np.where(distance<radius-2,1.,.5*(1+np.cos(np.pi*np.clip((distance-radius+2)/2,0,1))))
