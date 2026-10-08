@@ -1,0 +1,809 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>jax-Ka Model Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Schibsted+Grotesk:wght@500;700&display=swap">
+<style>
+/* Layout: one 72ch reading column; figures and tables use the full 1180px frame. Sections follow the forward pass, then training, then the backbone-only extension. */
+:root{
+  --bg:#F2F4F7; --surface:#FFFFFF; --sunk:#E5E9EF; --fg:#17202B; --muted:#56616F; --line:#BFC8D3;
+  --learn:#2453C2; --learn-tint:#E2EAFA; --loss:#B35500; --loss-ink:#FFFFFF; --grad:#A0276A;
+  --font-display:"Schibsted Grotesk","Helvetica Neue",Arial,sans-serif;
+  --font-body:"IBM Plex Sans","Helvetica Neue",Arial,sans-serif;
+  --font-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0E1217; --surface:#151A21; --sunk:#1F262F; --fg:#E1E6EC; --muted:#98A3B1; --line:#3A4450;
+    --learn:#82A4F3; --learn-tint:#1A2742; --loss:#EE9A4C; --loss-ink:#1B1207; --grad:#E27DB7;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0E1217; --surface:#151A21; --sunk:#1F262F; --fg:#E1E6EC; --muted:#98A3B1; --line:#3A4450;
+  --learn:#82A4F3; --learn-tint:#1A2742; --loss:#EE9A4C; --loss-ink:#1B1207; --grad:#E27DB7;
+  color-scheme:dark;
+}
+
+body{background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:16px;line-height:1.6}
+.wrap{max-width:1180px;margin:0 auto;padding-inline:clamp(16px,4vw,40px);padding-block:48px 80px;display:grid;gap:0}
+.prose{max-width:72ch}
+.prose p{margin:0}
+h1,h2,h3{font-family:var(--font-display);margin:0;text-wrap:balance}
+h1{font-weight:700;font-size:clamp(2.1rem,5vw,3.2rem);line-height:1.04;letter-spacing:-.025em}
+h2{font-weight:700;font-size:clamp(1.4rem,2.6vw,1.8rem);line-height:1.15;letter-spacing:-.015em}
+h3{font-weight:500;font-size:1.08rem;line-height:1.3}
+.eyebrow{font-family:var(--font-mono);font-size:.76rem;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+code,.mono{font-family:var(--font-mono);font-size:.88em}
+a{color:var(--learn)}
+a:focus-visible,button:focus-visible{outline:2px solid var(--learn);outline-offset:2px;border-radius:4px}
+
+/* header */
+.top{display:grid;gap:18px;padding-block:8px 36px}
+.lede{font-size:1.12rem;line-height:1.55;max-width:66ch;margin:0}
+.spec{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:8px;overflow:hidden;margin:6px 0 0}
+.spec div{background:var(--surface);padding:12px 14px;display:grid;gap:2px;min-width:0}
+.spec dt{font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.spec dd{margin:0;font-family:var(--font-mono);font-size:.9rem;font-variant-numeric:tabular-nums}
+.toc{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:.92rem}
+.toc a{color:var(--fg);text-decoration:none;border-bottom:1px solid var(--line)}
+.toc a:hover{border-bottom-color:var(--fg)}
+
+/* sections */
+section{display:grid;gap:22px;padding-block:44px;border-top:1px solid var(--line);scroll-margin-top:12px}
+.sec-head{display:grid;gap:8px}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:20px 36px}
+.cols > *{min-width:0}
+ul.facts{margin:0;padding-left:1.1em;display:grid;gap:6px}
+ul.facts li::marker{color:var(--muted)}
+.note{font-size:.9rem;color:var(--muted)}
+
+/* figures */
+figure{margin:0;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px 18px 16px;display:grid;gap:14px;min-width:0}
+figcaption{color:var(--muted);font-size:.9rem;line-height:1.5;max-width:86ch}
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.scroll svg{display:block;width:100%;height:auto;min-width:860px}
+.scroll.narrow svg{min-width:680px}
+
+.chips{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.chips .lbl{font-size:.82rem;color:var(--muted);margin-right:4px}
+.chip{display:inline-flex;align-items:center;gap:8px;font:500 .85rem var(--font-body);color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:5px 12px 5px 8px;cursor:pointer}
+.chip:hover{border-color:var(--fg)}
+.chip[aria-pressed="true"]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.sw{display:inline-grid;place-items:center;width:18px;height:18px;border-radius:5px;font:600 11px var(--font-body)}
+.sw-learn{background:var(--learn-tint);border:1.5px solid var(--learn)}
+.sw-fixed{background:var(--bg);border:1.5px solid var(--line)}
+.sw-loss{background:var(--loss);color:var(--loss-ink);border-radius:50%}
+.sw-grad{border-bottom:2px dashed var(--grad);border-radius:0;height:9px;width:20px;margin-bottom:6px}
+
+/* shared SVG styling (diagrams use page tokens so both themes work) */
+.d text{font-family:var(--font-body);fill:var(--fg);font-size:14px}
+.d .sm{font-size:13px}
+.d .xs{font-size:11.5px}
+.d .ttl{font-size:15px;font-weight:600}
+.d .mono{font-family:var(--font-mono);font-size:12.5px}
+.d .mut{fill:var(--muted)}
+.d .cap{font-size:11.5px;font-weight:600;letter-spacing:.09em;fill:var(--muted)}
+.d .lt{fill:var(--learn)}
+.d .gt{fill:var(--grad)}
+.d .box{fill:var(--bg);stroke:var(--line);stroke-width:1.3}
+.d .lbox{fill:var(--learn-tint);stroke:var(--learn);stroke-width:1.6}
+.d .lbox.new{stroke-dasharray:6 4}
+.d .ln{stroke:var(--fg);stroke-width:1.4;fill:none}
+.d .thru{stroke:var(--fg);stroke-opacity:.32;stroke-width:1.4;fill:none}
+.d .div{stroke:var(--learn);stroke-opacity:.45;stroke-width:1}
+.d .gln{stroke:var(--grad);stroke-width:1.7;fill:none;stroke-dasharray:7 5}
+.d .mk-fg{fill:var(--fg)}
+.d .mk-gr{fill:var(--grad)}
+.d .badge circle{fill:var(--loss)}
+.d .badge text{fill:var(--loss-ink);font-size:11px;font-weight:600;text-anchor:middle}
+.d .ctx{fill:var(--surface);stroke:var(--fg);stroke-width:1.3}
+.d .qry{fill:var(--learn)}
+.d .qry-ring{fill:none;stroke:var(--learn);stroke-width:1.5}
+.d .qtxt{fill:var(--surface);font-size:11px;font-weight:600;text-anchor:middle}
+.d .chainA{stroke:var(--muted);stroke-width:2;fill:none}
+.d .chainB{stroke:var(--muted);stroke-width:2;fill:none;stroke-dasharray:5 4}
+.d .edge{stroke:var(--learn);stroke-width:1.7}
+.d .band{fill:none;stroke:var(--sunk);stroke-width:30}
+.d .ring-o{fill:none;stroke:var(--muted);stroke-width:1.2;stroke-dasharray:5 4}
+.d .ring-i{fill:none;stroke:var(--muted);stroke-width:1.2;stroke-dasharray:1.5 3.5}
+.d .win{fill:var(--sunk)}
+.d .axis{stroke:var(--muted);stroke-width:1.2}
+.d .hard{stroke:var(--muted);stroke-width:1.5;stroke-dasharray:5 4;fill:none}
+.d .curve{stroke:var(--learn);stroke-width:2.6;fill:none;stroke-linejoin:round}
+.d .dot{fill:var(--learn)}
+.d .hull{fill:var(--sunk);stroke:var(--muted);stroke-width:1;stroke-dasharray:4 3}
+.d .site{fill:var(--surface);stroke:var(--fg);stroke-width:1.4}
+.d .stxt{font-size:12px;font-weight:600;text-anchor:middle}
+.d .cpl{stroke:var(--fg);stroke-linecap:round}
+.d .mf{stroke:var(--muted);stroke-width:1.3;stroke-dasharray:3 4}
+
+/* overview focus toggles */
+#ov .base,#ov .L,#ov .loss,#ov .grad{transition:opacity .2s ease}
+#ov[data-focus="learn"] :is(.base,.loss,.grad),
+#ov[data-focus="loss"] :is(.base,.L,.grad),
+#ov[data-focus="grad"] :is(.base,.L,.loss){opacity:.2}
+
+/* code */
+pre{margin:0;background:var(--sunk);border-radius:8px;padding:14px 16px;overflow-x:auto;font-family:var(--font-mono);font-size:.86rem;line-height:1.6}
+pre .c{color:var(--muted)}
+
+/* tables */
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:.92rem;min-width:640px}
+th,td{text-align:left;vertical-align:top;padding:10px 14px;border-bottom:1px solid var(--line)}
+tr:last-child td{border-bottom:0}
+th{font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;background:var(--bg)}
+td.k{font-weight:600;white-space:nowrap}
+td.num{font-family:var(--font-mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.yes{color:var(--fg)}
+.no{color:var(--muted)}
+.pill{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--loss);color:var(--loss-ink);font-size:.75rem;font-weight:600}
+
+/* signal bars */
+.bars{display:grid;gap:12px}
+.bar-row{display:grid;grid-template-columns:minmax(120px,190px) 1fr;gap:6px 14px;align-items:center}
+.bar-row > *{min-width:0}
+.bar-track{background:var(--sunk);border-radius:4px;height:22px;position:relative}
+.bar-fill{height:100%;border-radius:4px;background:var(--learn)}
+.bar-val{font-family:var(--font-mono);font-size:.82rem;font-variant-numeric:tabular-nums;color:var(--muted);grid-column:2}
+@media (max-width:520px){.bar-row{grid-template-columns:1fr}.bar-val{grid-column:1}}
+
+/* model pKa chips */
+.shifts{display:flex;flex-wrap:wrap;gap:8px}
+.shifts span{display:inline-flex;gap:8px;align-items:baseline;border:1px solid var(--line);border-radius:6px;padding:4px 10px;background:var(--surface);font-size:.9rem}
+.shifts b{font-family:var(--font-mono);font-weight:500;font-variant-numeric:tabular-nums}
+
+/* schedule track */
+.track{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr));gap:12px;counter-reset:step;margin:0;padding:0;list-style:none}
+.track li{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px 16px;display:grid;gap:4px;align-content:start;counter-increment:step}
+.track li::before{content:counter(step);font-family:var(--font-mono);font-size:.75rem;color:var(--muted)}
+.track .hw{font-family:var(--font-mono);font-size:.8rem;color:var(--muted)}
+
+/* masking bar */
+.mask{display:flex;height:34px;border-radius:6px;overflow:hidden;border:1px solid var(--line)}
+.mask div{display:grid;place-items:center;font:600 .85rem var(--font-mono);font-variant-numeric:tabular-nums}
+.m1{background:var(--learn);color:var(--surface)}
+.m2{background:var(--sunk);color:var(--fg);border-left:1px solid var(--line)}
+.m3{background:repeating-linear-gradient(135deg,var(--learn-tint) 0 8px,var(--sunk) 8px 16px);color:var(--fg);border-left:1px solid var(--line)}
+.mask-key{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr));gap:10px 24px;font-size:.9rem}
+.mask-key div{display:grid;grid-template-columns:14px 1fr;gap:2px 10px;align-items:start}
+.mask-key i{width:14px;height:14px;border-radius:3px;margin-top:4px;border:1px solid var(--line)}
+.mask-key span{color:var(--muted);grid-column:2;font-size:.85rem}
+
+footer{border-top:1px solid var(--line);padding-top:24px;font-size:.88rem;color:var(--muted);display:grid;gap:6px}
+footer code{color:var(--fg)}
+
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+<header class="top">
+  <div class="eyebrow">jax-Ka · plan for experiment 03, part D, and 04</div>
+  <h1>jax-Ka Model Architecture</h1>
+  <p class="lede">A coordinate model predicts each site's intrinsic pKa and the site–site coupling matrix. jax-Ka's titration solver turns those into curves. The model runs twice with the same weights, once on the complex and once on each partner alone. Subtracting the two passes gives ΔpKa per site, and the charge difference gives the pH dependence of binding.</p>
+  <dl class="spec">
+    <div><dt>Encoder</dt><dd>4–6 layers · d 128 · 8 heads</dd></div>
+    <div><dt>Parameters</dt><dd>~1–3M</dd></div>
+    <div><dt>Precision</dt><dd>fp32 throughout</dd></div>
+    <div><dt>pH grid</dt><dd>−2 → 16, step 0.25 (73)</dd></div>
+    <div><dt>Teacher</dt><dd>PypKa · ε<sub>in</sub> 15 · 0.1 M</dd></div>
+    <div><dt>Bar to beat</dt><dd>CatBoost Δ-learning (02)</dd></div>
+  </dl>
+  <nav class="toc" aria-label="Sections">
+    <a href="#overview">Overview</a>
+    <a href="#encoder">Encoder</a>
+    <a href="#heads">Output heads</a>
+    <a href="#solver">Solver</a>
+    <a href="#training">Losses and training</a>
+    <a href="#backbone">Backbone-only mode</a>
+    <a href="#scope">Scope</a>
+  </nav>
+</header>
+
+<!-- ============ OVERVIEW ============ -->
+<section id="overview">
+  <div class="sec-head">
+    <span class="eyebrow">Forward pass</span>
+    <h2>One encoder, two passes, subtract</h2>
+  </div>
+
+  <figure id="ov">
+    <div class="chips" role="group" aria-label="Highlight part of the diagram">
+      <span class="lbl">Highlight</span>
+      <button type="button" class="chip" id="chip-learn" data-f="learn" aria-pressed="false"><span class="sw sw-learn"></span>Learned weights θ</button>
+      <button type="button" class="chip" id="chip-loss" data-f="loss" aria-pressed="false"><span class="sw sw-loss">1</span>Loss terms</button>
+      <button type="button" class="chip" id="chip-grad" data-f="grad" aria-pressed="false"><span class="sw sw-grad"></span>Gradient path</button>
+    </div>
+    <div class="scroll">
+<svg class="d" viewBox="0 36 1320 452" role="img" aria-label="Siamese pipeline: the complex and the free partners pass through featurisation, one shared encoder, physics-residual heads and the solver; per-state curves are subtracted to give ΔpKa, ΔQ(pH) and the binding linkage. Four loss terms attach at heads, curves, midpoints and ΔpKa. Gradients flow back through the solver by implicit differentiation to coordinates and the soft sequence.">
+  <defs>
+    <marker id="ov-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 z" class="mk-fg"/></marker>
+    <marker id="ov-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 z" class="mk-gr"/></marker>
+  </defs>
+
+  <!-- fixed parts: inputs, featurise, solver, outputs, pair readout -->
+  <g class="base">
+    <text class="cap" x="86" y="60" text-anchor="middle">INPUTS</text>
+    <text class="cap" x="253" y="60" text-anchor="middle">FEATURISE</text>
+    <text class="cap" x="863" y="60" text-anchor="middle">SOLVER</text>
+    <text class="cap" x="1053" y="60" text-anchor="middle">PER STATE</text>
+    <text class="cap" x="1231" y="60" text-anchor="middle">PAIR</text>
+
+    <rect class="box" x="16" y="96" width="140" height="88" rx="8"/>
+    <text class="ttl" x="86" y="124" text-anchor="middle">Complex AB</text>
+    <text class="sm mut" x="86" y="147" text-anchor="middle">heavy atoms</text>
+    <text class="sm mut" x="86" y="167" text-anchor="middle">bound conformation</text>
+
+    <rect class="box" x="16" y="216" width="140" height="68" rx="8"/>
+    <text class="mono" x="86" y="244" text-anchor="middle" style="font-size:14px">P[N,20]</text>
+    <text class="sm mut" x="86" y="266" text-anchor="middle">soft sequence</text>
+
+    <rect class="box" x="16" y="316" width="140" height="88" rx="8"/>
+    <text class="ttl" x="86" y="344" text-anchor="middle">Free A, B</text>
+    <text class="sm mut" x="86" y="367" text-anchor="middle">partner removed</text>
+    <text class="sm mut" x="86" y="387" text-anchor="middle">same coordinates</text>
+
+    <rect class="box" x="188" y="108" width="130" height="64" rx="8"/>
+    <text x="253" y="135" text-anchor="middle">N–CA–C frames</text>
+    <text class="sm mut" x="253" y="156" text-anchor="middle">radius graph</text>
+    <rect class="box" x="188" y="328" width="130" height="64" rx="8"/>
+    <text x="253" y="355" text-anchor="middle">N–CA–C frames</text>
+    <text class="sm mut" x="253" y="376" text-anchor="middle">radius graph</text>
+
+    <path class="ln" d="M156 140 H187" marker-end="url(#ov-a)"/>
+    <path class="ln" d="M156 360 H187" marker-end="url(#ov-a)"/>
+    <path class="ln" d="M318 140 H349" marker-end="url(#ov-a)"/>
+    <path class="ln" d="M318 360 H349" marker-end="url(#ov-a)"/>
+    <path class="ln" d="M156 250 H349" marker-end="url(#ov-a)"/>
+    <text class="xs mut" x="253" y="242" text-anchor="middle">residue identity</text>
+
+    <path class="ln" d="M490 140 H545" marker-end="url(#ov-a)"/>
+    <path class="ln" d="M490 360 H545" marker-end="url(#ov-a)"/>
+    <path class="ln" d="M720 140 H789" marker-end="url(#ov-a)"/>
+    <path class="ln" d="M720 360 H789" marker-end="url(#ov-a)"/>
+    <text class="mono mut" x="755" y="161" text-anchor="middle">pKint, W</text>
+    <text class="mono mut" x="755" y="381" text-anchor="middle">pKint, W</text>
+
+    <rect class="box" x="790" y="96" width="146" height="308" rx="10"/>
+    <line class="thru" x1="790" y1="140" x2="936" y2="140"/>
+    <line class="thru" x1="790" y1="360" x2="936" y2="360"/>
+    <text class="ttl" x="863" y="190" text-anchor="middle">Solver</text>
+    <text class="sm mut" x="863" y="210" text-anchor="middle">no learned weights</text>
+    <text class="sm" x="863" y="240" text-anchor="middle">exact in clusters</text>
+    <text class="sm mut" x="863" y="259" text-anchor="middle">≤ 10–12 sites</text>
+    <text class="sm" x="863" y="287" text-anchor="middle">mean-field between</text>
+    <text class="sm mut" x="863" y="313" text-anchor="middle">× 73 pH points</text>
+
+    <path class="ln" d="M936 140 H987" marker-end="url(#ov-a)"/>
+    <path class="ln" d="M936 360 H987" marker-end="url(#ov-a)"/>
+
+    <rect class="box" x="988" y="96" width="130" height="100" rx="8"/>
+    <text class="ttl" x="1002" y="120">State AB</text>
+    <text class="sm" x="1002" y="143">h(pH) curves</text>
+    <text class="sm" x="1002" y="163">pKa by root</text>
+    <text class="sm" x="1002" y="183">Q(pH)</text>
+    <rect class="box" x="988" y="304" width="130" height="100" rx="8"/>
+    <text class="ttl" x="1002" y="328">States A, B</text>
+    <text class="sm" x="1002" y="351">h(pH) curves</text>
+    <text class="sm" x="1002" y="371">pKa by root</text>
+    <text class="sm" x="1002" y="391">Q(pH)</text>
+
+    <path class="ln" d="M1118 140 H1157" marker-end="url(#ov-a)"/>
+    <path class="ln" d="M1118 360 H1157" marker-end="url(#ov-a)"/>
+
+    <rect class="box" x="1158" y="96" width="146" height="308" rx="10"/>
+    <text class="ttl" x="1231" y="124" text-anchor="middle">Subtract</text>
+    <text class="sm mut" x="1231" y="145" text-anchor="middle">AB − free</text>
+    <text x="1172" y="190">ΔpKa per site</text>
+    <text x="1172" y="232">ΔQ(pH)</text>
+    <text class="mono" x="1172" y="252">Q(AB)−Q(A)−Q(B)</text>
+    <path class="ln" d="M1200 264 V298" marker-end="url(#ov-a)"/>
+    <text class="xs mut" x="1210" y="286">Wyman linkage</text>
+    <text x="1172" y="320">ΔΔG<tspan dy="4" style="font-size:10.5px">bind</tspan><tspan dy="-4">(pH)</tspan></text>
+    <text class="mono" x="1172" y="341">RT·ln10·∫ΔQ dpH</text>
+    <text class="xs mut" x="1172" y="384">pH₀ = 7.0, 298.15 K</text>
+  </g>
+
+  <!-- learned parts: encoder and heads -->
+  <g class="L">
+    <text class="cap lt" x="420" y="60" text-anchor="middle">ENCODER · θ</text>
+    <text class="cap lt" x="633" y="60" text-anchor="middle">HEADS · θ</text>
+
+    <rect class="lbox" x="350" y="96" width="140" height="308" rx="10"/>
+    <line class="thru" x1="350" y1="140" x2="490" y2="140"/>
+    <line class="thru" x1="350" y1="360" x2="490" y2="360"/>
+    <text class="xs mut" x="360" y="132">AB pass</text>
+    <text class="xs mut" x="360" y="352">free pass</text>
+    <text class="ttl" x="420" y="190" text-anchor="middle">Encoder f<tspan dy="4" style="font-size:11px">θ</tspan></text>
+    <text class="sm mut" x="420" y="211" text-anchor="middle">shared weights</text>
+    <text x="420" y="241" text-anchor="middle">4–6 layers</text>
+    <text x="420" y="261" text-anchor="middle">d 128 · 8 heads</text>
+    <text x="420" y="281" text-anchor="middle">~1–3M params</text>
+    <text class="sm mut" x="420" y="307" text-anchor="middle">queries only at</text>
+    <text class="sm mut" x="420" y="324" text-anchor="middle">titratable sites</text>
+
+    <rect class="lbox" x="546" y="96" width="174" height="308" rx="10"/>
+    <line class="thru" x1="546" y1="140" x2="720" y2="140"/>
+    <line class="thru" x1="546" y1="360" x2="720" y2="360"/>
+    <text class="ttl" x="633" y="186" text-anchor="middle">Intrinsic head</text>
+    <text class="mono" x="633" y="207" text-anchor="middle">model_pka[type]</text>
+    <text class="mono" x="633" y="225" text-anchor="middle">+ SCALE·tanh(·)</text>
+    <line class="div" x1="566" y1="247" x2="700" y2="247"/>
+    <text class="ttl" x="633" y="272" text-anchor="middle">Pair head</text>
+    <text class="mono" x="633" y="293" text-anchor="middle">DH(r, I)</text>
+    <text class="mono" x="633" y="311" text-anchor="middle">× (1 + head_w)</text>
+    <text class="sm mut" x="633" y="330" text-anchor="middle">symmetric, diag 0</text>
+  </g>
+
+  <!-- loss taps, priority order -->
+  <g class="loss">
+    <g class="badge"><circle cx="755" cy="122" r="9.5"/><text x="755" y="126">1</text></g>
+    <g class="badge"><circle cx="755" cy="342" r="9.5"/><text x="755" y="346">1</text></g>
+    <g class="badge"><circle cx="1100" cy="139" r="8.5"/><text x="1100" y="143">2</text></g>
+    <g class="badge"><circle cx="1100" cy="159" r="8.5"/><text x="1100" y="163">3</text></g>
+    <g class="badge"><circle cx="1100" cy="347" r="8.5"/><text x="1100" y="351">2</text></g>
+    <g class="badge"><circle cx="1100" cy="367" r="8.5"/><text x="1100" y="371">3</text></g>
+    <g class="badge"><circle cx="1288" cy="186" r="8.5"/><text x="1288" y="190">4</text></g>
+  </g>
+
+  <!-- backward pass -->
+  <g class="grad">
+    <path class="gln" d="M1231 404 V452 H86 V408" marker-end="url(#ov-g)"/>
+    <path class="gln" d="M863 452 V408" marker-end="url(#ov-g)"/>
+    <path class="gln" d="M633 452 V408" marker-end="url(#ov-g)"/>
+    <path class="gln" d="M420 452 V408" marker-end="url(#ov-g)"/>
+    <path class="gln" d="M253 452 V396" marker-end="url(#ov-g)"/>
+    <text class="sm gt" x="1231" y="476" text-anchor="middle">from the losses</text>
+    <text class="sm gt" x="863" y="476" text-anchor="middle">implicit diff · CG</text>
+    <text class="sm gt" x="633" y="476" text-anchor="middle">∂L/∂θ</text>
+    <text class="sm gt" x="420" y="476" text-anchor="middle">∂L/∂θ</text>
+    <text class="sm gt" x="253" y="476" text-anchor="middle">through frames</text>
+    <text class="sm gt" x="86" y="476" text-anchor="middle">∂/∂coords, ∂/∂P</text>
+  </g>
+</svg>
+    </div>
+    <figcaption>Blue boxes hold the learned weights θ and are shared by both passes. Grey boxes have no weights. The free pass runs each partner in its own box, in its bound conformation. Numbered badges mark the four loss terms in priority order. The dashed line is the backward pass: it crosses the solver by implicit differentiation and reaches atom coordinates and the soft sequence, which is what the design use case needs.</figcaption>
+  </figure>
+
+  <div class="cols">
+    <div class="prose" style="display:grid;gap:12px">
+      <h3>Why siamese</h3>
+      <p>The same weights run on both states and the outputs are subtracted. The gradient of the difference is the difference of gradients, so any error the encoder makes identically in both states adds nothing to the loss. Error cancellation becomes a property of training.</p>
+    </div>
+    <div class="prose" style="display:grid;gap:12px">
+      <h3>Partner presence is input content only</h3>
+      <p>The free state is the identical structure with the partner's atoms removed. There is no state flag and no extra pathway. Sanity check, used as a diagnostic and never as a loss: ΔpKa(A→AB) must equal −ΔpKa(AB→A). Any drift means a bug.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ ENCODER ============ -->
+<section id="encoder">
+  <div class="sec-head">
+    <span class="eyebrow">Encoder f<sub>θ</sub></span>
+    <h2>Sparse attention from titratable sites</h2>
+  </div>
+
+  <figure>
+    <div class="scroll">
+<svg class="d" viewBox="0 0 1000 390" role="img" aria-label="Left: a titratable query site attends to residues within a radius on its own chain and, in the AB pass, on the partner chain; edges in the outer 2 Å band are down-weighted. Right: the edge weight falls smoothly from 1 to 0 over the 2 Å switching window instead of a hard cutoff.">
+  <text class="cap" x="30" y="28">ONE QUERY SITE, AB PASS</text>
+
+  <circle class="band" cx="300" cy="190" r="115"/>
+  <circle class="ring-o" cx="300" cy="190" r="130"/>
+  <circle class="ring-i" cx="300" cy="190" r="100"/>
+
+  <polyline class="chainB" points="130,72 170,84 206,92 250,104 290,108 330,104 370,94 410,84 450,80 490,86 530,98 570,112"/>
+  <polyline class="chainA" points="60,250 100,262 140,266 180,258 220,240 260,214 300,190 340,200 380,222 424,248 464,258 504,256 544,242 584,224"/>
+
+  <line class="edge" x1="300" y1="190" x2="260" y2="214"/>
+  <line class="edge" x1="300" y1="190" x2="220" y2="240"/>
+  <line class="edge" x1="300" y1="190" x2="340" y2="200"/>
+  <line class="edge" x1="300" y1="190" x2="380" y2="222"/>
+  <line class="edge" x1="300" y1="190" x2="250" y2="104"/>
+  <line class="edge" x1="300" y1="190" x2="290" y2="108"/>
+  <line class="edge" x1="300" y1="190" x2="330" y2="104"/>
+  <line class="edge" x1="300" y1="190" x2="370" y2="94" style="stroke-opacity:.3"/>
+
+  <!-- partner B residues -->
+  <circle class="ctx" cx="130" cy="72" r="9"/>
+  <circle class="ctx" cx="170" cy="84" r="9"/>
+  <circle class="ctx" cx="206" cy="92" r="9"/>
+  <circle class="ctx" cx="250" cy="104" r="9"/>
+  <circle class="ctx" cx="290" cy="108" r="9"/>
+  <circle class="qry" cx="330" cy="104" r="10"/><text class="qtxt" x="330" y="108">R</text>
+  <circle class="ctx" cx="370" cy="94" r="9"/>
+  <circle class="ctx" cx="410" cy="84" r="9"/>
+  <circle class="qry" cx="450" cy="80" r="10"/><text class="qtxt" x="450" y="84">K</text>
+  <circle class="ctx" cx="490" cy="86" r="9"/>
+  <circle class="ctx" cx="530" cy="98" r="9"/>
+  <circle class="ctx" cx="570" cy="112" r="9"/>
+
+  <!-- partner A residues -->
+  <circle class="ctx" cx="60" cy="250" r="9"/>
+  <circle class="qry" cx="100" cy="262" r="10"/><text class="qtxt" x="100" y="266">K</text>
+  <circle class="ctx" cx="140" cy="266" r="9"/>
+  <circle class="ctx" cx="180" cy="258" r="9"/>
+  <circle class="ctx" cx="220" cy="240" r="9"/>
+  <circle class="ctx" cx="260" cy="214" r="9"/>
+  <circle class="qry-ring" cx="300" cy="190" r="17"/>
+  <circle class="qry" cx="300" cy="190" r="12"/><text class="qtxt" x="300" y="194">E</text>
+  <circle class="ctx" cx="340" cy="200" r="9"/>
+  <circle class="qry" cx="380" cy="222" r="10"/><text class="qtxt" x="380" y="226">H</text>
+  <circle class="ctx" cx="424" cy="248" r="9"/>
+  <circle class="ctx" cx="464" cy="258" r="9"/>
+  <circle class="qry" cx="504" cy="256" r="10"/><text class="qtxt" x="504" y="260">D</text>
+  <circle class="ctx" cx="544" cy="242" r="9"/>
+  <circle class="ctx" cx="584" cy="224" r="9"/>
+
+  <text class="sm lt" x="344" y="178" style="font-weight:600">query</text>
+  <text class="xs mut" x="343" y="148">w≈0.3</text>
+  <text class="sm mut" x="400" y="52">partner B · present in AB pass only</text>
+  <text class="sm mut" x="560" y="278">partner A</text>
+  <text class="xs mut" x="300" y="342" text-anchor="middle">shaded ring: 2 Å switching window, r<tspan dy="3" style="font-size:9px">c</tspan><tspan dy="-3"> − 2 Å to r</tspan><tspan dy="3" style="font-size:9px">c</tspan></text>
+
+  <!-- legend -->
+  <circle class="qry" cx="38" cy="372" r="7"/>
+  <text class="sm" x="52" y="376">query token (titratable site)</text>
+  <circle class="ctx" cx="292" cy="372" r="7"/>
+  <text class="sm" x="306" y="376">key/value only</text>
+  <line class="edge" x1="428" y1="372" x2="458" y2="372"/>
+  <text class="sm" x="466" y="376">attention edge, weight w(r)</text>
+
+  <!-- switching function -->
+  <text class="cap" x="660" y="28">EDGE WEIGHT w(r)</text>
+  <rect class="win" x="820" y="70" width="80" height="180"/>
+  <text class="xs mut" x="860" y="62" text-anchor="middle">2 Å window</text>
+  <line class="axis" x1="660" y1="250" x2="972" y2="250"/>
+  <line class="axis" x1="660" y1="70" x2="660" y2="250"/>
+  <text class="sm mut" x="650" y="94" text-anchor="end">1</text>
+  <text class="sm mut" x="650" y="254" text-anchor="end">0</text>
+  <text class="sm mut" x="660" y="272" text-anchor="middle">0</text>
+  <text class="sm mut" x="820" y="272" text-anchor="middle">r<tspan dy="3" style="font-size:10px">c</tspan><tspan dy="-3"> − 2 Å</tspan></text>
+  <text class="sm mut" x="900" y="272" text-anchor="middle">r<tspan dy="3" style="font-size:10px">c</tspan></text>
+  <text class="sm mut" x="815" y="300" text-anchor="middle">distance r between heavy atoms</text>
+  <path class="hard" d="M660 90 H900 V250 H972"/>
+  <polyline class="curve" points="660,90 820,90 830,96.1 840,113.4 850,139.4 860,170 870,200.6 880,226.6 890,243.9 900,250 972,250"/>
+  <circle class="dot" cx="870" cy="202" r="4.5"/>
+  <text class="xs mut" x="862" y="222" text-anchor="end">w≈0.3</text>
+  <text class="sm lt" x="740" y="112" text-anchor="middle" style="font-weight:600">cosine switch</text>
+  <text class="sm mut" x="908" y="160">hard cutoff</text>
+  <text class="xs mut" x="908" y="176">(not used)</text>
+</svg>
+    </div>
+    <figcaption>Every residue is a token, but only titratable sites issue queries, about a quarter of residues. Neighbour indices are computed with gradients stopped, so the graph topology carries no gradient. The smooth weight w(r) does, which lets gradients reach coordinates without kinks. The partner's residues appear only in the AB pass. The plan does not fix r<sub>c</sub> yet.</figcaption>
+  </figure>
+
+  <div class="cols">
+    <div style="display:grid;gap:10px">
+      <h3>Representation</h3>
+      <ul class="facts">
+        <li>Invariant features in local N–CA–C frames. No equivariant vector channels; gradients still reach coordinates through frame construction.</li>
+        <li>Sparse radius-graph attention with queries only at titratable sites.</li>
+        <li>Soft sequence <code>P[N,20]</code> end to end. No argmax and no rotamer search.</li>
+        <li>Side-chain channel plus a learned “absent” embedding, so masked side chains are distinguishable from zero-valued features (from 04).</li>
+        <li>Raw coordinates are featurised on the fly. Nothing heavy is precomputed except for the CatBoost baseline.</li>
+      </ul>
+    </div>
+    <div style="display:grid;gap:10px">
+      <h3>Smoothness checklist</h3>
+      <ul class="facts">
+        <li>Cosine or sigmoid switching over a 2 Å window. No hard distance cutoffs.</li>
+        <li>Fixed-k neighbours from a detached index computation; smooth weights carry the gradient.</li>
+        <li><code>sqrt(r² + ε)</code> everywhere. Never <code>norm()</code> at zero.</li>
+        <li>Gram–Schmidt frame construction guarded against degenerate N–CA–C triples.</li>
+        <li>SiLU or GELU, not ReLU, to keep second derivatives for design.</li>
+        <li>fp32. The pair matrix is distance-dependent, and the expanded-form distance trick cancels catastrophically in bf16.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============ HEADS ============ -->
+<section id="heads">
+  <div class="sec-head">
+    <span class="eyebrow">Output heads</span>
+    <h2>Bounded residuals on physics</h2>
+  </div>
+<pre><code>intrinsic = model_pka[restype] + SCALE * tanh(head_i(h))      <span class="c"># starts at "no shift"</span>
+W_raw     = debye_huckel_baseline(coords, I) * (1 + head_w(h_pair))
+W         = 0.5 * (W_raw + W_raw.T); W = W.at[diag].set(0)</code></pre>
+  <div class="cols">
+    <div class="prose" style="display:grid;gap:8px">
+      <h3>Intrinsic head, one value per site</h3>
+      <p>A shift added to the residue type's model pKa. The <code>tanh</code> caps it at ±<code>SCALE</code>. A head that outputs near zero returns the model value, so an untrained network starts in a physically sane place.</p>
+    </div>
+    <div class="prose" style="display:grid;gap:8px">
+      <h3>Pair head, one value per site pair</h3>
+      <p>A Debye–Hückel baseline supplies the distance decay and ionic-strength screening. The network learns only the relative deviation from it. The result is symmetrised and the diagonal is zeroed. Gradients stay small and well-scaled.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SOLVER ============ -->
+<section id="solver">
+  <div class="sec-head">
+    <span class="eyebrow">Solver</span>
+    <h2>jax-Ka’s relaxation, with three changes</h2>
+  </div>
+
+  <figure>
+    <div class="scroll narrow">
+<svg class="d" viewBox="0 0 1000 300" role="img" aria-label="Sites are partitioned by coupling strength into clusters of at most 10 to 12. Inside a cluster, all 2 to the k protonation states are enumerated exactly with logsumexp; between clusters, sites see each other only through mean-field average protonation. The partition is computed from the coupling matrix with gradients stopped.">
+  <rect class="hull" x="80" y="118" width="120" height="64" rx="30"/>
+  <rect class="hull" x="270" y="52" width="186" height="170" rx="34"/>
+  <rect class="hull" x="572" y="88" width="120" height="128" rx="30"/>
+
+  <!-- mean-field couplings between clusters -->
+  <line class="mf" x1="170" y1="150" x2="300" y2="170"/>
+  <line class="mf" x1="425" y1="150" x2="600" y2="115"/>
+  <line class="mf" x1="365" y1="195" x2="520" y2="250"/>
+  <line class="mf" x1="660" y1="150" x2="770" y2="90"/>
+  <line class="mf" x1="610" y1="190" x2="830" y2="200"/>
+  <line class="mf" x1="830" y1="200" x2="910" y2="140"/>
+  <line class="mf" x1="770" y1="90" x2="910" y2="140"/>
+
+  <!-- strong couplings inside clusters -->
+  <line class="cpl" x1="110" y1="150" x2="170" y2="150" style="stroke-width:6"/>
+  <line class="cpl" x1="300" y1="170" x2="330" y2="95" style="stroke-width:4.5"/>
+  <line class="cpl" x1="330" y1="95" x2="395" y2="80" style="stroke-width:3"/>
+  <line class="cpl" x1="395" y1="80" x2="425" y2="150" style="stroke-width:3.5"/>
+  <line class="cpl" x1="425" y1="150" x2="365" y2="195" style="stroke-width:2.5"/>
+  <line class="cpl" x1="365" y1="195" x2="300" y2="170" style="stroke-width:3"/>
+  <line class="cpl" x1="330" y1="95" x2="365" y2="195" style="stroke-width:2"/>
+  <line class="cpl" x1="600" y1="115" x2="660" y2="150" style="stroke-width:4"/>
+  <line class="cpl" x1="660" y1="150" x2="610" y2="190" style="stroke-width:3"/>
+  <line class="cpl" x1="610" y1="190" x2="600" y2="115" style="stroke-width:2.5"/>
+
+  <circle class="site" cx="110" cy="150" r="14"/><text class="stxt" x="110" y="154">D</text>
+  <circle class="site" cx="170" cy="150" r="14"/><text class="stxt" x="170" y="154">E</text>
+  <circle class="site" cx="300" cy="170" r="14"/><text class="stxt" x="300" y="174">E</text>
+  <circle class="site" cx="330" cy="95" r="14"/><text class="stxt" x="330" y="99">D</text>
+  <circle class="site" cx="395" cy="80" r="14"/><text class="stxt" x="395" y="84">H</text>
+  <circle class="site" cx="425" cy="150" r="14"/><text class="stxt" x="425" y="154">K</text>
+  <circle class="site" cx="365" cy="195" r="14"/><text class="stxt" x="365" y="199">Y</text>
+  <circle class="site" cx="600" cy="115" r="14"/><text class="stxt" x="600" y="119">H</text>
+  <circle class="site" cx="660" cy="150" r="14"/><text class="stxt" x="660" y="154">D</text>
+  <circle class="site" cx="610" cy="190" r="14"/><text class="stxt" x="610" y="194">R</text>
+  <circle class="site" cx="520" cy="250" r="14"/><text class="stxt" x="520" y="254">K</text>
+  <circle class="site" cx="770" cy="90" r="14"/><text class="stxt" x="770" y="94">Y</text>
+  <circle class="site" cx="830" cy="200" r="14"/><text class="stxt" x="830" y="204">C</text>
+  <circle class="site" cx="910" cy="140" r="14"/><text class="stxt" x="910" y="144">K</text>
+
+  <text class="sm" x="140" y="106" text-anchor="middle">k = 2 · 4 states</text>
+  <text class="xs mut" x="140" y="202" text-anchor="middle">Asp/Glu dyad</text>
+  <text class="sm" x="363" y="40" text-anchor="middle">k = 5 · 32 states</text>
+  <text class="sm" x="632" y="76" text-anchor="middle">k = 3 · 8 states</text>
+  <text class="sm" x="350" y="252" text-anchor="middle">exact: logsumexp over all 2<tspan dy="-5" style="font-size:10px">k</tspan><tspan dy="5"> states</tspan></text>
+  <text class="sm mut" x="512" y="120" text-anchor="middle">mean-field</text>
+  <text class="sm mut" x="860" y="74" text-anchor="middle">singletons: k = 1</text>
+  <text class="mono mut" x="980" y="288" text-anchor="end">partition from stop_gradient(|W|) · cap k ≤ 10–12</text>
+</svg>
+    </div>
+    <figcaption>Mean-field is wrong for strongly coupled dyads such as Asp/Glu pairs. Sites are partitioned by coupling strength. Inside each cluster the solver enumerates every protonation state, which stays smooth because it is a logsumexp. Between clusters it keeps mean-field. The partition is computed from a detached coupling matrix, so the cluster assignment carries no gradient. A cap of 12 sites means at most 4,096 states per cluster.</figcaption>
+  </figure>
+
+  <div class="tbl">
+    <table>
+      <thead><tr><th style="width:12%">Change</th><th style="width:44%">Current jax-Ka (<code>model.py</code>)</th><th>Planned</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="k">Coupling</td>
+          <td>Damped mean-field relaxation over all sites: <code>h ← h + 0.35·(σ(ln10·(pK<sub>int</sub> − pH − field(h))) − h)</code>, 64 steps.</td>
+          <td>Exact enumeration inside clusters of ≤ 10–12 sites, mean-field between clusters.</td>
+        </tr>
+        <tr>
+          <td class="k">Gradient</td>
+          <td>Reverse mode through the unrolled <code>fori_loop</code>; memory grows with the step count.</td>
+          <td>Implicit differentiation of the fixed point with <code>lax.custom_root</code> or a custom VJP: <code>dx/dθ = (I − ∂F/∂x)⁻¹ ∂F/∂θ</code>, solved by CG with a small Tikhonov term because the system is ill-conditioned near strongly coupled transitions. Constant memory.</td>
+        </tr>
+        <tr>
+          <td class="k">Midpoint</td>
+          <td>Batched kernels (<code>grid_pka_kernel</code>) interpolate the 73-point grid, which kinks the gradient when the crossing moves between intervals. <code>TitrationModel.pka</code> already bisects with a custom JVP.</td>
+          <td>Implicit root <code>h<sub>i</sub>(pKa<sub>i</sub>) = ½</code> as the training path.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============ TRAINING ============ -->
+<section id="training">
+  <div class="sec-head">
+    <span class="eyebrow">Losses and training</span>
+    <h2>Supervise the intermediates, not only the midpoints</h2>
+  </div>
+
+  <div class="tbl">
+    <table>
+      <thead><tr><th style="width:6%">#</th><th style="width:26%">Loss</th><th>Attaches at</th><th style="width:13%">Tier A · pKPDB</th><th style="width:13%">Tier B · paired</th></tr></thead>
+      <tbody>
+        <tr><td><span class="pill">1</span></td><td class="k">Intrinsic pKa + pair matrix W</td><td>Head outputs, before the solver. Gradient path one layer deep.</td><td class="no">no</td><td class="yes">yes</td></tr>
+        <tr><td><span class="pill">2</span></td><td class="k">Charge curves h(pH)</td><td>Solver output. The primary solver-level loss: curves are smooth in the parameters.</td><td class="no">no</td><td class="yes">yes</td></tr>
+        <tr><td><span class="pill">3</span></td><td class="k">Midpoint pKa</td><td>Implicit root. Badly conditioned where curves are flat (buried, weakly titrating sites).</td><td class="yes">yes</td><td class="yes">yes</td></tr>
+        <tr><td><span class="pill">4</span></td><td class="k">ΔpKa between states</td><td>After the subtraction. Smallest signal, so its weight ramps up over training.</td><td class="no">no</td><td class="yes">yes</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="cols">
+    <figure>
+      <h3>Labels per 450-residue complex (~100 sites)</h3>
+      <div class="bars">
+        <div class="bar-row">
+          <span>Midpoints only</span>
+          <div class="bar-track" role="img" aria-label="About 100 numbers"><div class="bar-fill" style="width:1.96%"></div></div>
+          <span class="bar-val">~100</span>
+        </div>
+        <div class="bar-row">
+          <span>Intrinsics + pairs</span>
+          <div class="bar-track" role="img" aria-label="About 5,100 numbers"><div class="bar-fill" style="width:100%"></div></div>
+          <span class="bar-val">~100 + ~5,000</span>
+        </div>
+      </div>
+      <figcaption>Dumping PypKa’s intrinsic pKa and site–site interaction terms gives about 50 times the supervision from the same Poisson–Boltzmann solve. Bars are to scale. Gate G1b checks that PypKa exposes them; if not, call DelPhi directly.</figcaption>
+    </figure>
+
+    <div style="display:grid;gap:12px;align-content:start">
+      <h3>Targets are shifts from model values</h3>
+      <div class="shifts">
+        <span>Asp <b>3.7</b></span><span>Glu <b>4.2</b></span><span>His <b>6.5</b></span><span>Cys <b>8.5</b></span><span>Tyr <b>9.5</b></span><span>Lys <b>10.4</b></span>
+      </div>
+      <p class="prose" style="margin:0">Normalised per residue type. The null model already reaches RMSE ~1.36 for acids and ~1.04 for bases, so regressing absolute pKa spends capacity on residue identity and inflates R².</p>
+      <p class="note" style="margin:0">These are the plan’s values. <code>MODEL_PKA</code> in <code>parameters.py</code> currently uses 3.8, 4.5, 6.5, 9.0, 10.0, 10.5 for the same six.</p>
+    </div>
+  </div>
+
+  <div style="display:grid;gap:12px">
+    <h3>Schedule</h3>
+    <ol class="track">
+      <li><strong>Tier A pretrain</strong><span>pKPDB, output level only (loss 3)</span><span class="hw">~12 h · 3090</span></li>
+      <li><strong>Tier B fine-tune</strong><span>Paired runs, all four losses</span><span class="hw">~12 h · 3090</span></li>
+      <li><strong>Calibrate</strong><span>On PKAD-3</span><span class="hw">held out from training</span></li>
+      <li><strong>HPO</strong><span>Layers, d, loss weights, cluster size cap, DH screening length</span><span class="hw">4× A40</span></li>
+    </ol>
+    <p class="prose" style="margin:0">Evaluated with the shared scoring module on sets 1, 2a and 2b, with the component bootstrap and the same pH grid. The model must beat the CatBoost delta-learning baseline from 02. If it does not, report that; differentiability is still a contribution, but the accuracy claim is not.</p>
+  </div>
+</section>
+
+<!-- ============ BACKBONE ============ -->
+<section id="backbone">
+  <div class="sec-head">
+    <span class="eyebrow">Extension · experiment 04</span>
+    <h2>Backbone-only mode from the same checkpoint</h2>
+    <p class="prose">MSE under random side-chain masking converges to the conditional mean over the implied rotamer distribution. Masking during training therefore gives the right target without a new labelling campaign. Repacked ensemble labels only reduce variance.</p>
+  </div>
+
+  <figure>
+    <div class="scroll narrow">
+<svg class="d" viewBox="0 0 1000 230" role="img" aria-label="Each residue token combines backbone atoms and sequence with either side-chain features or a learned absent embedding, selected by a per-residue mask. One encoder serves both modes. A new log-variance head is trained with Gaussian negative log-likelihood alongside the existing heads.">
+  <defs>
+    <marker id="bb-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 z" class="mk-fg"/></marker>
+  </defs>
+  <rect class="box" x="20" y="30" width="210" height="50" rx="8"/>
+  <text x="125" y="52" text-anchor="middle">Backbone atoms</text>
+  <text class="sm mut" x="125" y="70" text-anchor="middle">+ P[N,20], always present</text>
+
+  <rect class="box" x="20" y="110" width="210" height="42" rx="8"/>
+  <text x="125" y="136" text-anchor="middle">Side-chain features</text>
+  <rect class="lbox" x="20" y="168" width="210" height="42" rx="8"/>
+  <text class="sm" x="125" y="194" text-anchor="middle">Learned “absent” embedding</text>
+
+  <path class="ln" d="M230 131 L266 155"/>
+  <path class="ln" d="M230 189 L266 165"/>
+  <circle class="box" cx="280" cy="160" r="14"/>
+  <text class="mono" x="280" y="165" text-anchor="middle">m<tspan dy="3" style="font-size:9px">i</tspan></text>
+  <text class="xs mut" x="280" y="132" text-anchor="middle">mask</text>
+
+  <path class="ln" d="M230 55 H329" marker-end="url(#bb-a)"/>
+  <path class="ln" d="M294 160 H329" marker-end="url(#bb-a)"/>
+
+  <rect class="lbox" x="330" y="30" width="180" height="180" rx="10"/>
+  <text class="ttl" x="420" y="108" text-anchor="middle">Encoder f<tspan dy="4" style="font-size:11px">θ</tspan></text>
+  <text class="sm mut" x="420" y="130" text-anchor="middle">same weights,</text>
+  <text class="sm mut" x="420" y="148" text-anchor="middle">both modes</text>
+
+  <path class="ln" d="M510 80 H589" marker-end="url(#bb-a)"/>
+  <path class="ln" d="M510 170 H589" marker-end="url(#bb-a)"/>
+
+  <rect class="lbox" x="590" y="50" width="180" height="60" rx="8"/>
+  <text x="680" y="76" text-anchor="middle">pKint and W heads</text>
+  <text class="sm mut" x="680" y="96" text-anchor="middle">unchanged</text>
+  <rect class="lbox new" x="590" y="140" width="180" height="60" rx="8"/>
+  <text x="680" y="166" text-anchor="middle">log σ² head</text>
+  <text class="sm mut" x="680" y="186" text-anchor="middle">new in 04</text>
+
+  <path class="ln" d="M770 80 H819" marker-end="url(#bb-a)"/>
+  <path class="ln" d="M770 170 H819" marker-end="url(#bb-a)"/>
+
+  <rect class="box" x="820" y="50" width="160" height="60" rx="8"/>
+  <text x="900" y="76" text-anchor="middle">Solver, losses 1–4</text>
+  <text class="sm mut" x="900" y="96" text-anchor="middle">as above</text>
+  <rect class="box" x="820" y="140" width="160" height="60" rx="8"/>
+  <text x="900" y="166" text-anchor="middle">Gaussian NLL</text>
+  <text class="sm mut" x="900" y="186" text-anchor="middle">after MSE warm-up</text>
+</svg>
+    </div>
+    <figcaption>Masking zeroes the side-chain channel and substitutes a learned embedding, because zeroing alone is ambiguous with a genuinely zero-valued feature. The variance head reports which sites are rotamer-determined and which are backbone-determined, which tells a designer where a backbone-only prediction can be trusted.</figcaption>
+  </figure>
+
+  <div class="cols">
+    <div style="display:grid;gap:12px;align-content:start">
+      <h3>Masking schedule, sampled per example</h3>
+      <div class="mask" role="img" aria-label="40% all-atom, 30% backbone-only, 30% partial">
+        <div class="m1" style="width:40%">40%</div>
+        <div class="m2" style="width:30%">30%</div>
+        <div class="m3" style="width:30%">30%</div>
+      </div>
+      <div class="mask-key">
+        <div><i class="m1"></i>All-atom<span>side chains kept</span></div>
+        <div><i class="m2"></i>Backbone-only<span>every side chain masked</span></div>
+        <div><i class="m3"></i>Partial<span>Bernoulli per residue, p ~ U(0.1, 0.9)</span></div>
+      </div>
+      <p class="note" style="margin:0">Partial masking teaches the model to use side chains when present instead of learning two disjoint modes.</p>
+      <pre><code>L = 0.5 * (exp(-logvar) * (pred - target)**2 + logvar)</code></pre>
+      <p class="note" style="margin:0">Warm up with plain MSE for the first few thousand steps to avoid early variance collapse.</p>
+    </div>
+
+    <div style="display:grid;gap:12px;align-content:start">
+      <h3>Decision gate: measure before fixing</h3>
+      <div class="tbl">
+        <table style="min-width:0">
+          <thead><tr><th>Degradation in ΔpKa RMSE</th><th>Action</th></tr></thead>
+          <tbody>
+            <tr><td class="num">&lt; 0.2</td><td>Ship. Document and move on.</td></tr>
+            <tr><td class="num">0.2 – 0.5</td><td>Augmentation retrain with the masking schedule.</td></tr>
+            <tr><td class="num">&gt; 0.5</td><td>Retrain plus ensemble labels for the hard subset: 5 repacks, ~15–20% of sites, ~5,000 core-h.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note" style="margin:0">Measured by masking the trained 03 model at inference, on held-out clusters. Success means backbone-only is within 0.3 RMSE of all-atom, predicted variance is calibrated, and one checkpoint serves both modes.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SCOPE ============ -->
+<section id="scope">
+  <div class="sec-head">
+    <span class="eyebrow">Scope of the claim</span>
+    <h2>What this architecture can and cannot say</h2>
+  </div>
+  <ul class="facts prose">
+    <li>Titration and binding linkage from a <strong>fixed conformation</strong>. pH-dependent conformational change is out of scope; histidine switches and endosomal release are expected failures.</li>
+    <li>The teacher’s internal dielectric of 15 compresses shifts toward model values, so the labels themselves under-predict large shifts.</li>
+    <li>For mutations, the claim is the ranking and direction of change in pH dependence, with one frozen side-chain placement per substitution and no repacking. The model does not predict ΔΔG<sub>bind</sub>.</li>
+    <li>Backbone-only mode returns a rotamer-averaged pKa. It cannot resolve cases where one rotamer is mechanistically essential, and buried histidines may be smoothed.</li>
+  </ul>
+</section>
+
+<footer>
+  <span>Drawn from <code>experiments/3_paired_complex/03_dataset_and_model.md</code> (part D), <code>experiments/4_backbone/04_backbone_only.md</code>, <code>experiments/2_finetune/02_finetune.md</code> and <code>experiments/00_shared.md</code>.</span>
+  <span>Current solver details from <code>src/jaxpropka/model.py</code> and <code>parameters.py</code> (damping 0.35, 64 steps).</span>
+</footer>
+
+</div>
+
+<script>
+(function(){
+  var fig = document.getElementById('ov');
+  var chips = fig.querySelectorAll('.chip');
+  chips.forEach(function(b){
+    b.addEventListener('click', function(){
+      var f = b.getAttribute('data-f');
+      var on = fig.getAttribute('data-focus') === f;
+      if (on) fig.removeAttribute('data-focus'); else fig.setAttribute('data-focus', f);
+      chips.forEach(function(c){ c.setAttribute('aria-pressed', String(!on && c === b)); });
+    });
+  });
+})();
+</script>
+</body>
+</html>

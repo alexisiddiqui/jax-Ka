@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How GQT models pKas · jax-KA</title>
+<style>
+:root{color-scheme:light dark;--background:light-dark(#fafbf9,#101613);--foreground:light-dark(#172b24,#e7eee9);--muted:light-dark(#edf1ed,#202c25);--muted-foreground:light-dark(#526259,#adbcb2);--border:light-dark(#c9d4cc,#43534a);--viz-series-1:light-dark(#187254,#75d9ae);--viz-series-2:light-dark(#6653ab,#bcacf0);--primary:var(--foreground);--primary-foreground:var(--background);--font-size-base:16px}
+*{box-sizing:border-box}body{margin:0;background:var(--background);color:var(--foreground);font:16px/1.65 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1000px;margin:auto;padding:48px 28px 72px}header{padding:18px 0 32px}h1{font-size:clamp(34px,6vw,62px);font-weight:500;line-height:1.08;letter-spacing:-.045em;max-width:780px;margin:16px 0 24px}h2{font-size:26px;font-weight:500;line-height:1.25;letter-spacing:-.02em;margin:0 0 20px}h3{font-size:18px;font-weight:500;margin:0 0 8px}p{max-width:76ch;margin:10px 0 18px}a{color:var(--viz-series-1);text-underline-offset:3px}strong{font-weight:600}.eyebrow{font:12px/1.5 ui-monospace,SFMono-Regular,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-foreground)}.lede{font-size:21px;line-height:1.5;max-width:720px}.section{padding:36px 0;border-top:1px solid var(--border)}.cols{display:grid;grid-template-columns:1fr 1fr;gap:32px}.note,.text-small{font-size:14px;color:var(--muted-foreground)}.equation{padding:20px 0;font:clamp(16px,2.6vw,24px)/1.6 ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere}.specs{display:flex;gap:12px 26px;flex-wrap:wrap;margin:24px 0;color:var(--muted-foreground)}.specs span{white-space:nowrap}.btn{font:inherit;font-size:14px;border:1px solid var(--border);border-radius:6px;padding:8px 12px;color:var(--foreground);background:transparent;cursor:pointer}.btn[aria-pressed=true]{background:var(--primary);color:var(--primary-foreground);border-color:var(--primary)}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--viz-series-1);outline-offset:3px}.legend{display:flex;gap:16px;flex-wrap:wrap}.legend span{display:inline-flex;align-items:center;gap:7px}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--viz-series-1)}.dot.partner{background:var(--viz-series-2)}table{border-collapse:collapse;width:100%;margin:18px 0;font-size:14px}th,td{text-align:left;vertical-align:top;padding:12px 12px 12px 0;border-bottom:1px solid var(--border)}th{font-weight:500}code{font:0.9em ui-monospace,SFMono-Regular,monospace}ul,ol{padding-left:22px}li{padding-block:4px}.attention{display:grid;gap:0;margin:18px 0}.attention div{padding:12px 0;border-bottom:1px solid var(--border)}.attention span{display:inline-block;min-width:44px;color:var(--viz-series-1);font-family:ui-monospace,monospace}.form-row{display:flex;gap:20px;flex-wrap:wrap;align-items:end}label{display:grid;gap:6px}select{font:inherit;padding:8px;color:var(--foreground);background:var(--background);border:1px solid var(--border);max-width:100%}input[type=range]{width:100%;accent-color:var(--viz-series-1)}.range-field{margin-top:20px;max-width:580px}.arithmetic{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:24px 0}.number{display:grid;min-width:120px}.number b{font:32px/1.3 ui-monospace,monospace;font-weight:500}.number small{color:var(--muted-foreground)}.sign{font-size:26px;padding:0 5px}.evidence{display:grid;gap:20px}.finding{display:grid;grid-template-columns:150px 1fr;gap:20px;border-bottom:1px solid var(--border);padding:0 0 20px}.finding b{font:28px/1.4 ui-monospace,monospace;font-weight:500}.finding p{margin:0}.source-list{font-size:14px;overflow-wrap:anywhere}.flow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:20px 0}.flow span{padding:6px 0}.flow i{font-style:normal;color:var(--muted-foreground)}footer{color:var(--muted-foreground);font-size:13px;padding-top:20px;border-top:1px solid var(--border)}@media(max-width:600px){main{padding:24px 18px 48px}.cols{grid-template-columns:1fr;gap:22px}.finding{grid-template-columns:1fr;gap:8px}.arithmetic{gap:6px}.number{min-width:80px}.number b{font-size:25px}h2{font-size:23px}.specs{gap:8px 18px}table{font-size:13px}th,td{padding-right:8px}}@media print{.btn,.form-row,.range-field{display:none}body{font-size:11pt}main{padding:0}.section{break-inside:avoid}a{color:inherit}}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <div class="eyebrow">jax-KA / Graph-query transformer / implementation walkthrough</div>
+  <h1>The same residue can have a different pKa in a different environment.</h1>
+  <p class="lede">GQT learns that environmental correction from a protein’s residue identities and 3D neighbourhoods. It shares one graph encoder across the protein, then asks a separate question for each titratable site.</p>
+  <div class="equation">pKa<sub>site</sub> = reference pKa<sub>group</sub> + learned environmental shift</div>
+  <div class="specs"><span>49,709 parameters in the 50k variant</span><span>2 encoder blocks + 1 query block</span><span>4 attention heads</span></div>
+  <p class="note">This page describes the implemented scalar GQT in <code>src/pkanet</code>, checked against experiment records on 8 October 2026. The broader solver-based architecture in <code>experiments/model_architecture.html</code> is a different scope.</p>
+</header>
+<section class="section" aria-label="Interactive architecture">
+<div id="gqt-walkthrough">
+  <style>
+    #gqt-walkthrough .gqt-steps {display:flex;flex-wrap:wrap;gap:8px;margin-block:16px}
+    #gqt-walkthrough .gqt-diagram {width:100%;display:block;overflow:visible}
+    #gqt-walkthrough .gqt-diagram text {fill:var(--foreground);font-family:inherit;font-weight:400}
+    #gqt-walkthrough .gqt-diagram .secondary {fill:var(--muted-foreground)}
+    #gqt-walkthrough .gqt-diagram .wire {stroke:var(--border);stroke-width:1.5;fill:none}
+    #gqt-walkthrough .gqt-diagram .signal {stroke:var(--viz-series-1);stroke-width:2;fill:none}
+    #gqt-walkthrough .gqt-diagram .node {fill:var(--muted);stroke:none}
+    #gqt-walkthrough .gqt-diagram .active-node {fill:color-mix(in srgb,var(--viz-series-1) 17%,var(--background));stroke:none}
+    #gqt-walkthrough .gqt-diagram .partner-node {fill:color-mix(in srgb,var(--viz-series-2) 17%,var(--background));stroke:none}
+    #gqt-walkthrough .gqt-detail {margin-block:10px;min-height:2.5em}
+  </style>
+  <h2>From a protein graph to a site pKa</h2>
+  <div class="gqt-steps" aria-label="Architecture stages">
+    <button class="btn" type="button" data-step="0" aria-pressed="true">1 · Graph</button>
+    <button class="btn" type="button" data-step="1" aria-pressed="false">2 · Encoder</button>
+    <button class="btn" type="button" data-step="2" aria-pressed="false">3 · Site query</button>
+    <button class="btn" type="button" data-step="3" aria-pressed="false">4 · pKa</button>
+    <button class="btn" type="button" data-step="4" aria-pressed="false">5 · Binding</button>
+  </div>
+  <svg class="gqt-diagram" role="img" aria-label="GQT architecture"></svg>
+  <div class="gqt-detail text-small" aria-live="polite"></div>
+  <script>
+  (() => {
+    const root=document.getElementById('gqt-walkthrough');
+    const svg=root.querySelector('svg');
+    const detail=root.querySelector('.gqt-detail');
+    const ns='http://www.w3.org/2000/svg';
+    let step=0;
+    const descriptions=[
+      'Strict backbone · 24 node channels · 20 edge channels · 20 Å Cα neighbourhoods',
+      '50k configuration · two residue-attention blocks · four heads · width 44 · feed-forward width 88',
+      'One query per titratable site · shared residue context · learned group identity',
+      'One scalar midpoint per site · learned shift bounded to ±8 pKa units',
+      'Matched bound and free structures · shared weights · reference pKa cancels in the difference'
+    ];
+    function el(tag,attrs={},text){const n=document.createElementNS(ns,tag);for(const [k,v] of Object.entries(attrs))n.setAttribute(k,v);if(text!==undefined)n.textContent=text;svg.appendChild(n);return n;}
+    function label(x,y,text,cls='',anchor='middle'){
+      const n=el('text',{x,y,'text-anchor':anchor,class:cls});
+      const limit=Math.max(24,Math.floor((root.getBoundingClientRect().width-20)/7.6));
+      const words=text.split(' '),lines=[''];
+      words.forEach(word=>{const i=lines.length-1;if(lines[i]&&(lines[i]+' '+word).length>limit)lines.push(word);else lines[i]+=(lines[i]?' ':'')+word;});
+      lines.forEach((s,i)=>{const t=document.createElementNS(ns,'tspan');t.setAttribute('x',x);t.setAttribute('dy',i?18:0);t.textContent=s;n.appendChild(t);});return n;
+    }
+    function line(x1,y1,x2,y2,signal=false){el('line',{x1,y1,x2,y2,class:signal?'signal':'wire'});}
+    function arrow(x1,y1,x2,y2){line(x1,y1,x2,y2,true);const a=Math.atan2(y2-y1,x2-x1);const z=6;line(x2,y2,x2-z*Math.cos(a-.5),y2-z*Math.sin(a-.5),true);line(x2,y2,x2-z*Math.cos(a+.5),y2-z*Math.sin(a+.5),true);}
+    function box(x,y,w,h,title,sub,active=false){el('rect',{x,y,width:w,height:h,rx:6,class:active?'active-node':'node'});label(x+w/2,y+27,title);if(sub)label(x+w/2,y+49,sub,'secondary');}
+    function node(x,y,name,kind='node'){el('circle',{cx:x,cy:y,r:24,class:kind});label(x,y+5,name);}
+    function draw(){
+      const w=Math.max(240,root.getBoundingClientRect().width);const small=w<560;const h=step===0?326:step===2?350:step===4?378:(small?390:316);
+      svg.replaceChildren();svg.setAttribute('viewBox',`0 0 ${w} ${h}`);svg.setAttribute('height',h);
+      el('title',{},['A spatial residue graph','Two sparse transformer blocks','A group-specific query reads residue context','Predict an environmental shift, then add a reference','Binding shifts from two predictions'][step]);
+      if(step===0){
+        const pts=[[.19,91,'ALA'],[.48,72,'HIS'],[.29,210,'ASP'],[.64,202,'SER'],[.82,115,'LYS']].map(([x,y,n])=>[x*w,y,n]);
+        [[0,1],[0,2],[1,2],[1,3],[1,4],[2,3],[3,4]].forEach(([a,b])=>line(pts[a][0],pts[a][1],pts[b][0],pts[b][1],a===2||b===2));
+        pts.forEach(([x,y,n],i)=>node(x,y,n,i===2?'active-node':i===4?'partner-node':'node'));
+        label(w/2,20,'One node per residue');label(.29*w,252,'Target site','secondary');
+        label(.82*w,157,'Other chain','secondary');label(w/2,286,'Schematic geometry · all neighbours within 20 Å','secondary');
+      }else if(step===1){
+        const titles=[['Embed','24 → 44 channels'],['Attention block 1','4 heads + residual + FF'],['Attention block 2','4 heads + residual + FF']];
+        if(small){const bw=Math.min(w-28,330),x=(w-bw)/2;titles.forEach((v,i)=>{box(x,20+i*105,bw,65,...v,i>0);if(i<2)arrow(w/2,86+i*105,w/2,117+i*105);});label(w/2,351,'Context-aware vector for every residue','secondary');}
+        else{const bw=(w-64)/3;titles.forEach((v,i)=>{const x=8+i*(bw+24);box(x,90,bw,72,...v,i>0);if(i<2)arrow(x+bw+2,126,x+bw+22,126);});label(w/2,35,'Geometry biases which neighbours exchange information');label(w/2,215,'Context-aware vector for every residue','secondary');label(w/2,250,'Two graph hops before the site query','secondary');}
+      }else if(step===2){
+        const bw=Math.min(200,(w-36)/2);box(6,17,bw,65,'Target residue','encoded vector');box(w-bw-6,17,bw,65,'Group identity','e.g. ASP or NTERM');
+        arrow(6+bw/2,88,w/2-15,126);arrow(w-bw/2-6,88,w/2+15,126);
+        box(w/2-100,131,200,65,'Site query','residue + group',true);
+        const xs=[w*.18,w*.5,w*.82];xs.forEach((x,i)=>{node(x,279,['h₁','h₂','h₃'][i]);arrow(x,251,w/2+(i-1)*48,202);});
+        label(w/2,324,'Encoded spatial neighbours → cross-attention','secondary');
+      }else if(step===3){
+        const bw=Math.min(w-24,350),x=(w-bw)/2;
+        box(x,8,bw,60,'Site representation','output of query attention',true);arrow(w/2,73,w/2,96);
+        box(x,102,bw,60,'Learned environmental shift','linear head → 8 × tanh',true);arrow(w/2,167,w/2,190);
+        box(x,196,bw,60,'Absolute pKa','add group-specific reference');label(w/2,282,'Historical pKPDB and legacy references differ','secondary');
+      }else{
+        const bw=Math.min(250,(w-32)/2),lx=4,rx=w-bw-4;
+        box(lx,10,bw,65,'Bound AB','partner present');box(rx,10,bw,65,'Free A','partner removed');
+        arrow(lx+bw/2,81,lx+bw/2,103);arrow(rx+bw/2,81,rx+bw/2,103);
+        box(lx,110,bw,65,'GQT','same weights',true);box(rx,110,bw,65,'GQT','same weights',true);
+        label(lx+bw/2,205,'pKa bound');label(rx+bw/2,205,'pKa free');
+        arrow(lx+bw/2,217,w/2-18,254);arrow(rx+bw/2,217,w/2+18,254);
+        box(w/2-120,262,240,60,'Binding ΔpKa','bound minus free',true);label(w/2,347,'Separate from the single-structure training shift','secondary');
+      }
+      detail.textContent=descriptions[step];root.querySelectorAll('[data-step]').forEach(b=>b.setAttribute('aria-pressed',String(+b.dataset.step===step)));
+    }
+    function restore(s){const x=s?.modelContent?.gqtStage;if(Number.isInteger(x)&&x>=0&&x<=4)step=x;draw();}
+    root.querySelectorAll('[data-step]').forEach(b=>b.addEventListener('click',()=>{step=+b.dataset.step;draw();if(window.openai?.setWidgetState)window.openai.setWidgetState({modelContent:{gqtStage:step},privateContent:null}).catch(()=>{});}));
+    window.addEventListener('openai:set_globals',e=>{if(e.detail?.globals?.widgetState)restore(e.detail.globals.widgetState);});
+    new ResizeObserver(draw).observe(root);restore(window.openai?.widgetState);
+  })();
+  </script>
+</div>
+
+<p class="note">Select a stage to follow the forward pass. Residues and edges in the drawing are schematic; no trained checkpoint is running in this page.</p>
+</section>
+<section class="section">
+<h2>1. Give the model a spatial environment</h2>
+<div class="cols">
+<div><h3>Residue nodes: what is here?</h3><p>Every retained residue has a 24-channel input: 20 amino-acid identity channels, N-terminal and C-terminal flags, a disulfide flag, and a local-frame validity flag. Training inputs use one-hot residue identities. In the strict-backbone experiments the disulfide channel is forced to zero because it depends on side-chain atoms.</p><p>The encoder sees all retained residue nodes, including non-titratable context. Only the queried titratable sites receive pKa outputs.</p></div>
+<div><h3>Spatial edges: where is it?</h3><p>Edges connect Cα positions within 20 Å, including neighbours across chains and the residue itself. Each edge has 20 channels: 16 distance radial-basis values, three directional components in the source residue’s N–Cα–C frame, and one same-chain indicator.</p><p>Distance and local-frame directions preserve predictions under rigid rotation and translation. A cosine taper attenuates attention over 18–20 Å. The graph retains all neighbours inside the radius; padding is masked.</p></div>
+</div>
+<p class="note">The side-chain variant adds 128 channels: local coordinates and presence flags for 32 named atom slots. It is a separate configuration, not an input to the current strict-backbone runs.</p>
+</section>
+<section class="section">
+<h2>2. Let each residue read its neighbours</h2>
+<p>The linear embedding maps 24 input channels to a 44-dimensional hidden vector in the 50k configuration. Two sparse transformer blocks then update every residue from its spatial neighbours. Each block combines four attention heads, a residual update, and a feed-forward network of width 88.</p>
+<div class="attention" aria-label="Attention computation">
+<div><span>01</span> Normalize hidden vectors and form learned queries, keys and values.</div>
+<div><span>02</span> Score each neighbour using query–key similarity plus a learned geometric edge bias.</div>
+<div><span>03</span> Apply the neighbour mask, softmax, distance taper and renormalization.</div>
+<div><span>04</span> Mix neighbour values; add the projected message and feed-forward residual updates.</div>
+</div>
+<div class="equation">score<sub>ij,h</sub> = q<sub>i,h</sub> · k<sub>j,h</sub> / √d<sub>head</sub> + edgeBias<sub>ij,h</sub></div>
+<p>After two blocks, a residue contains information propagated over up to two graph hops. The later site query can read those already contextualized neighbours, extending its dependency path by another hop. This provides a way to learn combinations of surrounding residues rather than treating each nearby residue independently.</p>
+<p class="note">The four heads are learned channels. They are not assigned physical meanings such as “electrostatics” or “hydrogen bonds.” Attention weights describe information routing; edge or identity interventions are needed to assess how context changes a prediction.</p>
+</section>
+<section class="section">
+<h2>3. Ask a chemically specific question</h2>
+<div class="equation">query<sub>site</sub> = encodedResidue<sub>i</sub> + groupEmbedding<sub>g</sub></div>
+<p>The same environment can matter differently to ASP, HIS or LYS. A learned group embedding conditions the query on which titratable group is being predicted. One additional four-head cross-attention block reads the target residue’s neighbours from the encoded protein graph, with the same edge features and taper.</p>
+<p>Nine group embeddings exist: ASP, GLU, HIS, CYS, TYR, LYS, ARG, NTERM and CTERM. A terminal site and a side-chain site on the same residue can therefore have different queries and outputs.</p>
+<p><strong>The limitation:</strong> they still share a residue node in the context graph. Distinguishing the queries does not create separate interacting site tokens. This is relevant when a terminal group and side chain on one residue are strongly coupled.</p>
+</section>
+<section class="section" id="shift-demo">
+<h2>4. Learn the correction, keep the chemical reference</h2>
+<p>A shared linear head maps the site representation to a scalar. The model applies <code>8 × tanh(head)</code>, bounding the environmental shift between −8 and +8 pKa units. Adding the appropriate group reference reconstructs absolute pKa. The head starts near zero, so initial predictions start near the reference values.</p>
+<div class="form-row">
+<label>Reference convention<select id="reference"><option value="pkpdb">Historical pKPDB</option><option value="legacy">Legacy JAX-Ka</option></select></label>
+<label>Titratable group<select id="group"><option>ASP</option><option>GLU</option><option>HIS</option><option>CYS</option><option>TYR</option><option>LYS</option><option>NTERM</option><option>CTERM</option></select></label>
+</div>
+<label class="range-field">Chosen environmental shift: <output id="shift-value">+1.20</output><input id="shift" type="range" min="-7.9" max="7.9" value="1.2" step="0.05"></label>
+<div class="arithmetic" aria-live="polite"><div class="number"><b id="baseline">3.79</b><small>reference pKa</small></div><span class="sign">+</span><div class="number"><b id="delta">1.20</b><small>chosen shift</small></div><span class="sign">=</span><div class="number"><b id="absolute">4.99</b><small>absolute pKa</small></div></div>
+<p class="note">Illustrative arithmetic only. Moving the slider chooses a shift; it does not calculate an effect from a molecular environment. The sign and magnitude must be learned from training data.</p>
+<p><code>predict_shift()</code> returns the correction. <code>predict_pkpdb()</code> adds the historical pKPDB reference, while legacy <code>predict()</code> adds JAX-Ka’s <code>MODEL_PKA</code>. These constants differ: for example, GLU is 4.20 in the historical convention and 4.50 in the legacy convention. The convention must match training. Historical pKPDB has no ARG reference or ARG labels in this cohort.</p>
+</section>
+<section class="section">
+<h2>How this helps us model pKas</h2>
+<div class="cols">
+<div><h3>Separate chemistry from environment</h3><p>The group reference captures the basic difference between titratable chemistries. The learned part focuses on departures associated with sequence and structure. Residue identities and geometry offer signals from which the network can infer environmental effects on protonation.</p><p>This is a learned statistical correction. Strict-backbone GQT does not explicitly calculate solvent electrostatics, side-chain hydrogen bonds or protonation-dependent interaction energies.</p></div>
+<div><h3>Reuse one structure representation</h3><p>All sites share the same two-layer protein encoding, while their group-conditioned queries extract different summaries. Sparse spatial attention focuses computation on neighbourhoods and can include a binding partner through cross-chain edges.</p><p>The forward pass produces scalar predictions without running a titration solver. The optional indexed Triton backend changes how attention is computed in memory; it preserves the intended architecture and output.</p></div>
+</div>
+</section>
+<section class="section">
+<h2>Training shift and binding shift are different quantities</h2>
+<div class="cols">
+<div><h3>Single-structure training</h3><div class="equation">target shift = teacher pKa − group reference</div><p>The explicit-shift experiments train on the cleaned 5,000-structure historical pKPDB cohort. The unweighted loss averages squared shift errors over eligible sites within each structure; sampling is organized by sequence component. A separate experiment reweights shift-magnitude bins.</p><p>For the same reference constant, squared error in absolute pKa and squared error in its shift are algebraically identical. Changing the label to a shift alone does not add physical information.</p></div>
+<div><h3>Paired binding evaluation</h3><div class="equation">ΔpKa<sub>binding</sub> = pKa<sub>AB</sub> − pKa<sub>free</sub></div><p>Run the same trained network on the complex and the corresponding isolated partner, then subtract predictions for matched sites. Since the group is unchanged, its reference cancels.</p><p>Adding the partner can change both encoder messages and the site’s query context. The single-structure training objective does not directly supervise this difference, so good absolute-pKa performance does not establish accurate binding shifts.</p></div>
+</div>
+<p class="note">The current frozen validation set contains 142 complexes with current-PypKa labels. Training and validation therefore also differ in teacher preparation/provenance; they are not direct experimental measurements. Paired audits use matched prepared AB, A and B structures.</p>
+</section>
+<section class="section">
+<h2>What the evidence actually supports</h2>
+<p>These figures are from the recorded alignment audit of an earlier <strong>side-chain GQT with dropout</strong>, not the latest backbone regularization screen.</p>
+<div class="evidence">
+<div class="finding"><b>215,050</b><p>Supervised queries matched their intended residues and groups across 5,142 structures. The audit ruled out a general label-to-node alignment bug.</p></div>
+<div class="finding"><b>99.935%</b><p>Of titratable pairs with functional atoms within 10 Å had direct edges in the 20 Å Cα graph. All 6,194 audited strong native pairs had direct coverage, but 30 collapsed distinct sites onto one residue node.</p></div>
+<div class="finding"><b>0.593</b><p>Residual-shift calibration slope: predictions were compressed toward reference pKas. Group-macro MAE on 7,764 common validation sites was 0.5552 for this GQT, 0.3867 for scratch pKAI, and 0.3221 for frozen pKAI.</p></div>
+</div>
+<p>Later, the 50k, 200k and 800k backbone continuation was stopped after all sizes passed epoch 54: capacity improved training MSE, but validation MAE was worse than earlier minima. This was an early futility stop, not a completed epoch-100 result.</p>
+<p>The latest local protocol registers a three-seed 50k regularization screen with context masking and AdamW. That record describes the experiment; it does not provide completed performance results.</p>
+</section>
+<section class="section">
+<h2>Where the current model ends</h2>
+<div class="flow" aria-label="Implemented and future outputs"><span>Implemented: graph → site representation → scalar pKa</span></div>
+<div class="flow" aria-label="Possible future extension"><span>Future extension</span><i>→</i><span>local energy and interaction heads</span><i>→</i><span>protonation solver</span><i>→</i><span>coupled titration curves</span></div>
+<p>The current scalar output is a predicted pKa midpoint, <strong>not an intrinsic microstate energy</strong>. GQT has no explicit pH input, protonation-state variables, tautomer energy head or site–site coupling matrix in this forward pass. Geometry is precomputed for frozen structures, so this pilot does not establish differentiable coordinate optimization.</p>
+<p>A plausible next representation experiment is to add distinct titratable-site tokens at functional atoms while retaining residue context. The existing audit motivates that comparison, but does not establish it as a solution. A solver-based extension would require new heads, compatible supervision and separate validation.</p>
+</section>
+<section class="section">
+<h2>Read the implementation</h2>
+<ol class="source-list">
+<li><a href="../src/pkanet/model.py">pkanet/model.py</a> — initialization, attention, encoding, site queries and both reference conventions.</li>
+<li><a href="../src/pkanet/graph.py">pkanet/graph.py</a> and <a href="../src/pkatrain/graph_data.py">pkatrain/graph_data.py</a> — geometry, node channels, padding and strict-backbone masking.</li>
+<li><a href="../experiments/3_paired_complex/11_graph_query_pretraining.md">Small graph-query pretraining pilot</a> — architectural variants and scientific scope.</li>
+<li><a href="../experiments/3_paired_complex/24_gqt_pkmod_shift_comparison.md">Explicit pKPDB-shift comparison</a> — target convention and training objective.</li>
+<li><a href="../experiments/3_paired_complex/20_gqt_data_alignment_audit.md">Data and target alignment audit</a> — numerical evidence and representation limitations.</li>
+<li><a href="../experiments/3_paired_complex/27_gqt_partner_accuracy.md">Partner-use accuracy audit</a> — paired binding-shift evaluation.</li>
+<li><a href="../experiments/3_paired_complex/31_gqt_converged_size_sweep.md">Converged size sweep</a> and <a href="../experiments/3_paired_complex/34_gqt_50k_regularization.md">50k regularization screen</a> — later capacity findings and current protocol.</li>
+<li><a href="../tests/test_pkanet.py">test_pkanet.py</a> — rigid-motion and permutation invariance, masking, model sizes and gradient checks.</li>
+</ol>
+</section>
+<footer>Based on the local repository snapshot, 8 October 2026. Diagrams are explanatory; displayed arithmetic is not a trained prediction. No model code or experiment configuration was changed.</footer>
+</main>
+<script>
+(() => {
+const refs={pkpdb:{ASP:3.79,GLU:4.20,HIS:6.74,CYS:8.67,TYR:9.59,LYS:10.46,NTERM:7.99,CTERM:2.90},legacy:{ASP:3.8,GLU:4.5,HIS:6.5,CYS:9.0,TYR:10.0,LYS:10.5,NTERM:8.0,CTERM:3.2}};
+const ref=document.getElementById('reference'),group=document.getElementById('group'),shift=document.getElementById('shift');
+function update(){const base=refs[ref.value][group.value],delta=Number(shift.value);document.getElementById('baseline').textContent=base.toFixed(2);document.getElementById('delta').textContent=delta.toFixed(2);document.getElementById('absolute').textContent=(base+delta).toFixed(2);document.getElementById('shift-value').textContent=(delta>=0?'+':'')+delta.toFixed(2);}
+[ref,group,shift].forEach(n=>n.addEventListener('input',update));update();
+})();
+</script>
+</body>
+</html>
