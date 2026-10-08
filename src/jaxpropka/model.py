@@ -1,7 +1,7 @@
 """JAX-only sequence evaluation, titration curves, and differentiable midpoints."""
 from __future__ import annotations
-from functools import partial
 from dataclasses import replace
+from functools import partial
 from typing import NamedTuple
 import jax
 import jax.numpy as jnp
@@ -19,6 +19,13 @@ class LocalTerms(NamedTuple):
     coupling: jax.Array        # [N,K,9,9], includes neighbor identity probability
     weights: jax.Array         # [N,9]
     burial: jax.Array          # [N,9]
+
+
+class PhysicalScales(NamedTuple):
+    """Dynamic physical parameters; numerical/geometry settings remain static."""
+    desolv: jax.Array
+    hbond: jax.Array
+    coulomb: jax.Array
 
 
 class CurveResult(NamedTuple):
@@ -73,7 +80,9 @@ class SiteCurveResult(NamedTuple):
     converged: jax.Array
 
 
-def _site_terms(d, p, cfg):
+def _site_terms(d, p, cfg, scales=None):
+    if scales is None:
+        scales = PhysicalScales(cfg.desolv_scale, cfg.hbond_scale, cfg.coulomb_scale)
     n = d["group_mask"].shape[0]
     if p.shape != (n,20) or not jnp.issubdtype(p.dtype,jnp.floating):
         raise ValueError(f"expected floating P[{n},20]")
@@ -82,8 +91,9 @@ def _site_terms(d, p, cfg):
     gm = d["group_mask"]
     # Cast structural floats to the sequence dtype for both float32 and float64.
     f = lambda name: d[name].astype(p.dtype)
-    pn = p[d["env_neighbors"]]
-    em = d["env_mask"][:,:,None,None]
+    pn = p[d["env_neighbors"]]*d["env_mask"][:,:,None].astype(p.dtype)
+    if "identity_columns" in d:
+        pn = jnp.take_along_axis(pn,d["identity_columns"][d["env_neighbors"]],axis=-1)
     if "edge_dest" in d:
         # Geometry is pre-masked on the host. Bound the layout-transpose/dot
         # workspace by evaluating 32 residues at a time. Rematerialize the map
@@ -95,24 +105,26 @@ def _site_terms(d, p, cfg):
         v,m,hb_env = jax.lax.map(jax.checkpoint(contract,prevent_cse=False),
             (f("volume"),f("mass"),f("hbond"),pn),batch_size=32)
     else:
-        v = jnp.einsum("nkga,nka->ng",jnp.where(em,f("volume"),0),pn)
-        m = jnp.einsum("nkga,nka->ng",jnp.where(em,f("mass"),0),pn)
-        hb_env = jnp.einsum("nkga,nka->ng",jnp.where(em,f("hbond"),0),pn)
+        v = jnp.einsum("nkga,nka->ng",f("volume"),pn)
+        m = jnp.einsum("nkga,nka->ng",f("mass"),pn)
+        hb_env = jnp.einsum("nkga,nka->ng",f("hbond"),pn)
     volume = f("bb_volume")+v
     mass = f("bb_mass")+m
     hb = f("bb_hbond")+jnp.einsum("nga,na->ng",f("local_hbond"),p)+hb_env
     burial = jnp.clip((mass-cfg.nmin)/(cfg.nmax-cfg.nmin),0,1)
     desolv = (jnp.asarray(FORMAL_CHARGE,dtype=p.dtype) * cfg.desolv_prefactor * volume
               * (cfg.surface_scale+(1-cfg.surface_scale)*burial))
-    intrinsic = (jnp.asarray(MODEL_PKA,dtype=p.dtype)+cfg.desolv_scale*desolv
-                 +cfg.hbond_scale*(hb+f("reorganization")*burial))
+    intrinsic = (jnp.asarray(MODEL_PKA,dtype=p.dtype)+scales.desolv*desolv
+                 +scales.hbond*(hb+f("reorganization")*burial))
     intrinsic = jnp.where(gm,intrinsic,0)
     weights = jnp.concatenate((p[:,GROUP_AA],jnp.ones((p.shape[0],2),dtype=p.dtype)),axis=-1)*gm
     return intrinsic, weights, burial, mass
 
 
-def _local_terms(d, p, cfg):
-    intrinsic, weights, burial, mass = _site_terms(d,p,cfg)
+def _local_terms(d, p, cfg, scales=None):
+    if scales is None:
+        scales = PhysicalScales(cfg.desolv_scale, cfg.hbond_scale, cfg.coulomb_scale)
+    intrinsic, weights, burial, mass = _site_terms(d,p,cfg,scales)
     idx = d["neighbors"]
     f = lambda name: d[name].astype(p.dtype)
     pair_mass = mass[:,None,:,None]+mass[idx][:,:,None,:]
@@ -127,10 +139,10 @@ def _local_terms(d, p, cfg):
     else:
         eligibility = (pair_mass>=cfg.nmin).astype(p.dtype)
     eligibility = jnp.where(exception,1,eligibility)
-    c = cfg.coulomb_scale * f("coulomb_geometry")/eps * eligibility
+    c = scales.coulomb * f("coulomb_geometry")/eps * eligibility
     c = jnp.where(d["pair_mask"],c,0)
-    hd = cfg.hbond_scale*jnp.where(d["pair_mask"],f("hb_donor"),0)
-    hr = cfg.hbond_scale*jnp.where(d["pair_mask"],f("hb_reverse"),0)
+    hd = scales.hbond*jnp.where(d["pair_mask"],f("hb_donor"),0)
+    hr = scales.hbond*jnp.where(d["pair_mask"],f("hb_reverse"),0)
     wn = weights[idx][:,:,None,:]
     # E_HB = -Hd*h_i*(1-h_j) - Hr*(1-h_i)*h_j.
     # dE/dh_i = -Hd + (Hd+Hr)*h_j. This is not a signed PROPKA determinant.
@@ -247,20 +259,24 @@ def _solve(d, terms, ph, cfg):
     return _solve_with_field(d,terms,ph,cfg,lambda h:_field(d,terms,h))
 
 
-def _curve_result(d, probabilities, ph, terms, solve, field, config, with_diagnostics=False):
+def _over_ph(fn, xs, ph_batch):
+    return jax.vmap(fn)(xs) if ph_batch is None else jax.lax.map(fn,xs,batch_size=ph_batch)
+
+
+def _curve_result(d, probabilities, ph, terms, solve, field, config, with_diagnostics=False, ph_batch=None):
     ph = jnp.asarray(ph,dtype=probabilities.dtype)
-    h,residual,wresidual,diagnostic = jax.vmap(solve)(ph)
+    h,residual,wresidual,diagnostic = _over_ph(solve,ph,ph_batch)
     charge = terms.weights[None,:,:]*(jnp.asarray(Q_DEPROT,dtype=probabilities.dtype)[None,None,:]+h)
     residue_charge = charge.sum(-1)
-    effective = jax.vmap(lambda x:terms.intrinsic-field(x))(h)
+    effective = _over_ph(lambda x:terms.intrinsic-field(x),h,ph_batch)
     out = SiteCurveResult(ph,h,charge,residue_charge,residue_charge.sum(-1),
                            terms.weights,terms.intrinsic,effective,
                            residual,wresidual,diagnostic.converged)
     return (out,diagnostic) if with_diagnostics else out
 
 
-@partial(jax.jit, static_argnames=("config","differentiation","with_diagnostics"))
-def curve_kernel(arrays, probabilities, ph, *, config, differentiation=DifferentiationConfig(), with_diagnostics=False):
+@partial(jax.jit, static_argnames=("config","differentiation","with_diagnostics","ph_batch"))
+def curve_kernel(arrays, probabilities, ph, *, config, differentiation=DifferentiationConfig(), with_diagnostics=False, ph_batch=None):
     """Shared all-site curves with structure and pH values as dynamic inputs.
 
     Inputs must be validated outside JIT. Use batching.pack_inputs for padded
@@ -269,31 +285,31 @@ def curve_kernel(arrays, probabilities, ph, *, config, differentiation=Different
     terms = _local_terms(arrays,probabilities,config)
     field = lambda h:_field(arrays,terms,h)
     return _curve_result(arrays,probabilities,ph,terms,
-        lambda x:_dispatch_solve(arrays,terms,x,config,lambda t,h:_field(arrays,t,h),differentiation,with_diagnostics=True),field,config,with_diagnostics)
+        lambda x:_dispatch_solve(arrays,terms,x,config,lambda t,h:_field(arrays,t,h),differentiation,with_diagnostics=True),field,config,with_diagnostics,ph_batch)
 
 
-@partial(jax.jit, static_argnames=("config","differentiation","with_diagnostics"))
-def packed_curve_kernel(arrays, probabilities, ph, edges, *, config, differentiation=DifferentiationConfig(), with_diagnostics=False):
+@partial(jax.jit, static_argnames=("config","differentiation","with_diagnostics","ph_batch"))
+def packed_curve_kernel(arrays, probabilities, ph, edges, *, config, differentiation=DifferentiationConfig(), with_diagnostics=False, ph_batch=None):
     """Curve kernel using a host-packed fixed interaction graph."""
     terms = _local_terms(arrays,probabilities,config)
     field = lambda h:_packed_field(terms,h,edges)
     return _curve_result(arrays,probabilities,ph,terms,
-        lambda x:_dispatch_solve(arrays,terms,x,config,lambda t,h:_packed_field(t,h,edges),differentiation,edges,True),field,config,with_diagnostics)
+        lambda x:_dispatch_solve(arrays,terms,x,config,lambda t,h:_packed_field(t,h,edges),differentiation,edges,True),field,config,with_diagnostics,ph_batch)
 
 
-@partial(jax.jit, static_argnames=("config","differentiation","with_diagnostics"))
-def packed_v2_curve_kernel(arrays, probabilities, ph, *, config, differentiation=DifferentiationConfig(), with_diagnostics=False):
+@partial(jax.jit, static_argnames=("config","differentiation","with_diagnostics","ph_batch"))
+def packed_v2_curve_kernel(arrays, probabilities, ph, *, config, differentiation=DifferentiationConfig(), with_diagnostics=False, ph_batch=None):
     """Curves using fully packed local terms and field contractions."""
     terms = _packed_local_terms(arrays,probabilities,config)
     field = lambda h:_packed_v2_field(arrays,terms,h)
     return _curve_result(arrays,probabilities,ph,terms,
-        lambda x:_dispatch_solve(arrays,terms,x,config,lambda t,h:_packed_v2_field(arrays,t,h),differentiation,with_diagnostics=True),field,config,with_diagnostics)
+        lambda x:_dispatch_solve(arrays,terms,x,config,lambda t,h:_packed_v2_field(arrays,t,h),differentiation,with_diagnostics=True),field,config,with_diagnostics,ph_batch)
 
 
-@partial(jax.jit, static_argnames=("config","differentiation"))
-def grid_pka_kernel(arrays, probabilities, ph, *, config, differentiation=DifferentiationConfig()):
+@partial(jax.jit, static_argnames=("config","differentiation","ph_batch"))
+def grid_pka_kernel(arrays, probabilities, ph, *, config, differentiation=DifferentiationConfig(), ph_batch=None):
     """Shared grid interpolation; ph must be finite, increasing, and length >= 2."""
-    out = curve_kernel(arrays,probabilities,ph,config=config,differentiation=differentiation)
+    out = curve_kernel(arrays,probabilities,ph,config=config,differentiation=differentiation,ph_batch=ph_batch)
     return _grid_pka_result(arrays,out,ph,config)
 
 
@@ -319,10 +335,10 @@ def _grid_pka_result(arrays, out, ph, config):
                          jnp.broadcast_to(residual,value.shape))
 
 
-@partial(jax.jit, static_argnames=("config","differentiation"))
-def packed_grid_pka_kernel(arrays, probabilities, ph, edges, *, config, differentiation=DifferentiationConfig()):
+@partial(jax.jit, static_argnames=("config","differentiation","ph_batch"))
+def packed_grid_pka_kernel(arrays, probabilities, ph, edges, *, config, differentiation=DifferentiationConfig(), ph_batch=None):
     """Packed equivalent of grid_pka_kernel."""
-    out = packed_curve_kernel(arrays,probabilities,ph,edges,config=config,differentiation=differentiation)
+    out = packed_curve_kernel(arrays,probabilities,ph,edges,config=config,differentiation=differentiation,ph_batch=ph_batch)
     return _grid_pka_result(arrays,out,ph,config)
 
 
@@ -355,7 +371,7 @@ class TitrationModel:
     """
     def __init__(self, cache: StructureCache, config: ModelConfig | None = None,
                  *, backend: str = "dense", differentiation: DifferentiationConfig | None = None,
-                 equilibrium: EquilibriumConfig | None = None):
+                 equilibrium: EquilibriumConfig | None = None, ph_batch: int | None = None):
         self.cache = cache.validate()
         self.config = config or ModelConfig()
         self.differentiation = differentiation or DifferentiationConfig()
@@ -368,6 +384,9 @@ class TitrationModel:
             raise ValueError('iteration cap must be at least equilibrium.min_steps')
         if backend not in ("dense","packed","packed_v2"):
             raise ValueError("backend must be 'dense', 'packed' or 'packed_v2'")
+        if ph_batch is not None and (not isinstance(ph_batch,int) or ph_batch < 1):
+            raise ValueError("ph_batch must be None or a positive Python int")
+        self.ph_batch = ph_batch
         self.backend = backend
         arrays = (pack_runtime(cache) if backend == "packed_v2" else
                   {k:v for k,v in vars(cache).items() if isinstance(v,np.ndarray) and k != "chain_index"})
@@ -377,6 +396,32 @@ class TitrationModel:
         self._edges = tuple(jnp.asarray(x) for x in pack_interaction_edges(
             cache.pair_mask,cache.neighbors)) if backend == "packed" else None
         self._root = self._make_root()
+        restricted = cache.metadata.get("allowed_identities")
+        # Identity-restricted caches (build_cache(identities=...)) have zero
+        # environmental columns for disallowed identities.
+        self.allowed = (None if restricted is None else
+                        np.array([[a in row for a in ALPHABET] for row in restricted]))
+
+    def release_host_arrays(self):
+        """Free the NumPy copies of large structural tensors after device transfer.
+
+        On CPU the device arrays are separate copies, so the host cache doubles
+        peak memory. Large fields are replaced by zero-memory broadcast views of
+        the same shape and dtype; keys, masks and indices are kept. Readouts are
+        unaffected. The host cache no longer holds the kernels: take
+        cache.fingerprint() or cache.save() BEFORE calling this, and drop any
+        other reference to the original cache for the memory to be returned.
+        """
+        names = ("volume","mass","hbond","local_hbond","coulomb_geometry","hb_donor",
+                 "hb_reverse","pair_mask")
+        self.cache = replace(self.cache, **{k: np.broadcast_to(
+            np.zeros((),getattr(self.cache,k).dtype),getattr(self.cache,k).shape) for k in names})
+        return self
+
+    @property
+    def arrays(self):
+        """Device structural arrays, for passing explicitly through a caller's jit."""
+        return self._d
 
     @classmethod
     def for_design(cls, cache, config=None, *, equilibrium=EquilibriumConfig(), differentiation=None):
@@ -406,12 +451,18 @@ class TitrationModel:
             raise ValueError(f"expected floating P[{self.cache.n_residues},20]")
         if not np.isfinite(p).all() or np.any(p<0) or not np.allclose(p.sum(-1),1,atol=atol):
             raise ValueError("P must be finite, nonnegative and sum to one in each row")
+        if self.allowed is not None:
+            free = ~np.asarray(self.cache.frozen)  # frozen rows are clamped to native
+            if np.any(p[free][~self.allowed[free]] > atol):
+                raise ValueError("P puts mass on identities excluded from this restricted cache")
         return p
 
     def probabilities_from_logits(self, logits, allowed=None):
         """JAX-transformable. An optional STATIC allowed[N,20] mask is validated."""
         if logits.shape != (self.cache.n_residues,20):
             raise ValueError("wrong logits shape")
+        if self.allowed is not None:
+            allowed = self.allowed if allowed is None else np.asarray(allowed,dtype=bool) & self.allowed
         if allowed is not None:
             allowed = np.asarray(allowed,dtype=bool)
             if allowed.shape != logits.shape or not allowed.any(-1).all():
@@ -440,13 +491,15 @@ class TitrationModel:
     def _solve_with_diagnostics(self, terms, ph):
         return _dispatch_solve(self._d,terms,ph,self.config,self._field,self.differentiation,self._edges,True)
 
-    def _curves(self, p, ph, with_diagnostics=False):
-        kwargs = dict(config=self.config,differentiation=self.differentiation,with_diagnostics=with_diagnostics)
+    def _curves(self, p, ph, with_diagnostics=False, arrays=None, edges=None):
+        arrays = self._d if arrays is None else arrays
+        edges = self._edges if edges is None else edges
+        kwargs = dict(config=self.config,differentiation=self.differentiation,with_diagnostics=with_diagnostics,ph_batch=self.ph_batch)
         if self.backend == "dense":
-            return curve_kernel(self._d,p,ph,**kwargs)
+            return curve_kernel(arrays,p,ph,**kwargs)
         if self.backend == "packed":
-            return packed_curve_kernel(self._d,p,ph,self._edges,**kwargs)
-        return packed_v2_curve_kernel(self._d,p,ph,**kwargs)
+            return packed_curve_kernel(arrays,p,ph,edges,**kwargs)
+        return packed_v2_curve_kernel(arrays,p,ph,**kwargs)
 
     def curves(self, ph, residues=None):
         """Compile conditional occupancies and physical charges on a static pH grid."""
@@ -463,21 +516,28 @@ class TitrationModel:
         sel = jnp.asarray(self.cache.select(residues))
         # Segment reduction includes all positions, not only the output selection.
         chain_onehot = jnp.asarray(np.eye(len(self.cache.chain_ids))[self.cache.chain_index])
+        # Structural arrays are explicit jit ARGUMENTS. Closing over them would
+        # embed every cache array as an HLO constant, and compile-time memory
+        # would then grow with the cache (the production OOM mechanism). A caller
+        # that wraps evaluate() in its own jit re-captures them as constants; pass
+        # model.arrays through that jit and call the module kernels instead.
         @jax.jit
-        def evaluate(p):
-            out,diagnostic = self._curves(p,jnp.asarray(grid,dtype=p.dtype),True)
+        def kernel(d, edges, p):
+            out,diagnostic = self._curves(p,jnp.asarray(grid,dtype=p.dtype),True,d,edges)
             result = CurveResult(out.ph,out.protonated[:,sel],out.site_charge[:,sel],out.residue_charge[:,sel],
                                out.residue_charge@chain_onehot.astype(p.dtype),out.total_charge,
                                out.probability[sel],out.intrinsic_pka[sel],out.effective_pka[:,sel],
                                out.residual,out.weighted_residual,out.converged)
             return (result,diagnostic) if with_diagnostics else result
+        def evaluate(p):
+            return kernel(self._d,self._edges,p)
+        evaluate.lower = lambda p: kernel.lower(self._d,self._edges,p)
         return evaluate
 
     def charge(self, ph=7.0, residues=None):
         """Compile residue charges only: shape [R] at scalar pH, [H,R] for a grid."""
         curves = self.curves(ph,residues)
         scalar = np.ndim(ph)==0
-        @jax.jit
         def evaluate(p):
             q = curves(p).residue_charge
             return q[0] if scalar else q
@@ -585,12 +645,14 @@ class TitrationModel:
         selected=self.cache.select(residues)
         group_indices=jnp.asarray(indices)
         @jax.jit
-        def evaluate(p):
+        def kernel(d, edges, p):
             ph = jnp.asarray(grid,dtype=p.dtype)
-            out = _grid_pka_result(self._d,self._curves(p,ph),ph,self.config)
+            out = _grid_pka_result(d,self._curves(p,ph,arrays=d,edges=edges),ph,self.config)
             if residues is None and groups is None:
                 return out
             return jax.tree.map(lambda x:x[selected][:,group_indices],out)
+        def evaluate(p):
+            return kernel(self._d,self._edges,p)
         return evaluate
 
     def pka_sites(self, sites):

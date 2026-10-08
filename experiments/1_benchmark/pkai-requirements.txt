@@ -1,0 +1,11 @@
+# Released pKAI dependency resolution; predictions explicitly run on CPU.
+nvidia-cublas-cu11==11.10.3.66
+nvidia-cuda-nvrtc-cu11==11.7.99
+nvidia-cuda-runtime-cu11==11.7.99
+nvidia-cudnn-cu11==8.5.0.96
+packaging==26.3
+pkai==1.2.0
+setuptools==84.0.0
+torch==1.13.1
+typing-extensions==4.16.0
+wheel==0.48.0

@@ -1,0 +1,152 @@
+{
+  "created": "2026-10-06",
+  "scope": "The 21 exact or recovered-exact point-label candidates in experimental-admission-v7.",
+  "policy": {
+    "fit_eligible": "An exact structure/construct/state match, a direct residue-resolved point label, sufficiently specified assay conditions, and both structural masks are required for the first aqueous-protein fit.",
+    "headline_evaluation": "No row admitted here is enabled for headline evaluation. A fit label cannot also serve as independent test evidence.",
+    "condition_domain": "Nonaqueous, isotope-solvent, concentration-dependent association, kinetic and ligand-state observables remain available for later condition-aware objectives but are held from the first fit.",
+    "approximate_labels": "Approximate or corrected archive values require an interval/correction-aware objective or a separately released curated observation."
+  },
+  "decisions": [
+    {
+      "record_id": "102",
+      "status": "condition_context_hold",
+      "fit_eligible": false,
+      "resolution": "The 6.73 value is a concentration-dependent, biphasic Glu41/Glu29 NMR result at 1.2 mM. The prepared single-domain structure does not represent the measured self-association context, so this is held from the first structure-only fit."
+    },
+    {
+      "record_id": "110",
+      "status": "condition_domain_hold",
+      "fit_eligible": false,
+      "metadata_corrections": {"temperature": "304 K", "solvent": "D2O", "observable": "pK-prime"},
+      "resolution": "The exact zymogen mapping is retained, but the label is a D2O pK-prime at 31 degrees C. It is held from the first aqueous H2O fit rather than silently treated as a 298 K pKa."
+    },
+    {
+      "record_id": "142",
+      "status": "passed",
+      "fit_eligible": true,
+      "resolution": "Reduced 1A2L is the sequence- and redox-state-correct replacement, and the prepared Cys30 site passes both structural masks."
+    },
+    {
+      "record_id": "169",
+      "status": "condition_domain_hold",
+      "fit_eligible": false,
+      "resolution": "The structure and label match the isolated monomer in chloroform/methanol/water, but that solvent context lies outside the first aqueous-protein fit."
+    },
+    {
+      "record_id": "311",
+      "status": "passed",
+      "fit_eligible": true,
+      "resolution": "1L54 and the measured protein share the cysteine-free C54T/C97A WT-star background and M102K substitution; the primary study reports both the structure and the 6.5 pKa."
+    },
+    {
+      "record_id": "317",
+      "status": "passed",
+      "fit_eligible": true,
+      "resolution": "2LZM is the unmutated T4 lysozyme construct used for the native-state NMR assignment. The coupled His31/Asp70 interpretation and 283 K condition remain attached to the row."
+    },
+    {
+      "record_id": "318",
+      "status": "approximate_label_hold",
+      "fit_eligible": false,
+      "resolution": "The primary source reports Asp70 as approximately 0.5. It is held until the objective supports approximate or interval-valued observations."
+    },
+    {
+      "record_id": "584",
+      "status": "passed",
+      "fit_eligible": true,
+      "curated_experimental_pka": 6.33,
+      "curated_experimental_uncertainty": 0.07,
+      "metadata_corrections": {"temperature": "298 K"},
+      "resolution": "The E75P/P76H CPHC construct, reduced 3C71 structure and Cys74 badan-reactivity titration match. The short recombinant N-terminal difference is remote and retained through the natural-gap mask."
+    },
+    {
+      "record_id": "589",
+      "status": "passed",
+      "fit_eligible": true,
+      "curated_experimental_pka": 5.71,
+      "curated_experimental_uncertainty": 0.05,
+      "metadata_corrections": {"temperature": "298 K"},
+      "resolution": "The E75P/P76H CPHC construct, reduced 3C71 structure and Cys77 badan-reactivity titration match. The short recombinant N-terminal difference is remote and retained through the natural-gap mask."
+    },
+    {
+      "record_id": "585",
+      "status": "passed",
+      "fit_eligible": true,
+      "curated_experimental_pka": 7.4,
+      "curated_experimental_uncertainty": 0.1,
+      "metadata_corrections": {"temperature": "298 K"},
+      "resolution": "The P76H CEHC construct, reduced 3C73 structure and Cys74 badan-reactivity titration match. The short recombinant N-terminal difference is remote and retained through the natural-gap mask."
+    },
+    {
+      "record_id": "590",
+      "status": "passed",
+      "fit_eligible": true,
+      "curated_experimental_pka": 7.5,
+      "curated_experimental_uncertainty": 0.2,
+      "metadata_corrections": {"temperature": "298 K"},
+      "resolution": "The P76H CEHC construct, reduced 3C73 structure and Cys77 badan-reactivity titration match. The short recombinant N-terminal difference is remote and retained through the natural-gap mask."
+    },
+    {
+      "record_id": "595",
+      "status": "evidence_pending",
+      "fit_eligible": false,
+      "resolution": "The 6.1 Asp10 assignment is direct, but the exact magnesium condition and recombinant construct still need to be recovered because Mg2+ changes this coupled titration."
+    },
+    {
+      "record_id": "916",
+      "status": "passed",
+      "fit_eligible": true,
+      "resolution": "Reduced 1TRW is the construct- and state-correct monomeric replacement for the Asp26 measurement and passes the recovery checks."
+    },
+    {
+      "record_id": "917",
+      "status": "passed",
+      "fit_eligible": true,
+      "resolution": "Oxidized 1TRS is the construct- and state-correct monomeric replacement for the Asp26 measurement and has the expected active-site disulfide."
+    },
+    {
+      "record_id": "918",
+      "status": "construct_mixture_hold",
+      "fit_eligible": false,
+      "resolution": "4TRX is the correct reduced M74T structure, but the experimental sample had heterogeneous N-terminal methionine processing. This unresolved construct mixture is retained explicitly."
+    },
+    {
+      "record_id": "944",
+      "status": "evidence_pending",
+      "fit_eligible": false,
+      "resolution": "The P31T/C32S structure and Cys29 assignment match, but the exact assay conditions and uncertainty have not yet been extracted from the primary article. The deposited GSHM extension must also remain explicit."
+    },
+    {
+      "record_id": "978",
+      "status": "evidence_pending",
+      "fit_eligible": false,
+      "resolution": "The free-Ubc13 Cys87 assignment and native sequence match, but the primary expression construct and affinity-tag cleavage have not yet been verified."
+    },
+    {
+      "record_id": "1020",
+      "status": "label_correction_hold",
+      "fit_eligible": false,
+      "curated_experimental_pka": 6.7,
+      "resolution": "The archive's 7.2 value was explicitly corrected to 6.7 in the later curated source and agrees with the direct primary 13C-NMR assignment. This duplicate archive row is held rather than counted as an independent 7.2 label."
+    },
+    {
+      "record_id": "1021",
+      "status": "passed",
+      "fit_eligible": true,
+      "resolution": "The direct 13C-NMR Glu172 value of 6.7 matches the unmutated mature 1XNB construct and remains annotated as a coupled catalytic-carboxylate observation."
+    },
+    {
+      "record_id": "1022",
+      "status": "passed",
+      "fit_eligible": true,
+      "resolution": "The direct 13C-NMR Glu172 value of 7.3 and the deposited mature 1HV1 Q127A construct match."
+    },
+    {
+      "record_id": "1023",
+      "status": "passed",
+      "fit_eligible": true,
+      "resolution": "The direct 13C-NMR Glu172 value of 7.9 and the deposited mature 1HV0 Y80F construct match."
+    }
+  ]
+}

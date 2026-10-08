@@ -1,0 +1,23 @@
+{
+  "date": "2026-10-05",
+  "status": "primary_evidence_review_not_admitted_labels",
+  "receipt": "/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/audits/set2-primary-v2/receipts.json",
+  "barnase_barstar": {
+    "source": "https://pubmed.ncbi.nlm.nih.gov/8494892/",
+    "source_kind": "primary_article_abstract",
+    "reported_observations": [
+      {"pH": 8, "Kd_M": 1.3e-14, "NaCl_M": null, "uncertainty": null},
+      {"pH": 5, "Kd_M": 1.6e-11, "NaCl_M": 0.1, "uncertainty": null},
+      {"pH": null, "Kd_M": 2.4e-11, "NaCl_M": 0.5, "uncertainty": null}
+    ],
+    "reported_free_barnase_pKa": {"residue": "His102", "value": 6.4, "bound_value": null},
+    "admitted": false,
+    "reason": "Conditions are not matched across abstract observations; no measured bound-state pKa. Do not infer a paired label or combine salt and pH effects. Full methods/curves and construct matching remain required."
+  },
+  "protein_g_fc": {
+    "source": "https://pmc.ncbi.nlm.nih.gov/articles/PMC2673305/",
+    "public_xml_fetch": "HTTP 500 from Europe PMC",
+    "admitted": false,
+    "reason": "No new primary curve/condition extraction. Existing construct-matching and uncertainty blockers remain."
+  }
+}

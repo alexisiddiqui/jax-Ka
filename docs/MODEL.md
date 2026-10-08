@@ -87,6 +87,10 @@ The returned residual is max(abs(target(h)-h)), not the difference between dampe
 
 Default autodiff of charge and curves differentiates the finite-iteration algorithm. Opt-in checkpointing preserves that derivative while reducing retained intermediates. Opt-in implicit differentiation instead differentiates the locally selected equilibrium and requires successful forward and linear solves; it does not change the forward iteration schedule or select a preferred branch. See [gradient modes and selectivity objectives](GRADIENTS.md). A fixed cap, damping and smooth gates do not guarantee a unique equilibrium or convergence for strong interactions. Compare iteration counts and residuals in the actual design regime.
 
+The fixed point is a stationary point of the mean-field free energy (`optx_solver.free_energy`), because the weighted pair coupling is symmetric. Under strong coupling more than one stable solution can exist. On a 1,452-complex benchmark sample, about 2% of titrating sites had more than one converged solution at some pH, and where the damped cold-start solver converged it found the lowest free-energy solution at 99.7% of pH points. The damped solver does not select a solution by energy, and continuation from neighbouring pH can follow a different branch.
+
+`optx_solver` provides an opt-in alternative: warm-started optimistix Newton or Levenberg–Marquardt on the active channels, using the dense active-set coupling block, with implicit-adjoint gradients. It is intended for design loops; it can select a different branch from the damped solver and is not the production readout.
+
 Direct midpoint pKa solves h_i(P,pH)=0.5 with a static number of bisection iterations over configured pH bounds. A custom JVP implements
 
     d(pKa) = -(partial h_i / partial P)[dP] / (partial h_i / partial pH),

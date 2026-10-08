@@ -1,0 +1,98 @@
+{
+  "version": "experimental-expansion-v1",
+  "status": "source_supported_leads_not_frozen_labels",
+  "created": "2026-10-05",
+  "direct_paired_pka_leads": [
+    {
+      "id": "troponin_c_troponin_i_h130",
+      "system": "cardiac troponin-C N-domain with skeletal troponin-I(115-131) peptide",
+      "source": "https://pmc.ncbi.nlm.nih.gov/articles/PMC3281671/",
+      "doi": "10.1074/jbc.M111.301499",
+      "measurement": "1H NMR pH titration",
+      "site": "sTnI His130",
+      "free_pka": 6.13,
+      "free_uncertainty": 0.02,
+      "bound_pka": 6.36,
+      "bound_uncertainty": 0.04,
+      "delta_pka": 0.23,
+      "bound_fraction": "0.51-0.78",
+      "status": "quantitative_label_found_structure_and_metal_gate_pending",
+      "blockers": [
+        "Identify a deposited structure matching the heterologous cNTnC-sTnI(115-131) construct rather than a homologous troponin complex",
+        "Current policy holds coordinated calcium systems; admit only in a separately validated metal-aware branch",
+        "The reported bound value is measured at partial occupancy and has a fitted Hill coefficient below one"
+      ]
+    },
+    {
+      "id": "calmodulin_pfk_h19",
+      "system": "Ca4-calmodulin with phosphofructokinase target peptide",
+      "source": "https://doi.org/10.1016/j.febslet.2004.10.023",
+      "pmid": "15527800",
+      "measurement": "1H NMR pH titration plus fluorescence affinity titration",
+      "site": "PFK peptide His19",
+      "free_pka": 6.35,
+      "bound_pka": 7.25,
+      "delta_pka": 0.90,
+      "status": "quantitative_label_found_structure_and_metal_gate_pending",
+      "blockers": [
+        "Verify whether the cited CaM-PFK crystal structure was deposited and matches the measured peptide",
+        "Current policy holds coordinated calcium systems; admit only in a separately validated metal-aware branch",
+        "Archive the full primary article and exact fit uncertainty"
+      ]
+    },
+    {
+      "id": "omtk3_ppe_h57",
+      "system": "turkey ovomucoid third domain with porcine pancreatic elastase",
+      "source": "https://publications.iupac.org/publications/pac/1999/71_07_pdf/murphy.pdf",
+      "primary_measurement_doi": "10.1006/jmbi.1997.0977",
+      "measurement": "global fit of 143 ITC observations across 19 pH, buffer and temperature conditions",
+      "site": "PPE His57",
+      "free_pka": 6.7,
+      "free_uncertainty": 0.1,
+      "bound_pka": 5.2,
+      "bound_uncertainty": 0.1,
+      "delta_pka": -1.5,
+      "status": "quantitative_label_found_exact_complex_structure_missing",
+      "blockers": [
+        "No deposited PPE-OMTKY3 complex structure has been verified",
+        "Do not substitute an OMTKY3 complex with another serine protease as an exact experimental structure",
+        "Obtain and archive the original JMB primary measurement paper"
+      ]
+    }
+  ],
+  "binding_ph_leads": [
+    {
+      "id": "prolactin_receptor",
+      "system": "human prolactin-human prolactin receptor extracellular domain",
+      "source": "https://pmc.ncbi.nlm.nih.gov/articles/PMC2992285/",
+      "doi": "10.1074/jbc.M110.172072",
+      "evidence": "SPR pH series for WT and histidine mutants, NMR-derived free histidine pKas, and deposited WT-antagonist/mutant complex structures",
+      "structure_seed": "3D48",
+      "status": "high_priority_set2b; bound_site_pkas_are_model_fits_not_direct_measurements",
+      "blockers": [
+        "Digitize the WT affinity series and uncertainty",
+        "Map the measured native ligand and antagonist constructs separately",
+        "Do not score thermodynamically fitted bound pKas as independent experimental site labels"
+      ]
+    },
+    {
+      "id": "pcsk9_ldlr",
+      "system": "PCSK9-LDLR EGF-A/EGF-AB",
+      "source": "https://pmc.ncbi.nlm.nih.gov/articles/PMC2538846/",
+      "evidence": "Binding affinity increases approximately three- to four-fold from pH 7 to pH 6; 2.4 A complex structure and explicit delta53/full-length construct comparison",
+      "structure_seed": "PCSK9-EGF-A structure reported in the source",
+      "status": "set2b_candidate_metal_and_construct_gate_pending",
+      "blockers": [
+        "Extract the supporting-information EC50 table",
+        "Preserve calcium-bound EGF-A and validate a metal-aware solver path",
+        "Keep delta53-PCSK9 and full-length PCSK9 observations separate"
+      ]
+    }
+  ],
+  "policy": {
+    "direct_site_label": "Only a directly observed or experimentally fitted free-to-bound pKa pair with its measurement model and uncertainty; fitted values must be labeled as fitted.",
+    "binding_label": "A quantitative affinity-versus-pH series may test linkage but is not converted into a residue-specific pKa label.",
+    "structure": "No predicted replacement structures and no homologous complex presented as the measured construct.",
+    "metals": "Calcium-containing leads remain held until a metal-aware benchmark branch is validated."
+  }
+}
