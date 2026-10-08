@@ -16,3 +16,8 @@ titratable neighbors, individual distance shells, residue identity, and edge
 geometry. Compare the causal prediction effects and ablated MAE between best
 and late checkpoints. Report both train and validation behavior so increased
 training-specific context use can be separated from generalizable context use.
+
+Repeat the audit with epoch 55 as the late checkpoint for every size. This
+matched-exposure comparison is primary for differences between capacities; the
+original last-completed comparison remains useful for describing each stopped
+run but confounds checkpoint age across sizes.

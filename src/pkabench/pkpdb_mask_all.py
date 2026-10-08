@@ -1,8 +1,12 @@
 """pKPDB 5k pilot rebuilt under the mask-all-v1 component policy (component_mask_policy.py).
 
-Same cohort rules, leakage screening, label mapping, gap tiers and backbone inputs as pkpdb_pilot.py /
-pkpdb_pilot_clean.py; only component handling differs: no component chemistry rejections, class radii from
-POLICY. Kept as a separate module so the existing pkpdb-5k-v2 protocol hashes are unchanged.
+Same cohort rules, label mapping and backbone inputs as pkpdb_pilot.py / pkpdb_pilot_clean.py. Differences:
+- components: no component chemistry rejections, class radii from component_mask_policy.POLICY (2026-10-06);
+- gaps: long_gap_policy.site_usable replaces clean/uncertain anchor tiers as the usable-site rule (2026-10-08);
+- leakage: in addition to the pilot rule, a held-out benchmark hit at >= 70% identity and >= 80% coverage of both
+  sequences excludes the entry, as does the precomputed list against the PINDER held-out reference
+  (audits/seq-overlap-v1/pkpdb_heldout_exclusions_70.tsv) (2026-10-08).
+Kept as a separate module so the existing pkpdb-5k-v2 protocol hashes are unchanged.
 Usage (compute node): python -m pkabench.pkpdb_mask_all <out> [--smoke]
 """
 import concurrent.futures
@@ -26,6 +30,27 @@ from .pkpdb_pilot_refs import read, reference_inventory, cif
 from .pkpdb_pilot_clean import metadata, gap_context, gap_tier
 from .pkpdb_pilot import labels, search
 from .component_mask_policy import POLICY, classify, class_trees, nearest_by_class, clear_of_components
+from .long_gap_policy import POLICY as GAP_POLICY, site_usable
+
+EXCLUSIONS_70 = 'audits/seq-overlap-v1/pkpdb_heldout_exclusions_70.tsv'
+
+
+def heldout_70(identity, qcov, tcov, kinds):
+    """PINDER leakage rule for benchmark held-out chains: >= 70% identity over >= 80% of both sequences."""
+    return 'benchmark' in kinds and identity >= .7 and min(qcov, tcov) >= .8
+
+
+def excluded_70(out, batch_number, references, candidates):
+    """Entries excluded by heldout_70, re-read from the pilot search hits (computed at >= 30% identity, any coverage)."""
+    owners = defaultdict(set)
+    for r in candidates:
+        for c in r['chains']: owners['q'+config_hash(c['sequence'])[:24]].add(r['pdb_id'])
+    hits = out/'sequence'/f'batch-{batch_number:03d}'/'hits.tsv'; excluded = set()
+    if hits.exists():
+        for line in hits.open():
+            q, t, i, qc, tc = line.strip().split('\t')
+            if heldout_70(float(i), float(qc), float(tc), references['references'][t]['kinds']): excluded |= owners[q]
+    return excluded
 
 
 def clean(task):
@@ -91,12 +116,13 @@ def clean(task):
             a = residues[k]; points = a.coord[np.isin(a.atom_name, SITE_ATOMS[group])]
             functional = set(SITE_ATOMS[group]) <= set(a.atom_name)
             terminal = (group == 'NTERM' and positions[n] != 1) or (group == 'CTERM' and positions[n] != polylen[k[0]])
-            tier = gap_tier(points, known and functional and not terminal and not (group in ('NTERM', 'CTERM') and k in breaks), gaps)
-            distances = nearest_by_class(points, trees); usable = tier in ('clean', 'uncertain')
+            eligible = known and functional and not terminal and not (group in ('NTERM', 'CTERM') and k in breaks)
+            tier = gap_tier(points, eligible, gaps); usable, gap_reason = site_usable(points, eligible, gaps)
+            distances = nearest_by_class(points, trees)
             train = usable and clear_of_components(distances, POLICY['train_radii_A'])
             evaluation = usable and clear_of_components(distances, POLICY['eval_radii_A'])
             mapped.append(dict(complex_id=pdb, **original[n], group=group, pka=float(value), train_mask=bool(train), eval_mask=bool(evaluation),
-                natural_gap_tier=tier, functional_atoms_complete=functional, nearest_component_A=min(distances.values(), default=None),
+                natural_gap_tier=tier, gap_rule=gap_reason, functional_atoms_complete=functional, nearest_component_A=min(distances.values(), default=None),
                 nearest_component_by_class={c: round(d, 3) for c, d in distances.items()}))
             queries.append((n, GROUPS.index(group))); values.append(value); counts['raw_sites'] += 1; counts['clean_sites'] += bool(train); counts['eval_sites'] += bool(evaluation)
         if not values: raise Rejection('no_mapped_labels', json.dumps(counts))
@@ -129,15 +155,18 @@ def run(root, out, smoke=False):
     here = Path(__file__).parent
     manifest = dict(target=5000, selection_seed=20261006, label_index_sha256=digest(index), references_sha256=digest(out/'references.json'),
         validation_test_identity_cutoff=.9, validation_test_shorter_coverage=.8, experimental_identity_cutoff=.3, experimental_bidirectional_coverage=.8,
+        heldout_identity_cutoff_70=.7, heldout_bidirectional_coverage_70=.8, heldout_exclusions_70_sha256=digest(root/EXCLUSIONS_70), gap_policy=GAP_POLICY,
         selection='first 5000 eligible structures in deterministic shuffled order; same cohort for raw and cleaned labels',
         component_policy=POLICY,
-        masks='Frozen anchor gap tiers; components never reject; train/eval radii ligand 15/25, buffer 15/25, glycan 20/25, exposed ion 25/25, bound metal/complex 30/30 A',
+        masks='long-gap-v1 gap rule (anchor tiers + calibrated long-gap radii); components never reject; train/eval radii ligand 15/25, buffer 15/25, glycan 20/25, exposed ion 25/25, bound metal/complex 30/30 A',
         scope='Temporary pilot; deposited asymmetric units, 30-1500 declared protein residues, no nonprotein polymer. No pKa recalculation or structural reconstruction.',
         code={p.name: digest(p) for p in sorted(here.glob('pkpdb_pilot*.py'))+
-              [here/name for name in ('pkpdb_mask_all.py', 'component_mask_policy.py', 'audit.py', 'conformers.py', 'supervision.py', 'anchor_tiers.py')]})
+              [here/name for name in ('pkpdb_mask_all.py', 'component_mask_policy.py', 'long_gap_policy.py', 'audit.py', 'conformers.py', 'supervision.py', 'anchor_tiers.py')]})
     if (out/'protocol.json').exists(): assert read(out/'protocol.json') == manifest
     else: atomic_json(out/'protocol.json', manifest)
     accepted = []; audit = []; reserved = set(refs['reserved_pdb_ids']); batch_size = 40 if smoke else 2000
+    import csv
+    listed_70 = {r['pdb'] for r in csv.DictReader(open(root/EXCLUSIONS_70), delimiter='\t')}
     with concurrent.futures.ProcessPoolExecutor(max_workers=min(16, threads//2)) as pool:
         for batch_number, start in enumerate(range(0, len(order), batch_size)):
             ids = order[start:start+batch_size]; tasks = []
@@ -147,7 +176,7 @@ def run(root, out, smoke=False):
             meta = list(pool.map(metadata, tasks, chunksize=4)); audit.extend(r for r in meta if r['status'] != 'candidate')
             candidates = [r for r in meta if r['status'] == 'candidate']
             atomic_json(out/'status.json', dict(stage='sequence screening', batch=batch_number, accepted=len(accepted), candidates=len(candidates), target=5000))
-            excluded = search(root, out, candidates, refs, batch_number, threads)
+            excluded = set(search(root, out, candidates, refs, batch_number, threads)) | excluded_70(out, batch_number, refs, candidates) | (listed_70 & {r['pdb_id'] for r in candidates})
             passing = []
             for r in candidates:
                 if r['pdb_id'] in excluded: audit.append(dict(pdb_id=r['pdb_id'], status='rejected', reason='sequence_overlap'))
@@ -168,18 +197,19 @@ def run(root, out, smoke=False):
     for r in selected:
         assert r['pdb_id'] not in reserved
         path = out/'entries'/r['pdb_id']; assert digest(path/'graph.npz') == r['sha256'] and digest(path/'sites.json') == r['sites_sha256']
-    release = dict(target=5000, records=selected, component_policy=POLICY['version'], raw_arm='all unambiguously mapped finite scalar labels',
+    release = dict(target=5000, records=selected, component_policy=POLICY['version'], gap_policy=GAP_POLICY['version'], raw_arm='all unambiguously mapped finite scalar labels',
         clean_arm='the same structures/inputs with train_mask applied from sites.json',
         validation_source=str(root/'pretraining/graph-pilot-v1'), validation_manifest_sha256=digest(root/'pretraining/graph-pilot-v1/manifest.json'),
         protocol_sha256=digest(out/'protocol.json'), reference_sha256=digest(out/'references.json'),
         raw_sites=sum(r['counts']['raw_sites'] for r in selected), clean_sites=sum(r['counts']['clean_sites'] for r in selected),
         training_launched=False, notes=['Historical teacher preparation/version remain unknown; direct author chain/residue/type matches only.',
             'Structures must have at least one clean site in both arms; raw/clean comparison is conditional on this cohort.',
-            'Within-training component_id groups exact sequence sets only; 90% exclusion is against frozen held-out chains, not a within-training clustering claim.',
+            'Within-training component_id groups exact sequence sets only; 90%/70% exclusions are against held-out chains, not a within-training clustering claim.',
+            'Gap policy long-gap-v1: calibrated long-gap radii on pKAI deletions; pKPDB labels are PypKa, so these radii are not validated for them.',
             'Component policy mask-all-v1: component chemistry never rejects; masks only.'])
     atomic_json(out/'pilot.json', release); atomic_json(out/'verification.json', dict(passed=True, structures=5000, raw_sites=release['raw_sites'], clean_sites=release['clean_sites'], pilot_sha256=digest(out/'pilot.json')))
-    text = ['# Temporary pKPDB 5k pilot (mask-all-v1)', '', f'5,000 structures; {release["raw_sites"]:,} raw mapped sites; {release["clean_sites"]:,} clean training sites.',
-        'Leakage screening and cohort rules as pkpdb-5k-v2. Components never reject; class radii per component_mask_policy.POLICY.',
+    text = ['# Temporary pKPDB 5k pilot (mask-all-v1, long-gap-v1, 70% held-out)', '', f'5,000 structures; {release["raw_sites"]:,} raw mapped sites; {release["clean_sites"]:,} clean training sites.',
+        'Cohort rules as pkpdb-5k-v2; leakage adds the 70%/80%-both held-out rule. Components never reject (component_mask_policy); gaps per long_gap_policy.',
         'Raw and clean arms share identical inputs and structure membership. No training launched.', '', '| Audit reason | Structures |', '|---|---:|']
     text.extend(f'| {k} | {v} |' for k, v in sorted(Counter(r.get('reason', r['status']) for r in audit).items()))
     text += ['', *release['notes']]; (out/'report.md').write_text('\n'.join(text)+'\n')

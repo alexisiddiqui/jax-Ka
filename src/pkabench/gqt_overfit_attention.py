@@ -30,12 +30,14 @@ def sources(root,size):
     return early,late
 
 
-def checkpoint_spec(root,size):
+def checkpoint_spec(root,size,matched_epoch=None):
     early,late=sources(root,size);history=read(late/'seed-17/history.json')
     best=min(history,key=lambda row:row['validation']['graph_query']['mae'])
     best_source=early if best['epoch']<=20 else late
     best_path=best_source/f"seed-17/checkpoints/epoch-{best['epoch']:03d}"
-    latest=read(late/'seed-17/checkpoints/latest.json')['checkpoint'];late_path=late/'seed-17/checkpoints'/latest
+    latest=(f'epoch-{matched_epoch:03d}' if matched_epoch is not None else
+            read(late/'seed-17/checkpoints/latest.json')['checkpoint'])
+    late_path=late/'seed-17/checkpoints'/latest
     late_meta=read(late_path/'metadata.json')
     return dict(size=size,best_epoch=best['epoch'],best_validation_mae=best['validation']['graph_query']['mae'],
         best_source=str(best_source),best_checkpoint=str(best_path),best_sha256=digest(best_path/'state.npz'),
@@ -95,7 +97,7 @@ def attention_metrics(weights,graph,query_rows,query_count):
         mass_cross_chain=mass(mask&~same_chain),mass_titratable=mass(mask&neighbor_tit))
 
 
-def run(root,out):
+def run(root,out,matched_epoch=None):
     require_compute(threads=8,gpu_benchmark=True,allow_comp1400=True)
     import jax
     import jax.numpy as jnp
@@ -103,13 +105,13 @@ def run(root,out):
     from pkatrain.graph_batches import BatchLoader
     from pkabench.gqt_learning_diagnostics import perturb_batch
     out.mkdir(parents=True,exist_ok=True)
-    specs=[checkpoint_spec(root,size) for size in SIZES]
+    specs=[checkpoint_spec(root,size,matched_epoch) for size in SIZES]
     base_manifest=read(sources(root,'50k')[1]/'manifest.json')
     train=sample_train([r for r in base_manifest['records'] if r['split']=='train'])
     val=[r for r in base_manifest['records'] if r['split']=='val'];selected=train+val
     selection=dict(train_complexes=[r['complex_id'] for r in train],validation_complexes=[r['complex_id'] for r in val],
         train_components_unique=True,seed=1701)
-    atomic_json(out/'manifest.json',dict(checkpoints=specs,selection=selection,variants=list(VARIANTS),
+    atomic_json(out/'manifest.json',dict(checkpoints=specs,comparison_epoch=matched_epoch,selection=selection,variants=list(VARIANTS),
         attention_metrics=['entropy','effective','maximum','mean_distance','mass_self','mass_0_6','mass_6_10','mass_10_15','mass_15_20','mass_cross_chain','mass_titratable'],
         scope='128 component-unique training complexes and every frozen validation complex; no test data',test_data_included=False))
     site_rows=[];attention_rows=[]
@@ -242,9 +244,13 @@ def report(out):
 
 def main():
     import sys
-    action=sys.argv[1];root=Path(os.environ['PKABENCH_RUNTIME']);out=root/'audits/gqt-overfit-attention-v1'
+    action=sys.argv[1];root=Path(os.environ['PKABENCH_RUNTIME'])
+    matched=action.endswith('-matched')
+    out=root/'audits'/('gqt-overfit-attention-matched-e55-v1' if matched else 'gqt-overfit-attention-v1')
     if action=='run':run(root,out)
+    elif action=='run-matched':run(root,out,matched_epoch=55)
     elif action=='report':report(out)
+    elif action=='report-matched':report(out)
     else:raise ValueError(action)
 
 

@@ -120,6 +120,54 @@ no long gap in their record or a short gap < 20 Å stay excluded — approximate
 | Evaluation, before | 1,298,980 | 317,599 | 19,250 (10,059) |
 | Evaluation, long-gap radii | 1,996,988 | 429,634 | 30,940 (14,844) |
 
-Not adopted yet. Open: the terminal-10 result (30 Å for absolute pKAI) is stricter than the current short-tail rule
-(20 Å for lengths 6–10, calibrated on PypKa ΔpKa); ordered segments were deleted, so conservativeness for
-disordered tails is untested.
+**Adopted 2026-10-08 (user): the strictest column ("Rule used"), also replacing the 20 Å rule for 6–10 residue tails
+with 30 Å.** Chosen because the teacher (pKAI vs pKAI+) is undecided; a single-teacher column can replace it later.
+Approximate effect (`rescore_options.py`, `complexes_options.py`):
+
+| Option | Training sites | Interface | Complexes with usable interface site (clusters) |
+|---|---:|---:|---:|
+| Previous rule | 1,802,726 | 445,341 | 25,502 (12,614) |
+| **Adopted: strictest, 6–10 tails at 30 Å** | **2,655,811** | **575,262** | **39,558 (17,835)** |
+| pKAI+ absolute | 2,944,625 | 642,213 | 43,471 (19,231) |
+| pKAI ΔpKa only | 3,188,362 | 701,572 | 46,097 (20,182) |
+| pKAI+ ΔpKa only | 3,476,077 | 769,022 | 48,401 (20,974) |
+
+Ordered segments were deleted, so conservativeness for disordered tails is untested. Exact counts come from the
+labelling re-run, which recomputes tiers with these radii.
+
+### Same rule on pKPDB (2026-10-08)
+
+`audits/pkpdb-longgap-test-v1/` (copy of the mask-all-v1 threshold test with per-site gap records; job 744149,
+`results_clean/`, `score.py`, `score.out`). Exact here (records keep calibrated flag, flank-CA distance and envelope
+clearance). 19,277 entries, 2,121,580 mapped sites; the current-rule count reproduces the threshold test exactly
+(290,778). pKPDB labels are PypKa, so this measures retention only.
+
+| Rule | Entries with ≥ 1 site | Training sites |
+|---|---:|---:|
+| Current (mask-all-v1 + anchor tiers) | 9,312 | 290,778 (13.7%) |
+| **Adopted strictest, 6–10 tails at 30 Å** | **13,753** | **382,352 (18.0%)** |
+| Strictest, 6–10 tails left at 20 Å | 14,100 | 412,282 (19.4%) |
+| pKAI+ absolute (tightened) | 14,568 | 427,925 (20.2%) |
+| pKAI+ ΔpKa | 15,318 | 518,429 (24.4%) |
+
+An earlier attempt (`results/`) is corrupt: a second, unrelated submission of the same array (744027) appended to the
+same files concurrently. Ignore it.
+
+## Sequence overlap: PINDER, pKPDB, held-out (2026-10-08)
+
+`audits/seq-overlap-v1/` (`extract_seqs.py` full canonical `entity_poly` sequences from the 121,294 downloaded pKPDB
+mmCIFs, verified on 2,000 files to include unmodelled residues; `overlap.py`; jobs 744215/744216). MMseqs2 ≥ 70%
+identity, ≥ 80% coverage of both. Held-out = `pinder-prefilter-v1/ref_heldout_all.fasta` (5,775 chains).
+
+- PINDER (93,293 accepted dimers, 46,136 unique chain sequences) vs pKPDB (121,283 entries, 80,276 unique
+  sequences): 57.1% of PINDER chain sequences match pKPDB (21,798 identical); 47.6% of dimers have ≥ 1 matching
+  chain, 34.7% both; 56.2% of PINDER clusters. 51.1% of pKPDB entries have a chain matching PINDER.
+- pKPDB vs held-out: 20,302 of all entries (16.7%) match at 70%; the threshold-test slice only 211 (1.1%) because the
+  5k pilot screened at ≥ 90% identity / 80% of the shorter sequence. PINDER was screened at 70%, so the two
+  pretraining sources currently use different leakage thresholds.
+
+**Adopted 2026-10-08 (user): pKPDB uses the same 70% / 80%-both held-out rule as PINDER** (decision log in
+`00_shared.md`). `seq-overlap-v1/exclusions.py` writes `pkpdb_heldout_exclusions_70.tsv`: 20,302 entries (identity
+70–80%: 854; 80–90%: 1,512; 90–95%: 1,504; ≥ 95%: 16,432). Slice recount (`pkpdb-longgap-test-v1/score.py` with
+`EXCLUDE_70=1`, `score_excl70.out`): 19,066 entries; current rule 9,205 entries / 286,913 sites; adopted long-gap rule
+13,583 entries / 377,067 sites. Not yet wired into `pkpdb_mask_all.py` (regeneration still pending).

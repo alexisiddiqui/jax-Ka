@@ -90,3 +90,20 @@ site 5,222 → 9,312; training sites 216,111 → 290,778 (evaluation-mask sites 
 pilot radii reproduces the pilot's clean-site counts for 5,191/5,222 entries; the other 31 differ by one
 boundary site from 0.01 Å distance rounding in the test records. Regenerate into a new directory, e.g.
 `python -m pkabench.pkpdb_mask_all $PKABENCH_RUNTIME/pretraining/pkpdb-5k-v3`.
+
+## pkpdb-5k-v3 build (2026-10-08)
+
+`pkabench.pkpdb_mask_all` with `long_gap_policy` (long-gap-v1) and the 70% / 80%-both held-out rule
+(decision log 2026-10-08), via `_HPC/submission/jax-Ka/pkabench/pkpdb-mask-all.sbatch` (smoke 744282, build 744283;
+15 tests passed in-job). Reference inventory and label database copied unchanged from pkpdb-5k-v2.
+
+| Build | Entries screened to reach 5,000 | Raw mapped sites | Clean training sites | Clean per structure |
+|---|---:|---:|---:|---:|
+| pkpdb-5k-v2 (component rejections, anchor tiers, 90% leakage) | 26,000 | 490,755 | 207,064 | 41.4 |
+| pkpdb-5k-v3 (mask-all-v1, long-gap-v1, 70% leakage) | 10,000 | 578,158 | 140,460 | 28.1 |
+
+Fewer clean sites at the fixed 5,000-structure cap is a cohort effect: v2 kept only component-free entries (it rejected
+7,281 connected-component and ~2,400 other component entries), v3 masks instead of rejecting, so the first 5,000
+include component-bearing entries with lower usable fractions. The per-structure rate matches the threshold-test
+slice (377,067 sites / 13,583 entries = 27.8). v3 audit: sequence_overlap 2,264, no_clean_sites 2,070,
+incomplete_backbone 150, multiple_models 130, size 140, other 50.
