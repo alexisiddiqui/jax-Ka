@@ -14,3 +14,13 @@ read-only mmap graph store; these change padded execution only.
 Epoch 100 is selected in advance. Report training MSE, group-macro validation
 MAE with component-bootstrap intervals, learning curves and measured GPU time.
 No test data are read. Select the capacity knee only after all three runs pass.
+
+## Post-hoc futility stop
+
+The three runs were stopped after every size had passed epoch 54. At that common
+epoch, training MSE improved strongly with capacity while validation MAE was
+worse than the earlier epoch-13/20 minima for every model. This abandons the
+fixed-epoch-100 endpoint and must not be reported as its result. All epochs are
+checkpointed and resumable. A separate futility report compares the models at
+their latest common epoch and records the resource decision without selecting
+an epoch-100 checkpoint.

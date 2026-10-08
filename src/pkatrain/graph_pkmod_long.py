@@ -164,6 +164,33 @@ def report(root):
     atomic_json(base/'verification.json',dict(passed=True,results_sha256=digest(base/'results.json'),report_sha256=digest(base/'report.md'),test_data_included=False))
 
 
+def futility_report(root):
+    """Record the post-hoc, resumable stop without pretending epoch 100 completed."""
+    base=root/'pretraining/gqt-pkai-parameter-sweep-v1/gqt-long';histories={}
+    for size in SIZES:histories[size]=read(base/size/'seed-17/history.json')
+    common=min(max(row['epoch'] for row in history) for history in histories.values())
+    results=[]
+    for size in SIZES:
+        manifest=read(base/size/'manifest.json');history=histories[size]
+        matched=next(row for row in history if row['epoch']==common)
+        best=min((row for row in history if row['epoch']<=common),key=lambda row:row['validation']['graph_query']['mae'])
+        results.append(dict(size=size,parameters=manifest['config']['parameter_count'],common_epoch=common,
+            common_train_mse=matched['train_shift_mse'],common_validation_mae=matched['validation']['graph_query']['mae'],
+            best_epoch=best['epoch'],best_validation_mae=best['validation']['graph_query']['mae'],
+            completed_epoch=max(row['epoch'] for row in history),resumable_checkpoint=True))
+    atomic_json(base/'futility_results.json',results)
+    lines=['# GQT size-sweep futility stop','',
+        f'The preregistered epoch-100 continuations were stopped post hoc after all three models reached epoch {common}. Every epoch is checkpointed and the runs remain resumable. This is a resource-futility decision, not an epoch-100 result.','',
+        '| Size | Parameters | Train MSE at common epoch | Validation MAE at common epoch | Best validation MAE through common epoch | Best epoch | Last completed epoch |',
+        '|---|---:|---:|---:|---:|---:|---:|']
+    for row in results:lines.append(f"| {row['size']} | {row['parameters']:,} | {row['common_train_mse']:.4f} | {row['common_validation_mae']:.4f} | {row['best_validation_mae']:.4f} | {row['best_epoch']} | {row['completed_epoch']} |")
+    lines+=['',
+        'At the common epoch, larger models fit the training labels substantially better while every validation MAE was worse than its epoch-13/20 minimum. Continuing the scheduled decay would answer the abandoned fixed-epoch protocol but is not needed to establish that capacity alone does not repair generalization on this 5k cohort. No test data were read.']
+    (base/'futility_report.md').write_text('\n'.join(lines)+'\n')
+    atomic_json(base/'futility_verification.json',dict(passed=True,post_hoc_stop=True,common_epoch=common,
+        resumable=True,results_sha256=digest(base/'futility_results.json'),report_sha256=digest(base/'futility_report.md'),test_data_included=False))
+
+
 def main():
     import sys
     action=sys.argv[1];root=Path(os.environ['PKABENCH_RUNTIME']);gpu=action=='train'
@@ -172,6 +199,7 @@ def main():
     if action=='register':register(root)
     elif action=='train':train(root,sys.argv[2])
     elif action=='report':report(root)
+    elif action=='futility-report':futility_report(root)
     else:raise ValueError(action)
 
 

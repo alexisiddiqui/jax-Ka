@@ -89,3 +89,37 @@ The usable fraction is well below the random sample (28%): one-per-cluster
 selection is gappier than the redundancy-weighted sample (EM clean+uncertain
 16% vs 38%, X-ray 29% vs 46%; `tier_by_method.py`). Cause not yet verified.
 Unmodelled-termini calibration is the largest remaining lever.
+
+## Long-gap calibration for pKAI labels (2026-10-08)
+
+`audits/pinder-longgap-v1/` (`select_refs.py`, `calib.py`, `analyze.py`, `rescore.py`; job 743812). 516 fully
+modelled X-ray/EM PINDER references (one per cluster, stratified hetero/homo/Ab-Ag × method), prepared exactly as
+`prep_v7.py`, intact and with observed coordinates deleted before preparation: N/C-terminal 10/20/30/50 and internal
+5/10/20 residues (5,676 variants, all succeeded). pKAI and pKAI+ on AB/A/B; error = variant − intact. Intact repeats
+are bit-identical; free-state error of the untouched partner is exactly 0. Distance = site functional atoms to flank
+CA (the stored gap anchor). Criterion as the pKPDB anchor tiers: 5 Å bands, 1,000 whole-reference bootstraps,
+upper 95% of p95 error < 0.1 pKa, ≥ 10 references and 20 observations per band.
+
+| Gap | pKAI abs | pKAI Δ | pKAI+ abs | pKAI+ Δ | Rule used (max) |
+|---|---:|---:|---:|---:|---:|
+| terminal 10 | 30 | 20 | 25 | 15 | 30 |
+| terminal 20 | 35 | 25 | 30 | 20 | 35 |
+| terminal 30 | 40 | 30 | 35 | 25 | 40 |
+| terminal 50 | 45 | 35 | 35 | 30 | 45 |
+| internal 5 | 20 | 15 | 15 | 10 | 20 |
+| internal 10 | 20 | 20 | 20 | 15 | 20 |
+| internal 20 | 25 | 20 | 25 | 15 | 25 |
+
+Rescore of the stored records (lengths round up to the next tested length; longer gaps stay uncalibrated; sites with
+no long gap in their record or a short gap < 20 Å stay excluded — approximate until exact tiers are recomputed):
+
+| Rule | Sites | Interface | Dimers with usable interface (clusters) |
+|---|---:|---:|---:|
+| Training, before | 1,802,726 | 445,341 | 25,502 (12,614) |
+| Training, long-gap radii | 2,786,907 | 611,965 | 41,353 (18,563) |
+| Evaluation, before | 1,298,980 | 317,599 | 19,250 (10,059) |
+| Evaluation, long-gap radii | 1,996,988 | 429,634 | 30,940 (14,844) |
+
+Not adopted yet. Open: the terminal-10 result (30 Å for absolute pKAI) is stricter than the current short-tail rule
+(20 Å for lengths 6–10, calibrated on PypKa ΔpKa); ordered segments were deleted, so conservativeness for
+disordered tails is untested.
