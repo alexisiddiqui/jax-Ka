@@ -3,7 +3,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from pkatrain.trainer import ScalarEngine
-from pkatrain.graph_batches import epoch_batches
+from pkatrain.graph_batches import epoch_batches,tightened_capacity
 
 
 def test_batched_gradient_and_update_match_accumulated_structures():
@@ -28,3 +28,20 @@ def test_bucketing_preserves_sampled_membership_and_tail():
     batches=epoch_batches(order,records,np.random.default_rng(17),3)
     assert Counter(x for batch in batches for x in batch)==Counter(order)
     assert all(1<=len(batch)<=3 for batch in batches)
+
+
+def test_tightened_capacity_is_rounded_and_capped_by_legacy_bucket():
+    records={
+        'a':dict(n=129,k=65,q=7),
+        'b':dict(n=250,k=70,q=9),
+    }
+    manifest=dict(capacities={'384':[384,160,32]},config=dict(capacity_rounding=[128,64,None]))
+    assert tightened_capacity(['a','b'],records,manifest)==[256,128,32]
+    records['b'].update(n=380,k=159)
+    assert tightened_capacity(['a','b'],records,manifest)==[384,160,32]
+
+
+def test_no_tightened_policy_preserves_legacy_loader_path():
+    records={'a':dict(n=12,k=8,q=3)}
+    manifest=dict(capacities={'384':[32,32,32]},config={})
+    assert tightened_capacity(['a'],records,manifest) is None

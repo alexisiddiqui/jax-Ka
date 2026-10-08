@@ -65,7 +65,8 @@ def prepare(source,out):
     manifest=dict(source=str(source),source_manifest_sha256=digest(source/'manifest.json'),
         train=parent['train'],val=parent['val'],records=rows,capacities=capacities,
         config=dict(seed=17,epochs=20,learning_rate=.001,accumulation=8,dtype='float32',objective='single-state scalar pKa MSE',
-            state='AB',radius_A=20,paired_weight=0,selection='final epoch; validation is reporting only'),
+            state='AB',radius_A=20,paired_weight=0,selection='final epoch; validation is reporting only',
+            capacity_rounding=[128,64,None],capacity_shape_cap=12),
         label_source='Current native-v2 PypKa, not historical pKPDB',
         scope='All eligible finite AB midpoints; not restricted to interface. Frozen component split and original quality masks. No test data.')
     atomic_json(out/'manifest.json',manifest)

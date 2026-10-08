@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from itertools import repeat
 from pathlib import Path
 from threading import Lock
+import math
 import time
 import os
 import numpy as np
@@ -18,6 +19,25 @@ def epoch_batches(order,byid,rng,batch_size):
     batches=[members[i:i+batch_size] for members in buckets.values() for i in range(0,len(members),batch_size)]
     rng.shuffle(batches)
     return batches
+
+
+def tightened_capacity(cids,byid,manifest):
+    """Return the manifest-recorded capped N/K/Q policy for one sampled batch."""
+    policy=manifest.get('config',{}).get('capacity_rounding')
+    if policy is None:return None
+    if len(policy)!=3:raise ValueError(f'capacity_rounding must contain N/K/Q entries: {policy}')
+    current=list(manifest['capacities'][bucket(byid[cids[0]])])
+    if len({bucket(byid[cid]) for cid in cids})!=1:raise ValueError('A batch crossed legacy capacity buckets')
+    result=[]
+    for i,(key,step) in enumerate(zip(('n','k','q'),policy)):
+        if step is None:result.append(current[i]);continue
+        step=int(step)
+        if step<=0:raise ValueError(f'Capacity quantum must be positive: {policy}')
+        required=max(int(byid[cid][key]) for cid in cids)
+        result.append(min(current[i],int(math.ceil(required/step)*step)))
+    if any(int(byid[cid][key])>result[i] for cid in cids for i,key in enumerate(('n','k','q'))):
+        raise ValueError('Tight capacity cannot hold sampled batch')
+    return result
 
 
 class LoaderTelemetry:
@@ -111,6 +131,7 @@ class BatchLoader:
         began=time.perf_counter() if self.telemetry is not None else None
         assert 0<len(cids)<=self.batch_size
         assert len({bucket(self.byid[cid]) for cid in cids})==1
+        if capacities is None:capacities=tightened_capacity(cids,self.byid,self.manifest)
         items=list(self.pool.map(self.one,cids,repeat(capacities)))
         valid=np.arange(self.batch_size)<len(items)
         while len(items)<self.batch_size:

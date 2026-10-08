@@ -64,3 +64,28 @@ first); RCSB sequences; leakage vs test + validation + reserved + set-2 chains a
 Prefiltering drops the remaining copies of each interface — other PDB entries,
 conformations and assembly copies of the same interaction. They could be added
 later, for clusters of interest or as conformational augmentation. Not decided.
+
+## Prefiltered preparation result (2026-10-07/08)
+
+`pinder-prep-v2/prep_v7.py` on the 109,866 first-pass dimers (`shards_pf`) plus a
+fallback round (`build_fb_shards.py`: next 5 survivors for clusters with no
+accepted first-pass dimer; 459 of 7,499 such clusters had any, 1,589 dimers, 5
+newly accepted). Scored by `score_final.py` (output `score_final.out`).
+
+- Prepared 111,455: accepted 93,293 (62,284 hetero, 28,341 homo, 2,668 Ab/Ag),
+  rejected 17,125, chain not found 1,034, crashed 3 (1m4x, 5l35 exceed memory).
+  34,909 of 42,378 clusters have an accepted dimer.
+- Sites 14.86M, interface 3.74M.
+
+| Rule | Usable sites | Interface | Dimers with ≥1 usable interface site (clusters) | hetero / homo / Ab/Ag dimers |
+|---|---:|---:|---:|---|
+| Training | 1,802,726 (12.1%) | 445,341 | 25,502 (12,614) | 14,358 / 10,198 / 946 |
+| Evaluation | 1,298,980 (8.7%) | 317,599 | 19,250 (10,059) | 11,131 / 7,375 / 744 |
+
+Training-rule losses: uncalibrated gaps 59.2% (mostly unmodelled termini > 10),
+near short gaps 12.1%, component masks 10.3%, ineligible 6.2%.
+
+The usable fraction is well below the random sample (28%): one-per-cluster
+selection is gappier than the redundancy-weighted sample (EM clean+uncertain
+16% vs 38%, X-ray 29% vs 46%; `tier_by_method.py`). Cause not yet verified.
+Unmodelled-termini calibration is the largest remaining lever.
