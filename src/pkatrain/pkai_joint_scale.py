@@ -405,7 +405,7 @@ def pack_features(root):
 
 def feature_smoke(root):
     root=Path(root);require_compute(threads=int(os.environ.get("SLURM_CPUS_PER_TASK","1")))
-    cid="6dms";pinder_id=next((p.name for p in (pinder_source(root)/"entries").iterdir() if p.is_dir()))
+    cid="6dms";pinder_id="3j47__A1_P43588--3j47__D1_Q12250"
     pk=_pkpdb_feature_record(root,cid);pi=_pinder_feature_record(root,pinder_id,"train")
     checks={"pkpdb":{k:list(v.shape) for k,v in pk.items()},"pinder":{k:list(v.shape) for k,v in pi.items()}}
     for arrays in (pk,pi):

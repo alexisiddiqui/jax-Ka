@@ -22,3 +22,18 @@ Job `747150` exercised both representations on real frozen pilot records. Each m
 | All atom | 0.97075 | 0.85202 | 0.000118 | 124 MiB | pass |
 
 Every component gradient was finite and nonzero. The shared parameters changed, input arrays remained bit-identical, and swapping both Siamese branches left the paired loss unchanged. No production pool or test data was read. The machine-readable receipt is `training/pkai-joint-scale-v1/smoke.json` in the benchmark runtime.
+
+## First production screen
+
+The first production screen is restricted to the nested 10% pools and uses a 2 x 2 design: backbone versus native all-atom input, and pKPDB-only versus joint pKPDB/PINDER training. All four models use seed 17 and scratch initialization. Batch size is 256 and the square-root learning-rate rule gives `1e-6 * sqrt(256/64) = 2e-6`. State losses use the registered burial weights, the Siamese loss uses the registered interface-distance weights, and model selection uses unweighted validation metrics.
+
+| Stage | Slurm job |
+|---|---:|
+| Real-record feature smoke | 747967 |
+| Retry pKPDB pool-v3 with 64 GiB (the 16-GiB job 747925 was OOM-killed) | 747973 |
+| Freeze 10% records after pool-v3 | 747974 |
+| Backbone + all-atom preparation, 200 x 2 CPU tasks | 747975 |
+| Immutable mmap packing | 747976 |
+| Four A40 training arms | 747977 |
+
+CPU preparation excludes comp1400 and caps the array at 400 queued cores. Each GPU task requests exactly two CPUs and 8 GiB host RAM. Every downstream stage uses `afterok`, so failed feature validation cannot fall through into training.
