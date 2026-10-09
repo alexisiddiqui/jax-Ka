@@ -1,0 +1,21 @@
+{
+ "version": "pinder-heldout-exclusions-v3",
+ "sha256": "6f8ae1741811da9eb467b69b76ef0a37e6c5e48011907c7b9a52544c7500af93",
+ "supersedes": "pinder-heldout-exclusions-v2",
+ "v2_sha256": "332eb8fcecf1ac21565ff20000faa9f12f9ed527af3d17ab71d4c99e9e106258",
+ "complexes_excluded": 4298,
+ "added_cdr_heldout_70": 281,
+ "clusters_touched": 2061,
+ "abag_excluded": 645,
+ "heldout_cdr_sets": {
+  "H": {
+   "path": "/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/audits/ab-cdr-gap-v1/heldout_cdr_H.fasta",
+   "sha256": "50b9af34d50f71fd0ea10268b73c4c3c56ffdc681e015f59b351948c344fdbb1"
+  },
+  "L": {
+   "path": "/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/audits/ab-cdr-gap-v1/heldout_cdr_L.fasta",
+   "sha256": "e039874af107803498ea1df14f3c7b7e2bae6590b1bd2fa5e32beee92202d0a6"
+  }
+ },
+ "rule": "v2 + Ab/Ag dimers whose antibody chain concatenated CDRs are >= 0.70 identical (same chain type) to the complete held-out CDR sets"
+}

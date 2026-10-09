@@ -305,3 +305,59 @@ earlier records are unchanged (graph and sites hashes identical). `sequence_over
 
 Factorial cohort (decision log 2026-10-09): left as registered, with the caveat above; subsequent training subsets are
 drawn from the full pool after the v2 exclusions (`pinder_heldout_exclusions_v2.tsv`).
+
+### Antibody CDR gap fixed (v3, 2026-10-09)
+
+The antibody path compared CDRs only with held-out complexes carrying SAbDab CDR annotations; 116 heavy and 122 light
+held-out antibody chains (mostly Fab-internal and unresolved-antibody test complexes) had none, so identical antibodies
+passed (e.g. 1u91, 1mcp, 4hbc). `audits/ab-cdr-gap-v1/check.py` transfers CDRs onto every held-out chain that aligns to
+a SAbDab-annotated V domain (complete sets: 419 H / 342 L, previously 303 / 220; `heldout_cdr_{H,L}.fasta`).
+
+- PINDER `pinder_heldout_exclusions_v3.tsv` (sha256 `6f8ae174…`) = v2 + 281 Ab/Ag dimers whose antibody CDRs are ≥ 70% to
+  the complete sets (rule `cdr_heldout_70`): 4,298 complexes. `summary_clean_v3.json`: 35,967 complexes with a labelled
+  usable interface site (21,444 hetero / 13,479 homo / 1,044 Ab/Ag), 16,264 clusters, 2,185,008 training sites with bound
+  and free labels (477,379 interface), evaluation 1,559,766 (335,272).
+- pKPDB `pkpdb_ab_path_v2.tsv` (sha256 `8cc54013…`) uses the complete sets: 660 entries released (v1: 860). Four entries
+  released only by the v2 run (alignment-borderline CDRs) are `withheld_unstable`, so v2 releases only what both runs
+  release. `pkpdb_mask_all --revise` (job 746446; previous builds in `revisions/00`, `revisions/01`): **63,814
+  structures, 1,791,317 clean sites**, 7,346,962 raw; 186 entries withdrawn, all others byte-identical.
+
+### pKPDB chain distance (2026-10-09)
+
+User decision: no Siamese task on pKPDB; add the closest-chain distance instead. `environment.json` is now
+`resolved-v2` for all 63,814 entries (`audits/pinder-label-v1/pkpdb_env.py`, copy in `experiments/4_backbone/scripts/`):
+`rsa`, `w_burial` (unchanged, verified identical) plus `chain_distance_A` (residue-level minimum heavy-atom distance to
+any other selected protein chain, homomer copies included; as PINDER `partner_distance_A`) and `w_interface`
+(`site_weights.interface_weight`). Both are null for one-chain entries; 33,686 entries (4,858,146 sites) have distances.
+Tasks 48–99 ran on comp1400 (user-authorised one-off, `_HPC/submission/jax-Ka/pkabench/comp1400-oneoff-env.sh`) while the
+general partitions were full.
+
+### Training pools and nested subsets (`pkabench.training_pools`, pool-v3, 2026-10-09)
+
+Pools are training-only. Validation sets: PINDER 400 (`training/ogqt-pinder-factorial-v1/cohort.json` val; pKAI, current
+PypKa audit) and the benchmark validation split (142 complexes in use; PypKa, pKAI, pKAI+ in AB/A/B in
+`campaigns/production-full-v2`; pKAI there has no terminus sites). Pool rules:
+
+- PINDER: accepted, not in exclusions v3, outside the 400 validation clusters (899 removed), ≥ 1 labelled usable
+  interface site with both weights; all PINDER splits and all prepared complexes per cluster. Group = PINDER cluster;
+  strata hetero / homo / Ab/Ag. `chain_70_to_validation` flags (does not remove) 258 complexes with a chain ≥ 70% / 80%
+  both to a validation chain in another cluster.
+- pKPDB: every `pilot.json` record minus entries with a chain ≥ 70% / 80% both to a PINDER validation chain. Group =
+  sorted set of the entry's MMseqs2 30% / 80% chain clusters; strata monomer / homomer / heteromer.
+- Both: structures with a chain exactly identical to a held-out benchmark chain or a pKPDB reference sequence (or, for
+  pKPDB, a PINDER validation chain) are removed; this catches peptides too short for MMseqs2 (12 PINDER, 6 pKPDB beyond
+  pool-v2).
+- Subsets: seeded hash rank per group within its stratum, `min_fraction = (position + 1) / groups in stratum`; fraction f
+  keeps `min_fraction ≤ f` (nested, stratified, groups never split).
+
+| Fraction | PINDER complexes / clusters | PINDER sites (interface) | pKPDB structures / groups | pKPDB sites |
+|---|---:|---:|---:|---:|
+| 10% | 3,422 / 1,585 | 176,871 (42,819) | 5,878 / 1,595 | 157,674 |
+| 50% | 17,444 / 7,931 | 905,085 (229,293) | 31,456 / 7,982 | 891,094 |
+| 75% | 26,242 / 11,896 | 1,368,451 (345,733) | 46,860 / 11,972 | 1,334,029 |
+| 100% | 35,056 / 15,864 | 1,834,630 (462,913) | 62,874 / 15,965 | 1,760,590 |
+
+Files: `pretraining/pinder-pkai-v1/pool-v3.{tsv,json}`, `pretraining/pkpdb-full-v1/pool-v3.{tsv,json}`. Loader notes:
+pKPDB is redundant (largest group 556 structures; the top 1% of groups hold 30% of sites; PINDER: max 5, 9%), so sample
+by `group` rather than by structure or site; 5,694 PINDER and 7,917 pKPDB pool structures exceed the 768-residue GQT
+bucket cap (`n_res` column).
