@@ -220,3 +220,88 @@ Final counts with termini (`summary.json`, job 746014; all 93,293 `labels.json` 
 | Evaluation-mask labelled sites (interface) | 1,587,473 (338,694) | 1,626,125 (350,641) |
 
 Remaining unlabelled usable sites are arginines (no teacher labels them) and termini adjacent to chain gaps.
+
+### Held-out exclusions harmonised with pKPDB (2026-10-09)
+
+PINDER's prefilter applied only the 70% / 80%-both rule against held-out chains (plus antibody CDR/antigen checks);
+pKPDB additionally applies the experimental 30% rule, the 90% fragment rule and exact reserved PDB IDs. Those three
+rules applied to PINDER (`audits/pinder-exp-leak-v1/exclusions.py`, references `pkpdb-full-v1/references.json`,
+sha256 `48225053…`, identical to pkpdb-5k-v2/v3) give `pinder_heldout_exclusions_v1.tsv` (sha256 `91069204…`, copied
+into `pretraining/pinder-pkai-v1/` with `exclusions_v1.json`): 5,605 of 93,293 complexes, 2,735 clusters touched
+(experimental 30%: 3,785; fragment 90%: 2,746; reserved PDB ID: 50). Labels are unchanged; the list is a filter.
+
+Counts after exclusion (`summary_clean_v1.json`; `summary.json` left unchanged because
+`training/ogqt-pinder-factorial-v1` hashes it):
+
+| | Before | After exclusions | Removed |
+|---|---:|---:|---:|
+| Complexes | 93,293 | 87,688 | 5,605 |
+| Training-mask sites with bound + own-free labels | 2,272,062 | **2,143,026** | 129,036 |
+| …interface | 497,872 | **471,396** | 26,476 |
+| Complexes with ≥ 1 labelled usable interface site | 37,603 | **35,305** | 2,298 |
+| …hetero / homo / Ab/Ag | 22,467 / 13,757 / 1,379 | 21,444 / 13,479 / **382** | 1,023 / 278 / 997 |
+| Clusters | 17,102 | **15,874** | 1,228 |
+| Evaluation-mask labelled sites (interface) | 1,626,125 (350,641) | 1,526,337 (330,798) | 99,788 (19,843) |
+
+Antibody complexes lose 72%: 1,830 of the 1,952 flagged Ab/Ag complexes hit the experimental 30% rule, almost all via
+two Fab references (1igc: 1,508 hits on heavy and light chains; 1axt: 308), whose conserved framework and constant
+domains exceed 30% / 80% for essentially any Fab. Factorial cohort (`training/ogqt-pinder-factorial-v1/cohort.json`):
+438 / 5,000 train and 12 / 400 val complexes are on the list (`audits/pinder-exp-leak-v1/factorial_cohort_flagged.tsv`).
+
+**Antibody path (v2, adopted 2026-10-09).** v1 applied the extra rules whole-chain to antibody chains, bypassing the
+prefilter's Ab/Ag path (antigen chain whole-chain, antibody chain by CDRs). The two Fab references (1igc, 1axt) are
+experimental-only, so their CDRs were never in the prefilter's held-out CDR set. `audits/pinder-exp-leak-v1/ab_rule.py`
+transfers CDRs onto the experimental antibody chains (1igc and 1axt H/L) by alignment to SAbDab-annotated V domains, as
+in the prefilter, and re-checks flagged Ab/Ag dimers: antigen chain experimental 30% / fragment 90% whole-chain;
+antibody chain concatenated CDRs ≥ 70% (same chain type) vs the experimental CDRs; reserved PDB IDs unchanged. Of 1,952
+flagged Ab/Ag dimers, 1,588 are released; 364 stay excluded (334 antigen fragment 90%, 27 antigen experimental 30%,
+3 CDR-only), with the antibody-path reason in column `ab_path_rules`. Other dimers, including antibody heavy–light
+pairs (a framework interface), keep the whole-chain rules as in the prefilter.
+
+`pinder_heldout_exclusions_v2.tsv` (sha256 `332eb8fc…`, 4,017 complexes, 1,882 clusters touched; `exclusions_v2.json`)
+supersedes v1. Counts (`summary_clean_v2.json`, `EXCL_VERSION=v2 summarize_clean.py`):
+
+| | Before | v1 | **v2 (adopted)** |
+|---|---:|---:|---:|
+| Complexes | 93,293 | 87,688 | **89,276** |
+| Training-mask sites with bound + own-free labels | 2,272,062 | 2,143,026 | **2,192,979** |
+| …interface | 497,872 | 471,396 | **478,590** |
+| Complexes with ≥ 1 labelled usable interface site | 37,603 | 35,305 | **36,134** |
+| …hetero / homo / Ab/Ag | 22,467 / 13,757 / 1,379 | 21,444 / 13,479 / 382 | **21,444 / 13,479 / 1,211** |
+| Clusters | 17,102 | 15,874 | **16,368** |
+| Evaluation-mask labelled sites (interface) | 1,626,125 (350,641) | 1,526,337 (330,798) | **1,565,937 (336,177)** |
+
+Factorial cohort on the v2 list: 250 / 5,000 train and 12 / 400 val (`factorial_cohort_flagged_v2.tsv`).
+
+**pKPDB under the same antibody path (measured 2026-10-09, not applied).** pKPDB rejects a whole entry when any chain
+hits, with no antibody path. `audits/pkpdb-ab-path-v1/measure.py` collects each `sequence_overlap` entry's offending
+chains from the full build's own three sources (`excluded.json`, the 70% rule re-read from `hits.tsv`,
+`pkpdb_heldout_exclusions_70.tsv`) and releases an entry only if every offending chain is an antibody chain whose CDRs
+are < 70% identical to both the held-out CDR sets (prefilter) and the experimental antibody CDRs:
+
+| pkpdb-full-v1 `sequence_overlap` entries | 27,716 |
+|---|---:|
+| Offending chain is not an antibody (stay excluded) | 25,383 |
+| Antibody CDRs ≥ 70% to a held-out or experimental antibody (stay excluded) | 1,400 |
+| CDRs not transferable (stay excluded) | 73 |
+| **Released, entry also has a non-antibody chain** | **450** |
+| **Released, antibody-only entry** | **410** |
+
+The two 70% hits whose sequence is absent from the entity table (ubiquitin variants) belong to entries that stay
+excluded. At the build's acceptance rate after screening (~70%), the 860 released entries would add roughly 600
+structures to the 63,240 accepted. **Applied (user decision 2026-10-09):** `pkpdb_mask_all` subtracts the released entries (`ANTIBODY_PATH`,
+`antibody_released`; sha256 and rule in `protocol.json`) and gains `--revise`, which moves the previous protocol and
+outputs of a verified build to `revisions/<n>/` and reuses cached entry receipts, so only newly passing entries are
+cleaned. pkpdb-full-v1 is revised in place (job 746097, after the first build 746072 and its environment pass 746073),
+followed by the environment pass for the new entries (746098).
+
+Result (jobs 746072 → 746073 → 746097 → 746098, all completed): pkpdb-full-v1 now holds **64,000** structures
+(previously 63,240), **1,802,108** clean training sites (previously 1,764,340) and 7,367,205 raw mapped sites; 1 pipeline
+error (unchanged). Of the 860 released entries, 760 were accepted (388 with a non-antibody chain, 372 antibody-only),
+72 had no clean sites, 27 an incomplete backbone and 1 ambiguous occupancy; they add 37,768 clean sites. All 63,240
+earlier records are unchanged (graph and sites hashes identical). `sequence_overlap` rejections fall from 27,716 to
+26,856. Every record has `environment.json` (rsa, w_burial) aligned with `sites.json`. The previous build is in
+`revisions/00/`; `protocol.json` records `revises_protocol_sha256` and `antibody_path_sha256`.
+
+Factorial cohort (decision log 2026-10-09): left as registered, with the caveat above; subsequent training subsets are
+drawn from the full pool after the v2 exclusions (`pinder_heldout_exclusions_v2.tsv`).
