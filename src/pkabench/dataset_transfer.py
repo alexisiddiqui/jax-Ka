@@ -8,8 +8,8 @@ All operations are idempotent and safe to re-run or run concurrently:
   sizes, so a changed source gets a new directory and an unchanged one is reused.
 - export: deterministic shards (<= SHARD_BYTES) per dataset part, written by parallel processes with per-file and
   per-shard sha256 in `<dataset>-bundle.json`; shards that already verify are skipped on re-run.
-- import: verify shard hash, extract to a pending directory, verify every file against the manifest, then install
-  files; a per-shard marker under `<root>/.imports/` makes re-runs no-ops and interrupted imports resume.
+- import: one streaming pass per shard (shards in parallel) hashes the shard and every file while extracting to a
+  pending directory; files are installed only if all match the manifest; a per-shard marker under `<root>/.imports/` makes re-runs no-ops and interrupted imports resume.
 Paths inside bundles are relative to PKABENCH_RUNTIME, so code that uses runtime-relative paths works after import.
 
 Usage (compute node):
@@ -35,6 +35,7 @@ import socket
 import subprocess
 import tarfile
 import time
+import zlib
 from pathlib import Path
 
 FORMAT = "pkabench-dataset-bundle-v1"
@@ -273,55 +274,72 @@ def export(root, dataset, out, *, graphs=False, scope="pool", workers=4):
 
 
 # ---------------------------------------------------------------- import / verify
-def _safe_members(tar, expected):
-    for member in tar.getmembers():
-        name = member.name
-        if not member.isfile() or name.startswith("/") or ".." in Path(name).parts or name not in expected:
-            raise IOError(f"unexpected member in shard: {name}")
-        yield member
+def _member_ok(member, expected):
+    name = member.name
+    return member.isfile() and not name.startswith("/") and ".." not in Path(name).parts and name in expected
 
 
-def import_bundle(manifest_path, root, parts=None):
-    """Install a bundle under `root`. Returns {shard: 'installed'|'present'}."""
+def _extract_verified(path, pending, files, seen, shard, name):
+    """Stream the shard once, hashing it and each member while extracting into `pending`; raise on any mismatch."""
+    with open(path, "rb") as raw:
+        reader = _HashingReader(raw)
+        with tarfile.open(fileobj=io.BufferedReader(reader, CHUNK), mode="r|*") as tar:
+            for member in tar:
+                if not _member_ok(member, files) or member.name in seen: raise IOError(f"unexpected member in shard {name}: {member.name}")
+                target = pending / member.name; target.parent.mkdir(parents=True, exist_ok=True); digest = hashlib.sha256()
+                with tar.extractfile(member) as src, open(target, "wb") as dst:
+                    for block in iter(lambda: src.read(CHUNK), b""): digest.update(block); dst.write(block)
+                meta = files[member.name]
+                if member.size != meta["size"] or digest.hexdigest() != meta["sha256"]: raise IOError(f"file does not match manifest: {member.name}")
+                seen.add(member.name)
+        while reader.readinto(bytearray(CHUNK)): pass  # hash any trailing bytes
+    if reader.hash.hexdigest() != shard["sha256"]: raise IOError(f"shard sha256 mismatch: {path}")
+    if seen != set(files): raise IOError(f"shard {name} is missing {len(set(files) - seen)} files")
+
+
+def _import_shard(task):
+    """One shard, one streaming pass: the shard hash and every file hash are computed while extracting into a pending
+    directory; nothing is installed unless all of them match the manifest."""
+    bundle, root, marks, shard, files = task
+    bundle, root, marks = Path(bundle), Path(root), Path(marks); name = shard["name"]; marker = marks / f"{name}.json"
+    def present():
+        if not marker.exists() or json.loads(marker.read_text()).get("sha256") != shard["sha256"]: return False
+        return all((root / rel).is_file() and (root / rel).stat().st_size == meta["size"] for rel, meta in files.items())
+    if present(): return name, "present"
+    with locked(marks / f".{name}.lock"):
+        if present(): return name, "present"
+        _clean_stale(marks / name); pending = marks / f"{name}.pending-{socket.gethostname()}-{os.getpid()}"
+        if pending.exists(): shutil.rmtree(pending)
+        pending.mkdir(); seen = set()
+        try:
+            _extract_verified(bundle / name, pending, files, seen, shard, name)
+        except (tarfile.TarError, EOFError, zlib.error) as error:
+            shutil.rmtree(pending, ignore_errors=True); raise IOError(f"unreadable shard {bundle / name}: {error}") from error
+        except Exception:
+            shutil.rmtree(pending, ignore_errors=True); raise
+        for rel, meta in files.items():
+            dest = root / rel; dest.parent.mkdir(parents=True, exist_ok=True)
+            if dest.exists() and not dest.is_file(): raise IOError(f"not a file: {dest}")
+            if dest.is_file() and dest.stat().st_size == meta["size"] and sha256_file(dest) == meta["sha256"]: continue
+            os.replace(pending / rel, dest)
+        shutil.rmtree(pending)
+        _atomic_json(marker, {"sha256": shard["sha256"], "files": len(files), "installed": time.time()})
+    return name, "installed"
+
+
+def import_bundle(manifest_path, root, parts=None, workers=4):
+    """Install a bundle under `root`, shards in parallel processes. Returns {shard: 'installed'|'present'}."""
     manifest_path = Path(manifest_path); bundle = manifest_path.parent; root = Path(root)
     manifest = json.loads(manifest_path.read_text())
     if manifest["format"] != FORMAT: raise ValueError(manifest["format"])
-    dataset = manifest["dataset"]; marks = root / ".imports" / dataset; marks.mkdir(parents=True, exist_ok=True)
+    marks = root / ".imports" / manifest["dataset"]; marks.mkdir(parents=True, exist_ok=True)
     by_shard = {}
     for rel, meta in manifest["files"].items(): by_shard.setdefault(meta["shard"], {})[rel] = meta
-    result = {}
-    for part, shards in manifest["parts"].items():
-        if parts is not None and part not in parts: continue
-        for shard in shards:
-            name = shard["name"]; marker = marks / f"{name}.json"; files = by_shard[name]
-            def present():
-                if not marker.exists() or json.loads(marker.read_text()).get("sha256") != shard["sha256"]: return False
-                return all((root / rel).is_file() and (root / rel).stat().st_size == meta["size"] for rel, meta in files.items())
-            if present(): result[name] = "present"; continue
-            with locked(marks / f".{name}.lock"):
-                if present(): result[name] = "present"; continue
-                path = bundle / name
-                if sha256_file(path) != shard["sha256"]: raise IOError(f"shard sha256 mismatch: {path}")
-                pending = marks / f"{name}.pending-{socket.gethostname()}-{os.getpid()}"
-                if pending.exists(): shutil.rmtree(pending)
-                pending.mkdir()
-                with tarfile.open(path, "r:*") as tar:
-                    for member in _safe_members(tar, files):
-                        target = pending / member.name; target.parent.mkdir(parents=True, exist_ok=True)
-                        with tar.extractfile(member) as src, open(target, "wb") as dst: shutil.copyfileobj(src, dst, CHUNK)
-                for rel, meta in files.items():
-                    target = pending / rel
-                    if not target.is_file() or target.stat().st_size != meta["size"] or sha256_file(target) != meta["sha256"]:
-                        raise IOError(f"extracted file does not match manifest: {rel}")
-                for rel, meta in files.items():
-                    dest = root / rel; dest.parent.mkdir(parents=True, exist_ok=True)
-                    if dest.is_file() and dest.stat().st_size == meta["size"] and sha256_file(dest) == meta["sha256"]: continue
-                    if dest.exists() and not dest.is_file(): raise IOError(f"not a file: {dest}")
-                    os.replace(pending / rel, dest)
-                shutil.rmtree(pending)
-                _atomic_json(marker, {"sha256": shard["sha256"], "files": len(files), "installed": time.time()})
-                result[name] = "installed"
-    return result
+    tasks = [(str(bundle), str(root), str(marks), shard, by_shard[shard["name"]])
+             for part, shards in manifest["parts"].items() if parts is None or part in parts for shard in shards]
+    if workers <= 1 or len(tasks) <= 1: return dict(map(_import_shard, tasks))
+    with concurrent.futures.ProcessPoolExecutor(min(workers, len(tasks)), mp_context=multiprocessing.get_context("spawn")) as pool:
+        return dict(pool.map(_import_shard, tasks))
 
 
 def _check(task):
@@ -383,7 +401,7 @@ def main(argv=None):
     if args.action == "export":
         m = export(runtime, args.dataset, args.out, graphs=args.graphs, scope=args.scope, workers=workers)
         print(json.dumps({part: {"shards": len(s), "bytes": sum(x["size"] for x in s)} for part, s in m["parts"].items()}))
-    elif args.action == "import": print(json.dumps(import_bundle(args.manifest, args.root, parts)))
+    elif args.action == "import": print(json.dumps(import_bundle(args.manifest, args.root, parts, workers)))
     elif args.action == "verify":
         report = verify(args.manifest, args.root, workers, parts); print(json.dumps({k: v for k, v in report.items() if k != "bad"} | {"bad": report["bad"][:20]}))
         if not report["passed"]: raise SystemExit(1)
