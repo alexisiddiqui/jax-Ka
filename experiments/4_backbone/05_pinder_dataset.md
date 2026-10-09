@@ -171,3 +171,52 @@ identity, ≥ 80% coverage of both. Held-out = `pinder-prefilter-v1/ref_heldout_
 70–80%: 854; 80–90%: 1,512; 90–95%: 1,504; ≥ 95%: 16,432). Slice recount (`pkpdb-longgap-test-v1/score.py` with
 `EXCLUDE_70=1`, `score_excl70.out`): 19,066 entries; current rule 9,205 entries / 286,913 sites; adopted long-gap rule
 13,583 entries / 377,067 sites. Not yet wired into `pkpdb_mask_all.py` (regeneration still pending).
+
+## Labelled PINDER dataset and loss weights (2026-10-08)
+
+`pretraining/pinder-pkai-v1/` (`audits/pinder-label-v1`: `label_prep.py` → `label_pkai.py` → `label_env.py`).
+All 93,293 accepted dimers re-prepared (content hashes match the prep run), structures kept (AB/A/B teacher input,
+student_AB), pKAI and pKAI+ on AB/A/B. `summary.json`: training-mask sites 2,692,723, of which 2,221,320 have bound and
+own-free labels (interface 481,978); complexes with ≥ 1 labelled usable interface site 37,330 (22,305 hetero, 13,654
+homo, 1,371 Ab/Ag) over 16,997 clusters; evaluation mask 1,587,473 labelled sites (interface 338,694).
+
+Unlabelled usable sites (18%) are arginines and termini: pKAI's model covers ASP/GLU/HIS/LYS/CYS/TYR/NTR/CTR, and
+its reader only recognises termini named NTR/CTR, which standard PDB input never has. pKPDB has no arginine labels
+and PypKa does not titrate arginine (`TITRABLETAUTOMERS`); only PROPKA does (`audits/shift-by-environment-v1/
+arg_propka.csv`). Arginine is ~18% of benchmark interface sites, interface termini ~2%.
+
+Loss weights (decision log 2026-10-08, `src/pkabench/site_weights.py`) are stored per site in `sites.json`:
+`rsa_free`, `rsa_bound`, `partner_distance_A`, `w_burial` (absolute loss), `w_interface` (Siamese loss). The
+pkpdb-5k-v3 equivalents (`rsa`, `w_burial`) are in each entry's `environment.json`.
+
+### Terminus labels for pKAI (2026-10-08/09)
+
+The released pKAI reader never creates terminus sites (`protein.py`: `self.termini = {}  # TODO ... ignored for now`),
+although the model has NTR/CTR classes. `audits/pinder-label-v1/pkai_termini.py` converts real chain termini (NTERM/CTERM
+sites not in `artificial_terminal_keys`) in pKAI's PDB input: NTR = residue 1's N, CA, C, O (PypKa's NTR site,
+G54A7 `NTRtau*.st`), CTR = last residue's O and OXT, each as its own residue entry. Validated on 400 benchmark complexes
+(1,156 real termini with PypKa 2.10 labels; `audits/pkai-termini-v1`):
+
+| Free-state MAE vs PypKa (median signed) | NTR = N only | NTR = N, CA, C, O (adopted) |
+|---|---:|---:|
+| pKAI NTERM | 0.90 (+0.81) | 0.50 (+0.40) |
+| pKAI+ NTERM | 0.55 (+0.45) | 0.40 (+0.24) |
+| pKAI CTERM | 0.25 (−0.06) | 0.25 (−0.07) |
+| pKAI+ CTERM | 0.34 (−0.10) | 0.34 (−0.10) |
+
+Other sites: the adopted conversion moves 5.4% (pKAI) / 3.2% (pKAI+) of non-terminus labels by > 0.1, and those moved
+sites agree better with PypKa than without termini (pKAI 0.53 → 0.50, pKAI+ 0.89 → 0.80 MAE). Residual N-terminal
+offset remains (+0.40 pKAI, +0.24 pKAI+). PINDER relabelled with termini (job 745763); previous labels kept as
+`labels_noterm.json`.
+
+Final counts with termini (`summary.json`, job 746014; all 93,293 `labels.json` have `"termini": true`):
+
+| | Without termini | With termini |
+|---|---:|---:|
+| Training-mask sites with bound + own-free labels | 2,221,320 | **2,272,062** |
+| …interface | 481,978 | **497,872** |
+| Complexes with ≥ 1 labelled usable interface site | 37,330 | **37,603** (22,467 hetero / 13,757 homo / 1,379 Ab/Ag) |
+| Clusters | 16,997 | **17,102** |
+| Evaluation-mask labelled sites (interface) | 1,587,473 (338,694) | 1,626,125 (350,641) |
+
+Remaining unlabelled usable sites are arginines (no teacher labels them) and termini adjacent to chain gaps.

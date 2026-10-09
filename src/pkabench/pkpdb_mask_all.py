@@ -7,7 +7,8 @@ Same cohort rules, label mapping and backbone inputs as pkpdb_pilot.py / pkpdb_p
   sequences excludes the entry, as does the precomputed list against the PINDER held-out reference
   (audits/seq-overlap-v1/pkpdb_heldout_exclusions_70.tsv) (2026-10-08).
 Kept as a separate module so the existing pkpdb-5k-v2 protocol hashes are unchanged.
-Usage (compute node): python -m pkabench.pkpdb_mask_all <out> [--smoke]
+Usage (compute node): python -m pkabench.pkpdb_mask_all <out> [--smoke] [--full]
+--full processes every pKPDB entry (no 5,000 cap); pipeline errors are then recorded in audit.json instead of aborting.
 """
 import concurrent.futures
 import json
@@ -144,7 +145,8 @@ def clean(task):
     atomic_json(resultfile, result); return result
 
 
-def run(root, out, smoke=False):
+def run(root, out, smoke=False, full=False):
+    target = None if full else 5000
     threads = int(os.environ['SLURM_CPUS_PER_TASK']); require_compute(threads=threads)
     out.mkdir(parents=True, exist_ok=True); began = time.time()
     if (out/'verification.json').exists() and read(out/'verification.json')['passed']: return
@@ -153,10 +155,10 @@ def run(root, out, smoke=False):
     labels(root, out)
     index = root/'pretraining/pkpdb-v1/index.json'; order = read(index)['pdb_ids']; random.Random(20261006).shuffle(order)
     here = Path(__file__).parent
-    manifest = dict(target=5000, selection_seed=20261006, label_index_sha256=digest(index), references_sha256=digest(out/'references.json'),
+    manifest = dict(target=target if target else 'all', selection_seed=20261006, label_index_sha256=digest(index), references_sha256=digest(out/'references.json'),
         validation_test_identity_cutoff=.9, validation_test_shorter_coverage=.8, experimental_identity_cutoff=.3, experimental_bidirectional_coverage=.8,
         heldout_identity_cutoff_70=.7, heldout_bidirectional_coverage_70=.8, heldout_exclusions_70_sha256=digest(root/EXCLUSIONS_70), gap_policy=GAP_POLICY,
-        selection='first 5000 eligible structures in deterministic shuffled order; same cohort for raw and cleaned labels',
+        selection=('every eligible structure' if full else 'first 5000 eligible structures in deterministic shuffled order')+'; same cohort for raw and cleaned labels',
         component_policy=POLICY,
         masks='long-gap-v1 gap rule (anchor tiers + calibrated long-gap radii); components never reject; train/eval radii ligand 15/25, buffer 15/25, glycan 20/25, exposed ion 25/25, bound metal/complex 30/30 A',
         scope='Temporary pilot; deposited asymmetric units, 30-1500 declared protein residues, no nonprotein polymer. No pKa recalculation or structural reconstruction.',
@@ -175,7 +177,7 @@ def run(root, out, smoke=False):
                 path = root/'pretraining/pkpdb-v1/structures'/pdb[1:3]/f'{pdb}.cif.gz'; tasks.append((pdb, str(path)))
             meta = list(pool.map(metadata, tasks, chunksize=4)); audit.extend(r for r in meta if r['status'] != 'candidate')
             candidates = [r for r in meta if r['status'] == 'candidate']
-            atomic_json(out/'status.json', dict(stage='sequence screening', batch=batch_number, accepted=len(accepted), candidates=len(candidates), target=5000))
+            atomic_json(out/'status.json', dict(stage='sequence screening', batch=batch_number, accepted=len(accepted), candidates=len(candidates), target=target or 'all'))
             excluded = set(search(root, out, candidates, refs, batch_number, threads)) | excluded_70(out, batch_number, refs, candidates) | (listed_70 & {r['pdb_id'] for r in candidates})
             passing = []
             for r in candidates:
@@ -184,20 +186,20 @@ def run(root, out, smoke=False):
             results = list(pool.map(clean, [(str(root), str(out), r) for r in passing], chunksize=1)); audit.extend(results)
             errors = [r for r in results if r['status'] == 'pipeline_error']
             accepted.extend(r for r in results if r['status'] == 'accepted')
-            report = dict(stage='cleaning', processed=len(audit), accepted=len(accepted), target=5000,
+            report = dict(stage='cleaning', processed=len(audit), accepted=len(accepted), target=target or 'all',
                 reasons=dict(Counter(r.get('reason', r['status']) for r in audit)), elapsed_seconds=time.time()-began, pipeline_errors=errors)
             atomic_json(out/'status.json', report); atomic_json(out/'audit.json', audit); print(json.dumps({k: v for k, v in report.items() if k != 'pipeline_errors'}), flush=True)
-            if errors: raise RuntimeError(f'{len(errors)} unexpected preparation errors; pilot not released')
-            if smoke or len(accepted) >= 5000: break
+            if errors and not full: raise RuntimeError(f'{len(errors)} unexpected preparation errors; pilot not released')
+            if smoke or (target and len(accepted) >= target): break
     if smoke:
         assert accepted, 'Smoke produced no accepted structures'
         atomic_json(out/'smoke.json', dict(passed=True, processed=len(audit), accepted=len(accepted))); return
-    if len(accepted) < 5000: raise RuntimeError(f'Only {len(accepted)} accepted structures; refusing to relax leakage or cleaning gates')
-    selected = accepted[:5000]; assert len({r['pdb_id'] for r in selected}) == 5000
+    if target and len(accepted) < target: raise RuntimeError(f'Only {len(accepted)} accepted structures; refusing to relax leakage or cleaning gates')
+    selected = accepted[:target] if target else accepted; assert len({r['pdb_id'] for r in selected}) == len(selected)
     for r in selected:
         assert r['pdb_id'] not in reserved
         path = out/'entries'/r['pdb_id']; assert digest(path/'graph.npz') == r['sha256'] and digest(path/'sites.json') == r['sites_sha256']
-    release = dict(target=5000, records=selected, component_policy=POLICY['version'], gap_policy=GAP_POLICY['version'], raw_arm='all unambiguously mapped finite scalar labels',
+    release = dict(target=target or 'all', pipeline_errors=sum(r['status'] == 'pipeline_error' for r in audit), records=selected, component_policy=POLICY['version'], gap_policy=GAP_POLICY['version'], raw_arm='all unambiguously mapped finite scalar labels',
         clean_arm='the same structures/inputs with train_mask applied from sites.json',
         validation_source=str(root/'pretraining/graph-pilot-v1'), validation_manifest_sha256=digest(root/'pretraining/graph-pilot-v1/manifest.json'),
         protocol_sha256=digest(out/'protocol.json'), reference_sha256=digest(out/'references.json'),
@@ -207,8 +209,8 @@ def run(root, out, smoke=False):
             'Within-training component_id groups exact sequence sets only; 90%/70% exclusions are against held-out chains, not a within-training clustering claim.',
             'Gap policy long-gap-v1: calibrated long-gap radii on pKAI deletions; pKPDB labels are PypKa, so these radii are not validated for them.',
             'Component policy mask-all-v1: component chemistry never rejects; masks only.'])
-    atomic_json(out/'pilot.json', release); atomic_json(out/'verification.json', dict(passed=True, structures=5000, raw_sites=release['raw_sites'], clean_sites=release['clean_sites'], pilot_sha256=digest(out/'pilot.json')))
-    text = ['# Temporary pKPDB 5k pilot (mask-all-v1, long-gap-v1, 70% held-out)', '', f'5,000 structures; {release["raw_sites"]:,} raw mapped sites; {release["clean_sites"]:,} clean training sites.',
+    atomic_json(out/'pilot.json', release); atomic_json(out/'verification.json', dict(passed=True, structures=len(selected), raw_sites=release['raw_sites'], clean_sites=release['clean_sites'], pilot_sha256=digest(out/'pilot.json')))
+    text = [f'# pKPDB {"full build" if full else "5k pilot"} (mask-all-v1, long-gap-v1, 70% held-out)', '', f'{len(selected):,} structures; {release["raw_sites"]:,} raw mapped sites; {release["clean_sites"]:,} clean training sites; {release["pipeline_errors"]} pipeline errors recorded.',
         'Cohort rules as pkpdb-5k-v2; leakage adds the 70%/80%-both held-out rule. Components never reject (component_mask_policy); gaps per long_gap_policy.',
         'Raw and clean arms share identical inputs and structure membership. No training launched.', '', '| Audit reason | Structures |', '|---|---:|']
     text.extend(f'| {k} | {v} |' for k, v in sorted(Counter(r.get('reason', r['status']) for r in audit).items()))
@@ -216,4 +218,4 @@ def run(root, out, smoke=False):
 
 
 if __name__ == '__main__':
-    root = Path(os.environ['PKABENCH_RUNTIME']); out = Path(sys.argv[1]); run(root, out, '--smoke' in sys.argv)
+    root = Path(os.environ['PKABENCH_RUNTIME']); out = Path(sys.argv[1]); run(root, out, '--smoke' in sys.argv, '--full' in sys.argv)

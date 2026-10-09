@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 
 from .model import (
-    HEADS, PKPDB_PK_MOD, attend, attend_with_trace, encode_indexed,
+    HEADS, PKPDB_PK_MOD, attend, attend_with_trace, dropout, encode_indexed,
     encode_with_trace, initialize, linear, norm,
 )
 
@@ -41,26 +41,28 @@ def _site_bias(block, edge, source_type, neighbor_type):
     return geometry + block["pair_bias"][source_type[:, None], neighbor_type]
 
 
-def attend_sites_indexed(block, tokens, graph):
+def attend_sites_indexed(block, tokens, graph, *, key=None, dropout_rate=0.0):
     """One indexed site-to-site attention/FF block with directed pair bias."""
     from .triton_attention import indexed_attention_one
     width = block["q"]["w"].shape[0]
     normalized = norm(block["norm1"], tokens)
     query = linear(block["q"], normalized).reshape((-1, HEADS, width // HEADS))
-    key = linear(block["k"], normalized).reshape((-1, HEADS, width // HEADS))
+    projected_key = linear(block["k"], normalized).reshape((-1, HEADS, width // HEADS))
     value = linear(block["v"], normalized).reshape((-1, HEADS, width // HEADS))
     neighbors = graph["site_neighbors"]
     neighbor_type = graph["site_type"][neighbors]
     bias = _site_bias(block, graph["site_edge"], graph["site_type"], neighbor_type)
     message = indexed_attention_one(
-        query, key, value, neighbors, bias, graph["site_edge_mask"], graph["site_switch"]
+        query, projected_key, value, neighbors, bias, graph["site_edge_mask"], graph["site_switch"]
     ).reshape((-1, width))
-    output = tokens + linear(block["o"], message)
-    output = output + linear(block["down"], jax.nn.gelu(linear(block["up"], norm(block["norm2"], output))))
+    keys = jax.random.split(key, 2) if dropout_rate else (None, None)
+    output = tokens + dropout(linear(block["o"], message), keys[0], dropout_rate)
+    feed_forward = linear(block["down"], jax.nn.gelu(linear(block["up"], norm(block["norm2"], output))))
+    output = output + dropout(feed_forward, keys[1], dropout_rate)
     return output * graph["site_mask"][:, None]
 
 
-def _site_tokens(params, graph, residue):
+def _site_tokens(params, graph, residue, *, key=None, dropout_rate=0.0):
     site_residue = graph["site_residue"]
     site_type = graph["site_type"]
     tokens = (residue[site_residue] + params["groups"][site_type]) * graph["site_mask"][:, None]
@@ -69,20 +71,24 @@ def _site_tokens(params, graph, residue):
         params["query"], tokens, residue,
         graph["neighbors"][site_residue], graph["edge"][site_residue],
         graph["edge_mask"][site_residue], graph["switch"][site_residue],
+        key=key, dropout_rate=dropout_rate,
     )
     return tokens * graph["site_mask"][:, None]
 
 
-def predict_site_shift_indexed(params, graph):
-    residue = encode_indexed(params, graph)
-    tokens = _site_tokens(params, graph, residue)
-    tokens = attend_sites_indexed(params["site"], tokens, graph)
+def predict_site_shift_indexed(params, graph, *, key=None, dropout_rate=0.0):
+    keys = jax.random.split(key, 3) if dropout_rate else (None, None, None)
+    residue = encode_indexed(params, graph, key=keys[0], dropout_rate=dropout_rate)
+    tokens = _site_tokens(params, graph, residue, key=keys[1], dropout_rate=dropout_rate)
+    tokens = attend_sites_indexed(params["site"], tokens, graph, key=keys[2], dropout_rate=dropout_rate)
     all_shifts = 8 * jnp.tanh(linear(params["head"], tokens)[:, 0])
     return all_shifts[graph["query_site"]]
 
 
-def predict_site_pkpdb_indexed(params, graph):
-    return PKPDB_PK_MOD[graph["query_group"]] + predict_site_shift_indexed(params, graph)
+def predict_site_pkpdb_indexed(params, graph, *, key=None, dropout_rate=0.0):
+    return PKPDB_PK_MOD[graph["query_group"]] + predict_site_shift_indexed(
+        params, graph, key=key, dropout_rate=dropout_rate
+    )
 
 
 def _attend_sites_trace(block, tokens, graph):
