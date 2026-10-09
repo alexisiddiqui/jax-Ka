@@ -208,3 +208,15 @@ Other sites: the adopted conversion moves 5.4% (pKAI) / 3.2% (pKAI+) of non-term
 sites agree better with PypKa than without termini (pKAI 0.53 → 0.50, pKAI+ 0.89 → 0.80 MAE). Residual N-terminal
 offset remains (+0.40 pKAI, +0.24 pKAI+). PINDER relabelled with termini (job 745763); previous labels kept as
 `labels_noterm.json`.
+
+Final counts with termini (`summary.json`, job 746014; all 93,293 `labels.json` have `"termini": true`):
+
+| | Without termini | With termini |
+|---|---:|---:|
+| Training-mask sites with bound + own-free labels | 2,221,320 | **2,272,062** |
+| …interface | 481,978 | **497,872** |
+| Complexes with ≥ 1 labelled usable interface site | 37,330 | **37,603** (22,467 hetero / 13,757 homo / 1,379 Ab/Ag) |
+| Clusters | 16,997 | **17,102** |
+| Evaluation-mask labelled sites (interface) | 1,587,473 (338,694) | 1,626,125 (350,641) |
+
+Remaining unlabelled usable sites are arginines (no teacher labels them) and termini adjacent to chain gaps.

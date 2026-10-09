@@ -107,3 +107,8 @@ Fewer clean sites at the fixed 5,000-structure cap is a cohort effect: v2 kept o
 include component-bearing entries with lower usable fractions. The per-structure rate matches the threshold-test
 slice (377,067 sites / 13,583 entries = 27.8). v3 audit: sequence_overlap 2,264, no_clean_sites 2,070,
 incomplete_backbone 150, multiple_models 130, size 140, other 50.
+
+## Superseded by pkpdb-full-v1 (2026-10-09)
+
+User lifted the 5k scope: `pkpdb_mask_all --full` builds every entry into `pretraining/pkpdb-full-v1` (job 746072,
+burial-weight pass 746073 depends on it). pkpdb-5k-v3 stays unchanged for runs already using it.

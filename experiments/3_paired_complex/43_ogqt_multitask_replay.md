@@ -32,5 +32,5 @@ among checkpoints whose pKPDB group-macro MAE is no more than `0.05` above epoch
 
 ## Execution gate
 
-The Slurm job stages the three immutable mmap stores on comp1400 local storage, then performs one joint optimizer update as a smoke test. Full training starts only if that update is finite and its provenance receipt is written. The job requests one A40, 48 CPUs, and 96 GB, satisfying the 2 GB per requested CPU rule. It does not count against the 400-core CPU-node queue cap agreed for the separate CPU workload.
+The Slurm job stages the three immutable mmap stores on comp1400 local storage, then performs one joint optimizer update as a smoke test. Full training starts only if that update is finite and its provenance receipt is written. The job requests one A40, 16 CPUs, and 32 GB, satisfying the 2 GB per requested CPU rule. The mmap stores remain on local disk and are read in batches, so their combined on-disk size does not determine the memory request. It does not count against the 400-core CPU-node queue cap agreed for the separate CPU workload.
 
