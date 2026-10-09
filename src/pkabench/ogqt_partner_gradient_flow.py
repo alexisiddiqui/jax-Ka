@@ -1,7 +1,9 @@
 """Per-output cross-chain sensitivity accompanying the frozen flow diagnostic."""
 from __future__ import annotations
 import json
+import hashlib
 import os
+import subprocess
 import time
 from pathlib import Path
 import jax
@@ -18,6 +20,10 @@ from pkatrain.gqt_paired_pinder import Loader, _prefetched
 from pkatrain.trainer import load_checkpoint
 
 HEADS=("bound_shift","free_burial","bound_interface","free_interface")
+
+
+def optional_stats(values):
+    return {"eligible_sites":len(values),"distribution":stats(values) if values else None}
 
 
 @jax.jit
@@ -40,6 +46,15 @@ def run(runtime):
     started=time.monotonic(); runtime=Path(runtime); base=runtime/"training/ogqt-auxiliary-pilot-v1"
     output=base/"gradient-flow-v1"; protocol=read(output/"protocol.json"); manifest=read(base/"manifest.json")
     if not read(output/"verification.json")["passed"]: raise AssertionError("forward not verified")
+    train_clusters={r["cluster_id"] for r in manifest["records"] if r["split"]=="train"}
+    val_clusters={r["cluster_id"] for r in manifest["records"] if r["split"]=="val"}
+    if train_clusters & val_clusters: raise AssertionError("training/validation cluster overlap")
+    source=Path(__file__).parents[1]
+    paths=[Path(__file__),Path(__file__).with_name("ogqt_gradient_flow.py"),Path(__file__).with_name("ogqt_gradient_flow_report.py"),
+        source/"pkanet/model.py",source/"pkanet/site_model.py",source/"pkanet/triton_attention.py",
+        source/"pkatrain/gqt_paired_pinder.py",base/"manifest.json",Path(protocol["checkpoint"])/"metadata.json"]
+    atomic_json(output/"provenance.json",{"sha256":{str(path):hashlib.sha256(path.read_bytes()).hexdigest() for path in paths},
+        "cluster_separation_passed":True,"test_data_included":False})
     p=initialize_auxiliary(jax.random.PRNGKey(17),**manifest["architecture"])
     engine=AuxiliaryEngine(p,0,{"burial":1,"interface":1})
     p,_,_=load_checkpoint(protocol["checkpoint"],(p,engine.optimizer.init(p)))
@@ -85,8 +100,10 @@ def run(runtime):
         for label in ("<=4","4-10",">10"):
             selected=[r for r in results if r["head"]==head and r["distance_bin"]==label]
             if not selected: continue
-            summary[head][label]={"sites":len(selected),"other_chain_energy_fraction":stats([r["regions"]["other_chain"]["energy_fraction"] for r in selected if r["regions"]["other_chain"]["energy_fraction"] is not None]),"other_partner_energy_fraction":stats([r["regions"]["other_partner"]["energy_fraction"] for r in selected if "other_partner" in r["regions"] and r["regions"]["other_partner"]["energy_fraction"] is not None])}
+            summary[head][label]={"sites":len(selected),"other_chain_energy_fraction":optional_stats([r["regions"]["other_chain"]["energy_fraction"] for r in selected if r["regions"]["other_chain"]["energy_fraction"] is not None]),"other_partner_energy_fraction":optional_stats([r["regions"]["other_partner"]["energy_fraction"] for r in selected if "other_partner" in r["regions"] and r["regions"]["other_partner"]["energy_fraction"] is not None])}
     atomic_json(output/"partner-summary.json",{"results":summary,"seconds":time.monotonic()-started,"free_cross_chain_leakage_check_passed":True,"method":"individual output Jacobian wrt initial residue embeddings; squared-norm shares, not causal attribution","test_data_included":False})
+    subprocess.run([str(runtime/"envs/radial-plots/bin/python"),
+        str(Path(__file__).with_name("ogqt_gradient_flow_report.py")),str(output)],check=True)
 
 
 if __name__=="__main__": run(os.environ["PKABENCH_RUNTIME"])
