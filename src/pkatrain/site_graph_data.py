@@ -245,7 +245,10 @@ class SiteBatchLoader:
         site_root = Path(manifest["site_source"]); site_manifest = read(site_root / "manifest.json")
         self.site_records = {r["complex_id"]: r for r in site_manifest["records"]}
         self.site_capacities = site_manifest["capacities"]
-        self.site_store = SiteMMap(site_root / "mmap-v1", site_manifest["records"])
+        # Keep the immutable canonical store as the default, while allowing
+        # Slurm jobs to stage the same verified arrays on node-local storage.
+        site_location = os.environ.get("PKATRAIN_SITE_MMAP_DIR")
+        self.site_store = SiteMMap(site_location or site_root / "mmap-v1", site_manifest["records"])
         self.byid = self._base.byid; self.pool = self._base.pool
     def one(self, cid, capacities=None):
         from .graph_data import bucket

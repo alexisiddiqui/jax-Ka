@@ -11,6 +11,7 @@ import csv
 import gzip
 import hashlib
 import json
+import mmap
 import os
 import shutil
 import time
@@ -333,6 +334,18 @@ def build_mmap(root):
     os.replace(pending, destination)
 
 
+def revalidate_mmap(root):
+    """Rebind an unchanged, verified store to the current reader code."""
+    base = experiment_root(root); manifest = read(base / "manifest.json")
+    verification = read(base / "mmap-v1/verification.json")
+    if not verification["passed"] or not verification["all_source_hashes_checked"] or not verification["all_fields_read_back_identically"]:
+        raise AssertionError("mmap was not fully verified")
+    store = PairedMMap(base / "mmap-v1", manifest["records"]); store.close()
+    verification["code_hashes"] = code_hashes()
+    verification["reader_revalidated"] = True
+    atomic_json(base / "mmap-v1/verification.json", verification)
+
+
 class PairedMMap:
     def __init__(self, path, records):
         self.path = Path(path); verification = read(self.path / "verification.json"); metadata = read(self.path / "metadata.json")
@@ -342,6 +355,13 @@ class PairedMMap:
             ids = index["complex_id"].astype(str); self.offsets = index["offsets"]
         self.by_id = {cid: index for index, cid in enumerate(ids)}; self.records = {row["id"]: row for row in records}
         self.arrays = {name: np.load(self.path / f"{name}.npy", mmap_mode="r", allow_pickle=False) for name in RAW_FIELDS}
+        # Training visits randomized records.  Sequential readahead on these
+        # field-major files otherwise faults gigabytes of adjacent, unused
+        # records into memory for every small batch.
+        for value in self.arrays.values():
+            mapped = getattr(value, "_mmap", None)
+            if mapped is not None and hasattr(mapped, "madvise"):
+                mapped.madvise(mmap.MADV_RANDOM)
     def raw(self, cid):
         index = self.by_id[cid]; row = self.records[cid]; output = {}
         for field, name in enumerate(RAW_FIELDS):
@@ -370,16 +390,38 @@ def _load_one(raw, row, capacity, norms):
 class Loader:
     def __init__(self, base, manifest):
         self.base = Path(base); self.manifest = manifest; self.pool = ThreadPoolExecutor(max_workers=4)
-        self.store = PairedMMap(self.base / "mmap-v1", manifest["records"])
+        store = Path(os.environ.get("PKATRAIN_PAIRED_MMAP", self.base / "mmap-v1"))
+        self.store = PairedMMap(store, manifest["records"])
     def batch(self, ids):
         by_id = {row["id"]: row for row in self.manifest["records"]}; rows = [by_id[cid] for cid in ids]
         bucket = _bucket_n(rows[0]["n"])
         if any(_bucket_n(row["n"]) != bucket for row in rows): raise AssertionError("mixed bucket")
         capacity = self.manifest["capacities"][bucket]
-        raw = list(self.pool.map(lambda row: self.store.raw(row["id"]), rows))
-        values = [_load_one(value, row, capacity, self.manifest["normalization"]) for value, row in zip(raw, rows)]
+        def load(row):
+            return _load_one(self.store.raw(row["id"]), row, capacity, self.manifest["normalization"])
+        # _load_one performs the page-faulting copies and padding.  Parallelize
+        # that work, rather than only creating the cheap mmap views.
+        values = list(self.pool.map(load, rows))
         return jax.tree.map(lambda *items: np.stack(items), *values)
     def close(self): self.pool.shutdown(); self.store.close()
+
+
+def _prefetched(loader, plans):
+    """Load one batch ahead while the current batch runs on the GPU."""
+    plans = iter(plans)
+    try:
+        first = next(plans)
+    except StopIteration:
+        return
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(loader.batch, first)
+        for following in plans:
+            batch = pending.result()
+            current = first
+            pending = pool.submit(loader.batch, following)
+            first = following
+            yield current, batch
+        yield first, pending.result()
 
 
 def _plans(records, rng, manifest):
@@ -450,8 +492,8 @@ def evaluate(base, manifest, records, engine, params, predictions_path=None):
     for bucket in sorted(grouped, key=int):
         size = manifest["batch_sizes"][bucket]; ids = grouped[bucket]
         plans.extend(ids[index:index + size] for index in range(0, len(ids), size))
-    for ids in plans:
-        graphs, targets, mask, _, _, metadata = loader.batch(ids)
+    for ids, batch in _prefetched(loader, plans):
+        graphs, targets, mask, _, _, metadata = batch
         batch_predictions = np.asarray(engine.predictions(params, graphs))
         for batch_index, cid in enumerate(ids):
             record = by_id[cid]; active = mask[batch_index]
@@ -475,27 +517,55 @@ def evaluate(base, manifest, records, engine, params, predictions_path=None):
     return _metrics(rows)
 
 
-def train(root, arm, *, smoke=False):
+def train(root, arm, *, smoke=False, initialization="scratch", schedule="standard"):
     if arm not in ARMS: raise ValueError(arm)
+    if initialization not in ("scratch", "pretrained") or schedule not in ("standard", "low"):
+        raise ValueError((initialization, schedule))
+    if initialization == "pretrained" and arm != "vanilla": raise ValueError((initialization, arm))
     root = Path(root); base = experiment_root(root); manifest = read(base / "manifest.json")
     prep = read(base / "preparation.json"); mmap = read(base / "mmap-v1/verification.json")
     if not prep["passed"] or not mmap["passed"] or mmap["code_hashes"] != code_hashes():
         raise AssertionError("preparation/mmap/code mismatch")
     params = initialize_ogqt(jax.random.PRNGKey(SEED), **manifest["architecture"])
     engine = PairedEngine(params, arm); state = engine.optimizer.init(params); rng = np.random.default_rng(SEED)
-    run = base / arm / ("smoke" if smoke else "seed-17"); run.mkdir(parents=True, exist_ok=True)
+    parent = None
+    if initialization == "pretrained":
+        source_run = pretrained_root(root); source_verification = read(source_run / "verification.json")
+        if not source_verification["passed"] or source_verification["test_data_included"]:
+            raise AssertionError("invalid pretrained checkpoint")
+        source_epoch = int(source_verification["selected_epoch"])
+        source_checkpoint = source_run / "checkpoints" / f"epoch-{source_epoch:03d}"
+        params, _, source_metadata = load_checkpoint(source_checkpoint, (params, state))
+        if int(source_metadata["parameter_count"]) != sum(value.size for value in jax.tree.leaves(params)):
+            raise AssertionError("pretrained parameter count")
+        state = engine.optimizer.init(params)
+        parent = {"checkpoint": str(source_checkpoint), "checkpoint_sha256": digest(source_checkpoint / "state.npz"),
+                  "selected_epoch": source_epoch, "verification_sha256": digest(source_run / "verification.json")}
+    folder = arm if initialization == "scratch" else f"pretrained-{arm}-{schedule}"
+    run = base / folder / ("smoke" if smoke else "seed-17"); run.mkdir(parents=True, exist_ok=True)
     by_split = {name: [row for row in manifest["records"] if row["split"] == name] for name in ("train", "val")}
-    loader = Loader(base, manifest); provenance = {"arm": arm, "seed": SEED, "initialization": "scratch",
-        "manifest_sha256": digest(base / "manifest.json"), "code_hashes": code_hashes()}
+    loader = Loader(base, manifest); provenance = {"arm": arm, "seed": SEED, "initialization": initialization,
+        "schedule": schedule, "parent": parent, "manifest_sha256": digest(base / "manifest.json"),
+        "code_hashes": code_hashes()}
     atomic_json(run / "run.json", provenance)
     best = None; stalled = 0; history = []; started = time.monotonic()
+    if initialization == "pretrained" and not smoke:
+        zero_shot = evaluate(base, manifest, by_split["val"], engine, params, run / "zero_shot_predictions.csv")
+        selection = zero_shot["state_mae"] + zero_shot["interface_paired_mae"]
+        best = {"epoch": 0, "selection": selection, "validation": zero_shot}
+        atomic_json(run / "zero-shot.json", {"selection": selection, "validation": zero_shot,
+            "predictions_sha256": digest(run / "zero_shot_predictions.csv")})
+        atomic_json(run / "best.json", best)
+        save_checkpoint(run / "checkpoints" / "epoch-000", params, state, {**provenance, "epoch": 0})
     for epoch in range(1, (1 if smoke else EPOCHS) + 1):
         plans = _plans(by_split["train"], rng, manifest)
         plan_digest = hashlib.sha256(json.dumps(plans).encode()).hexdigest()
         if smoke: plans = plans[:1]
         losses = []; began = time.monotonic()
-        for number, ids in enumerate(plans, 1):
-            rate = learning_rate(epoch, number, len(plans)); batch = loader.batch(ids)
+        for number, (_, batch) in enumerate(_prefetched(loader, plans), 1):
+            rate = learning_rate(epoch, number, len(plans),
+                start=(1e-3 if schedule == "standard" else 1e-4),
+                end=(1e-5 if schedule == "standard" else 1e-6))
             params, state, loss = engine.update(params, state, batch, rate); losses.append(loss)
         if smoke:
             atomic_json(run / "verification.json", {"passed": True, "finite_update": True, "loss": float(np.mean(losses)),
@@ -535,7 +605,7 @@ def report(root):
         if len({history[epoch]["batch_plan_digest"] for history in histories}) != 1: raise AssertionError((epoch, "batch mismatch"))
     atomic_json(base / "summary.json", rows)
     lines = ["# Scratch oGQT structural-weight factorial", "",
-        "One seed (17), 5,000 PINDER training complexes and 1,000 validation complexes, one structure per PINDER cluster. All arms start from the identical scratch parameters and use matched batches. Targets are pKAI state shifts from fixed PK_MOD and paired AB-minus-free shifts.", "",
+        "One seed (17), 5,000 PINDER training complexes and 400 validation complexes, one structure per PINDER cluster. All arms start from the identical scratch parameters and use matched batches. Targets are pKAI state shifts from fixed PK_MOD and paired AB-minus-free shifts.", "",
         "| Arm | State MAE | Paired MAE | Interface paired MAE | <=4 A | 4-6 A | 6-10 A | >10 A | Epoch | Time (min) | Peak VRAM (GiB) |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for row in rows:
@@ -549,6 +619,48 @@ def report(root):
                 "report_sha256": digest(base / "report.md"), "test_data_included": False})
 
 
+def transfer_report(root):
+    base = experiment_root(root)
+    if read(base / "pretrained-vanilla-standard/seed-17/zero-shot.json")["validation"] != \
+            read(base / "pretrained-vanilla-low/seed-17/zero-shot.json")["validation"]:
+        raise AssertionError("zero-shot mismatch")
+    configurations = (("scratch vanilla", base / "vanilla/seed-17", None),
+        ("pretrained zero-shot", base / "pretrained-vanilla-standard/seed-17", "zero-shot"),
+        ("pretrained standard LR", base / "pretrained-vanilla-standard/seed-17", None),
+        ("pretrained low LR", base / "pretrained-vanilla-low/seed-17", None))
+    rows = []
+    for name, run, mode in configurations:
+        if mode == "zero-shot":
+            payload = read(run / "zero-shot.json"); metrics = payload["validation"]; epoch = 0
+            if digest(run / "zero_shot_predictions.csv") != payload["predictions_sha256"]: raise AssertionError(name)
+        else:
+            verification = read(run / "verification.json"); metrics = read(run / "final.json")
+            if not verification["passed"] or verification["test_data_included"]: raise AssertionError(name)
+            if digest(run / "validation_predictions.csv") != verification["predictions_sha256"]: raise AssertionError(name)
+            epoch = verification["selected_epoch"]
+        rows.append({"configuration": name, "epoch": epoch, **metrics})
+    standard_history = read(base / "pretrained-vanilla-standard/seed-17/history.json")
+    low_history = read(base / "pretrained-vanilla-low/seed-17/history.json")
+    scratch_history = read(base / "vanilla/seed-17/history.json")
+    common = min(len(standard_history), len(low_history), len(scratch_history))
+    for epoch in range(common):
+        if len({standard_history[epoch]["batch_plan_digest"], low_history[epoch]["batch_plan_digest"],
+                scratch_history[epoch]["batch_plan_digest"]}) != 1: raise AssertionError((epoch, "batch mismatch"))
+    lines = ["# Pretrained oGQT Siamese transfer", "",
+        "All trained rows use the unweighted vanilla state-plus-paired objective on the same 5,000/400 PINDER split. The two pretrained arms start from the selected epoch-16 pKPDB oGQT checkpoint; epoch zero is eligible for selection. No test data were read.", "",
+        "| Configuration | State MAE | Paired MAE | Interface paired MAE | <=4 A | 4-6 A | 6-10 A | >10 A | Selected epoch |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
+    for row in rows:
+        bins = row["distance_bins"]
+        lines.append(f"| {row['configuration']} | {row['state_mae']:.4f} | {row['paired_mae']:.4f} | "
+            f"{row['interface_paired_mae']:.4f} | {bins['<=4']['paired_mae']:.4f} | {bins['4-6']['paired_mae']:.4f} | "
+            f"{bins['6-10']['paired_mae']:.4f} | {bins['>10']['paired_mae']:.4f} | {row['epoch']} |")
+    destination = base / "transfer-report.md"; destination.write_text("\n".join(lines) + "\n")
+    atomic_json(base / "transfer-summary.json", rows)
+    atomic_json(base / "transfer-report-verification.json", {"passed": True, "matched_batch_plans": True,
+        "report_sha256": digest(destination), "test_data_included": False})
+
+
 def verify_smokes(root):
     base = experiment_root(root); rows = []
     for arm in ARMS:
@@ -559,20 +671,41 @@ def verify_smokes(root):
     atomic_json(base / "smoke-verification.json", {"passed": True, "rows": rows, "code_hashes": code_hashes()})
 
 
+def verify_pretrained_smokes(root):
+    base = experiment_root(root); rows = []
+    for schedule in ("standard", "low"):
+        value = read(base / f"pretrained-vanilla-{schedule}/smoke/verification.json")
+        if not value["passed"] or not value["finite_update"] or value["code_hashes"] != code_hashes():
+            raise AssertionError(schedule)
+        if value["initialization"] != "pretrained" or value["schedule"] != schedule or value["parent"] is None:
+            raise AssertionError((schedule, "provenance"))
+        rows.append({"schedule": schedule, "loss": value["loss"], "batch_plan_digest": value["batch_plan_digest"]})
+    if len({row["batch_plan_digest"] for row in rows}) != 1: raise AssertionError("pretrained smoke batch mismatch")
+    atomic_json(base / "pretrained-smoke-verification.json", {"passed": True, "rows": rows,
+        "code_hashes": code_hashes(), "test_data_included": False})
+
+
 def main():
     import sys
     action = sys.argv[1]; root = Path(os.environ["PKABENCH_RUNTIME"])
-    gpu = action in ("smoke", "train")
+    gpu = action in ("smoke", "train", "pretrained-smoke", "pretrained")
     require_compute(threads=int(os.environ.get("SLURM_CPUS_PER_TASK", "1")), gpu_benchmark=gpu,
-                    allow_comp1400=(gpu or action == "mmap"))
+                    allow_comp1400=(gpu or action in ("mmap", "revalidate-mmap", "verify-smokes",
+                        "verify-pretrained-smokes", "report", "transfer-report")))
     jax.config.update("jax_enable_x64", False)
     if action == "register": register(root)
     elif action == "prepare": prepare(root)
     elif action == "mmap": build_mmap(root)
+    elif action == "revalidate-mmap": revalidate_mmap(root)
     elif action == "smoke": train(root, sys.argv[2], smoke=True)
     elif action == "verify-smokes": verify_smokes(root)
+    elif action == "verify-pretrained-smokes": verify_pretrained_smokes(root)
     elif action == "train": train(root, sys.argv[2])
+    elif action == "pretrained-smoke": train(root, "vanilla", smoke=True,
+        initialization="pretrained", schedule=sys.argv[2])
+    elif action == "pretrained": train(root, "vanilla", initialization="pretrained", schedule=sys.argv[2])
     elif action == "report": report(root)
+    elif action == "transfer-report": transfer_report(root)
     else: raise ValueError(action)
 
 
