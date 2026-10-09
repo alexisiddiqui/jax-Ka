@@ -77,3 +77,20 @@ Contents:
 
 Runner: `_HPC/submission/jax-Ka/pkabench/dataset-export.sbatch {pinder,pkpdb,validation} [--graphs]`; it exports, then
 verifies.
+
+### Export results (2026-10-09, `exports/bundle-v1/`)
+
+| Bundle | Shards | Size | Files | Wall (incl. verify) |
+|---|---:|---:|---:|---:|
+| pinder (core; pool-v3 + 400 validation) | 6 | 8.3 GB | 390,223 | 40 min |
+| pkpdb (core; pool-v3, no graphs) | 14 | 11.1 GB | 503,001 | 40 min |
+| validation (compact pKAI package) | 1 | 11 MB | 6 | < 1 min |
+
+All three passed `verify` against the source tree. The optional pKPDB graphs part (~215 GB, `--graphs`) was not
+exported.
+
+Import: the first full-scale import test (old code) installed 4 of 6 PINDER shards correctly, at about 11 min per
+shard. Random-access reads of gzip tars restart decompression on every seek. Import now makes one streaming pass per
+shard, hashing the shard and every file while extracting, and runs shards in parallel. That version passes the unit
+tests, but the full-scale import test was stopped at the user's request before it finished, so it has no measured
+timing yet.

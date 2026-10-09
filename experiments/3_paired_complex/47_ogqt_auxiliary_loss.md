@@ -82,6 +82,62 @@ Distance error materially worsened absolute-state prediction by 0.0195-0.0246 pK
 
 FP/FN counts use the descriptive native Youden threshold 0.197. Distance noise reduced false positives while increasing false negatives, consistent with a downward or compressed interface response rather than improved discrimination; threshold-free AP and ROC-AUC barely changed.
 
+### Coordinate-level rotation invariance
+
+The selected standard checkpoint was tested on 50 held-out complexes with three deterministic random rotations each. Graphs were rebuilt from transformed atomic coordinates. Joint AB rotations tested both heads in both branches; independent A/B rotations were evaluated only through the free branch after compacting it to intrachain edges. The latter is the relevant invariance because independent rotations change the bound interface.
+
+| Transform and output | Mean absolute difference | 99th percentile | Maximum |
+|---|---:|---:|---:|
+| Joint rotation, bound interface | 7.07e-8 | 3.58e-7 | 1.25e-6 |
+| Joint rotation, free interface | 6.51e-8 | 3.13e-7 | 8.49e-7 |
+| Joint rotation, bound burial | 1.53e-7 | 8.34e-7 | 2.44e-6 |
+| Joint rotation, free burial | 1.44e-7 | 7.75e-7 | 2.50e-6 |
+| Independent partner rotations, free interface | 6.45e-8 | 3.15e-7 | 1.10e-6 |
+| Independent partner rotations, free burial | 1.41e-7 | 7.75e-7 | 2.80e-6 |
+
+All 28,134 comparisons passed the registered 1e-5 maximum-difference gate. The residual differences are consistent with float32 coordinate/frame reconstruction and GPU reduction order. No rotation augmentation is required to repair invariance in the current auxiliary heads.
+
+### Auxiliary-head feature attribution
+
+The two auxiliary heads share the complete residue and site-attention stack, so raw attention weights are not head-specific. Two complementary analyses were therefore run: deterministic within-complex feature permutation on all 400 validation complexes, and three Rademacher randomized-Jacobian probes on 50 held-out complexes. Permutation estimates causal dependence under a distribution-preserving disruption; gradient-times-input energy measures local sensitivity around native structures. Neither should be read as mechanistic proof in isolation.
+
+#### Permutation: increase in target MAE
+
+| Feature disrupted | Burial delta MAE | Interface delta MAE |
+|---|---:|---:|
+| Site-pair distance RBF | **+0.12677** | **+0.03782** |
+| Residue-pair distance RBF | +0.12385 | +0.01657 |
+| Residue identity | +0.07651 | +0.02822 |
+| Site directions | +0.04396 | +0.00965 |
+| Same-residue site flag | +0.04167 | +0.00709 |
+| Site relative orientation | +0.03615 | +0.00789 |
+| Site type | +0.02330 | +0.00039 |
+| Residue directions | +0.01881 | +0.00125 |
+| Remove cross-chain context | +0.00000 | +0.01040 |
+| Residue same-chain flag | +0.00019 | +0.00036 |
+| Site same-chain flag | -0.00006 | +0.00030 |
+| Sequence separation | -0.00021 | +0.00007 |
+
+Native normalized-target MAE was 0.10595 for burial and 0.28719 for interface. As expected, removing cross-chain context has exactly zero effect on the free-branch burial prediction. It degrades the bound interface head, although less than disrupting distance or residue identity.
+
+#### Local gradient-times-input energy share
+
+| Feature family | Burial share | Interface share |
+|---|---:|---:|
+| Residue-pair distance | **31.55%** | 14.50% |
+| Residue identity | 19.57% | **37.60%** |
+| Frame-valid channel | 18.88% | 23.82% |
+| Site-pair distance | 11.11% | 9.76% |
+| Same-residue site flag | 10.43% | 6.06% |
+| Site direction | 3.20% | 3.28% |
+| Site orientation | 3.19% | 3.28% |
+| Residue direction | 1.07% | 1.06% |
+| All remaining differentiable features | 1.01% | 0.65% |
+
+The frame-valid input is nearly constant over usable residues, so its large gradient-times-input share chiefly indicates a sensitive constant channel and is not evidence that frame failures discriminate the targets. Site type and hard cross-chain masks are integer/boolean and are covered only by the permutation/intervention analysis.
+
+Together, the results show that burial is predominantly a distance-and-residue-chemistry prediction. Interface also uses these features, but cross-chain removal has a measurable causal effect. Orientation is used: fully permuting it degrades both heads, while the separate 5-10 degree noise audit has negligible effect. Thus oGQT is locally robust to small angular errors but does not ignore orientation entirely.
+
 ![Interface ROC curves](../../../_runtime/jax-Ka/pkabench/training/ogqt-auxiliary-pilot-v1/plots/interface_roc.png)
 
 ![Native and separated-structure errors](../../../_runtime/jax-Ka/pkabench/training/ogqt-auxiliary-pilot-v1/plots/interface_fpfn_augmentation.png)
