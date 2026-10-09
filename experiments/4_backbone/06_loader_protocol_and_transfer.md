@@ -1,0 +1,79 @@
+# Loader protocol, prefetching, staging and dataset transfer (2026-10-09)
+
+Preparation for production training on the pool-v3 subsets on another cluster. User decisions: new modules, so the
+code-hashed experiment loaders (`gqt_paired_pinder`, `graph_batches`, `site_graph_data`, `trainer`) stay untouched;
+the protocol covers JAX and Torch, and experiment 48 (`pkai_joint_scale.py`) uses it; no sampling changes; the pKPDB
+graph files are an optional export part.
+
+## Shared loader protocol (`src/pkatrain/loading.py`)
+
+- `BatchSource` protocol: `load(spec)` (thread-safe host assembly), `close()`, `provenance()`. Plans come unchanged
+  from the existing plan functions.
+- `LoaderConfig`: `workers` (assembly threads, default `min(8, cpus - 1)`, `PKATRAIN_LOADER_WORKERS`) and `prefetch`
+  (batches in flight, default 2, `PKATRAIN_PREFETCH_DEPTH`).
+- `Prefetcher`: bounded, in-order pipeline. The host-to-device transfer runs in the prefetch thread (`jax.device_put`,
+  or pinned non-blocking Torch copies on a side stream). Worker errors re-raise at the consumer, and an early exit
+  cancels pending work. Telemetry records per-batch wait and assembly time and the wait fraction, flagged above 5%
+  (the experiment 29 criterion).
+- `DeferredScalars`: losses stay on the device and are read back in groups. One fused finite check per step remains.
+- `BucketPolicy`:
+  - `LEGACY_PAIRED` reproduces `gqt_paired_pinder._plans` exactly (tested).
+  - `PRODUCTION` uses bounds 128 / 256 / 384 / 512 / 640 / 768 / 1024 / 1280 / 1536, covering every pool-v3 structure
+    (max: PINDER 1,500, pKPDB 1,053; previously 5,694 PINDER and 7,917 pKPDB pool structures exceeded 768).
+  - Production batch sizes come from a residue budget (`budget // bound`). The budget is 3,072 = 8 × 384, giving
+    24 / 12 / 8 / 6 / 4 / 4 / 3 / 2 / 2. It's provisional until a GPU memory check on each bucket's largest structure.
+- Sources:
+  - `loading_gqt.PairedSource`: PairedMMap + `_load_one`; bucket policy from the manifest.
+  - `loading_gqt.LegacyLoaderSource`: wraps `BatchLoader`/`SiteBatchLoader` with a workers-sized pool.
+  - `loading_gqt.JaxStepRunner`: calls the engines' jitted steps without `float()`.
+  - `loading_torch.PackedSiteSource`: resident on the GPU when the arrays fit 60% of free memory, else streamed.
+  - `loading_torch.CombinedSource`.
+
+### Checks (`pkatrain.loading_checks`, results in `audits/loader-protocol-v1/`)
+
+| Check | Result |
+|---|---|
+| `PairedSource` vs `Loader.batch`, 60 factorial batches | bit-identical |
+| Paired GQT loop, 200 batches, A40 (old → new) | 2.88 → 3.20 steps/s (+11%); max loss difference 7e-7; wait fraction 4.9% (max 1.8 s; unstaged shared-FS mmap) |
+| Exp 48 data path, synthetic 60k rows × 4,008, 235 steps (old → resident / streaming) | 81 → 117 / 88 steps/s; losses bit-identical; wait fraction 0.1% |
+| Unit tests (`test_loading.py`, `test_dataset_transfer.py`) | 13 pass under pytest; the Torch source test passes in finetune-v1 (no pytest there) |
+
+Experiment 48 `train_scale` now uses `PackedSiteSource` + `Prefetcher`:
+- the same `rng.permutation` slices and wrap-around padding;
+- one fused finite check per step;
+- deferred losses;
+- validation sums accumulated in the original order;
+- `loader_wait_fraction` in each history row.
+
+The pKPDB validation reads the compact package `pretraining/pkpdb-val-pkai-v1`, checked against the pilot row
+selection, when it is present.
+
+## Idempotent staging and transfer (`src/pkabench/dataset_transfer.py`)
+
+**Staging** (`stage SRC --local DIR`):
+- The local copy is keyed by sha256 of the store's `verification.json` and its file sizes.
+- An unchanged source is reused; a changed one is copied to a new directory.
+- Copies go to a pending directory under an flock and are verified (size, and sha256 where the store records it)
+  before an atomic rename. Pending directories of dead processes are cleaned.
+- On the 29 GB factorial store: first stage 86 s; second 0.17 s (no-op); three concurrent jobs → one copy.
+- `_HPC/submission/jax-Ka/pkabench/train-template-staged.sbatch` replaces the bash `stage_store()` pattern.
+
+**Export/import** (`export {pinder,pkpdb,validation} OUT [--graphs] [--scope pool|all]`, `import`, `verify`):
+- Deterministic shards of up to 2 GB per dataset part, written in parallel: gzip level 1 for core, plain tar for graphs.
+- `<dataset>-bundle.json` records per-file size and sha256, per-shard sha256, source hashes and the git commit.
+- pKPDB `graph.npz` and `sites.json` are checked against `pilot.json` during export.
+- Import verifies each shard, extracts it to a pending directory, verifies every file, installs it, and writes a
+  per-shard marker under `<root>/.imports/`. Re-runs are no-ops, interrupted imports resume, and corrupt shards or
+  unexpected members (path traversal) are rejected.
+- Paths are relative to `PKABENCH_RUNTIME`.
+
+Contents:
+- **pinder**: pool-v3 ∪ the 400 validation complexes (all entry files except `labels_noterm.json`); `index/`,
+  `pool-v3`, exclusions v3, summaries, the validation cohort.
+- **pkpdb**: pool-v3 entries' JSON files and source structures; `pilot`/`protocol`/`verification`/`references`,
+  `labels.sqlite`, `pool-v3`. The optional `graphs` part holds `graph.npz`.
+- **validation**: the compact pKAI validation package (rows from the frozen 5k pilot plus provenance) instead of the
+  2 × 7.7 GB pilot feature files.
+
+Runner: `_HPC/submission/jax-Ka/pkabench/dataset-export.sbatch {pinder,pkpdb,validation} [--graphs]`; it exports, then
+verifies.

@@ -36,6 +36,17 @@ def initialize_site(key, width=44, ff=88, node_dim=24):
     return params
 
 
+def initialize_site_auxiliary(key, width=44, ff=88, node_dim=24):
+    """Append burial/interface heads without changing any existing draw."""
+    params = initialize_site(key, width=width, ff=ff, node_dim=node_dim)
+    burial_key, interface_key = jax.random.split(jax.random.fold_in(key, 27183))
+    params["auxiliary"] = {
+        "burial": _linear(burial_key, width, 1),
+        "interface": _linear(interface_key, width, 1),
+    }
+    return params
+
+
 def _site_bias(block, edge, source_type, neighbor_type):
     geometry = linear(block["edge_down"], jax.nn.gelu(linear(block["edge_up"], edge)))
     return geometry + block["pair_bias"][source_type[:, None], neighbor_type]
@@ -76,13 +87,29 @@ def _site_tokens(params, graph, residue, *, key=None, dropout_rate=0.0):
     return tokens * graph["site_mask"][:, None]
 
 
-def predict_site_shift_indexed(params, graph, *, key=None, dropout_rate=0.0):
+def site_embeddings_indexed(params, graph, *, key=None, dropout_rate=0.0):
+    """Return final candidate-site embeddings and the supervised site indices."""
     keys = jax.random.split(key, 3) if dropout_rate else (None, None, None)
     residue = encode_indexed(params, graph, key=keys[0], dropout_rate=dropout_rate)
     tokens = _site_tokens(params, graph, residue, key=keys[1], dropout_rate=dropout_rate)
     tokens = attend_sites_indexed(params["site"], tokens, graph, key=keys[2], dropout_rate=dropout_rate)
+    return tokens, graph["query_site"]
+
+
+def predict_site_shift_indexed(params, graph, *, key=None, dropout_rate=0.0):
+    tokens, query_site = site_embeddings_indexed(params, graph, key=key, dropout_rate=dropout_rate)
     all_shifts = 8 * jnp.tanh(linear(params["head"], tokens)[:, 0])
-    return all_shifts[graph["query_site"]]
+    return all_shifts[query_site]
+
+
+def predict_site_multi_indexed(params, graph, *, key=None, dropout_rate=0.0):
+    """Return pKa shift and independent normalized structural predictions."""
+    tokens, query_site = site_embeddings_indexed(params, graph, key=key, dropout_rate=dropout_rate)
+    return {
+        "shift": (8 * jnp.tanh(linear(params["head"], tokens)[:, 0]))[query_site],
+        "burial": jax.nn.sigmoid(linear(params["auxiliary"]["burial"], tokens)[:, 0])[query_site],
+        "interface": jax.nn.sigmoid(linear(params["auxiliary"]["interface"], tokens)[:, 0])[query_site],
+    }
 
 
 def predict_site_pkpdb_indexed(params, graph, *, key=None, dropout_rate=0.0):

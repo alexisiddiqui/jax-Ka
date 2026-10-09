@@ -43,3 +43,18 @@ def test_envelope_clearance_and_eligibility_unchanged():
 def test_heldout_70_requires_both_coverages():
     assert heldout_70(.7, .8, .8, ['benchmark']) and not heldout_70(.69, .9, .9, ['benchmark'])
     assert not heldout_70(.95, .9, .5, ['benchmark']) and not heldout_70(.95, .9, .9, ['experimental'])
+
+
+def test_antibody_released_reads_only_released_statuses(tmp_path):
+    from pkabench.pkpdb_mask_all import antibody_released
+    path = tmp_path/'ab.tsv'
+    path.write_text('pdb\tstatus\n1abc\treleased\n2abc\treleased_antibody_only\n3abc\tcdr_similar\n4abc\tnonantibody_chain\n')
+    assert antibody_released(path) == {'1abc', '2abc'}
+
+
+def test_revise_outputs_archives_previous_build(tmp_path):
+    import json
+    from pkabench.pkpdb_mask_all import revise_outputs
+    for name in ('protocol.json', 'pilot.json', 'verification.json'): (tmp_path/name).write_text(json.dumps({'name': name}))
+    revise_outputs(tmp_path); assert not (tmp_path/'protocol.json').exists() and (tmp_path/'revisions/00/pilot.json').exists()
+    (tmp_path/'protocol.json').write_text('{}'); revise_outputs(tmp_path); assert (tmp_path/'revisions/01/protocol.json').exists()

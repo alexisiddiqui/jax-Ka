@@ -5,10 +5,16 @@ Same cohort rules, label mapping and backbone inputs as pkpdb_pilot.py / pkpdb_p
 - gaps: long_gap_policy.site_usable replaces clean/uncertain anchor tiers as the usable-site rule (2026-10-08);
 - leakage: in addition to the pilot rule, a held-out benchmark hit at >= 70% identity and >= 80% coverage of both
   sequences excludes the entry, as does the precomputed list against the PINDER held-out reference
-  (audits/seq-overlap-v1/pkpdb_heldout_exclusions_70.tsv) (2026-10-08).
+  (audits/seq-overlap-v1/pkpdb_heldout_exclusions_70.tsv) (2026-10-08);
+- antibody path: entries excluded only through antibody chains whose CDRs are < 70% identical to held-out and
+  experimental antibody CDRs are released (audits/pkpdb-ab-path-v1/pkpdb_ab_path_v2.tsv, as PINDER
+  pinder-heldout-exclusions-v3; v2 uses complete held-out CDR sets, including held-out antibodies without SAbDab
+  CDR annotations) (2026-10-09).
 Kept as a separate module so the existing pkpdb-5k-v2 protocol hashes are unchanged.
 Usage (compute node): python -m pkabench.pkpdb_mask_all <out> [--smoke] [--full]
 --full processes every pKPDB entry (no 5,000 cap); pipeline errors are then recorded in audit.json instead of aborting.
+--revise reruns a verified build whose protocol changed: the previous protocol and outputs move to revisions/<n>/, cached
+entry receipts are reused (clean() is unchanged) and only newly passing entries are cleaned.
 """
 import concurrent.futures
 import json
@@ -34,6 +40,8 @@ from .component_mask_policy import POLICY, classify, class_trees, nearest_by_cla
 from .long_gap_policy import POLICY as GAP_POLICY, site_usable
 
 EXCLUSIONS_70 = 'audits/seq-overlap-v1/pkpdb_heldout_exclusions_70.tsv'
+ANTIBODY_PATH = 'audits/pkpdb-ab-path-v1/pkpdb_ab_path_v2.tsv'
+REVISION_OUTPUTS = ('protocol.json', 'pilot.json', 'verification.json', 'audit.json', 'status.json', 'report.md')
 
 
 def heldout_70(identity, qcov, tcov, kinds):
@@ -52,6 +60,21 @@ def excluded_70(out, batch_number, references, candidates):
             q, t, i, qc, tc = line.strip().split('\t')
             if heldout_70(float(i), float(qc), float(tc), references['references'][t]['kinds']): excluded |= owners[q]
     return excluded
+
+
+def antibody_released(path):
+    """Entries whose sequence-overlap exclusion comes only from antibody chains that pass the CDR check (status released*)."""
+    import csv
+    return {r['pdb'] for r in csv.DictReader(open(path), delimiter='\t') if r['status'].startswith('released')}
+
+
+def revise_outputs(out):
+    """Move a previous protocol and its outputs to revisions/<n>/; returns the previous protocol sha256."""
+    previous = digest(out/'protocol.json'); n = len(list((out/'revisions').glob('*'))) if (out/'revisions').exists() else 0
+    dest = out/'revisions'/f'{n:02d}'; dest.mkdir(parents=True)
+    for name in REVISION_OUTPUTS:
+        if (out/name).exists(): (out/name).rename(dest/name)
+    return previous
 
 
 def clean(task):
@@ -145,11 +168,12 @@ def clean(task):
     atomic_json(resultfile, result); return result
 
 
-def run(root, out, smoke=False, full=False):
+def run(root, out, smoke=False, full=False, revise=False):
     target = None if full else 5000
     threads = int(os.environ['SLURM_CPUS_PER_TASK']); require_compute(threads=threads)
     out.mkdir(parents=True, exist_ok=True); began = time.time()
-    if (out/'verification.json').exists() and read(out/'verification.json')['passed']: return
+    verified = (out/'verification.json').exists() and read(out/'verification.json')['passed']
+    if verified and not revise: return
     refs = read(out/'references.json') if (out/'references.json').exists() else reference_inventory(root, out)
     if refs['unresolved']: raise RuntimeError(f'Unresolved experimental reserve sequences: {refs["unresolved"]}')
     labels(root, out)
@@ -158,17 +182,28 @@ def run(root, out, smoke=False, full=False):
     manifest = dict(target=target if target else 'all', selection_seed=20261006, label_index_sha256=digest(index), references_sha256=digest(out/'references.json'),
         validation_test_identity_cutoff=.9, validation_test_shorter_coverage=.8, experimental_identity_cutoff=.3, experimental_bidirectional_coverage=.8,
         heldout_identity_cutoff_70=.7, heldout_bidirectional_coverage_70=.8, heldout_exclusions_70_sha256=digest(root/EXCLUSIONS_70), gap_policy=GAP_POLICY,
+        antibody_path=('entries excluded only through antibody chains (aligned to SAbDab-annotated V domains) whose concatenated CDRs are < 70% identical, '
+                       'same chain type, to every held-out and experimental antibody CDR set are released'),
+        antibody_path_sha256=digest(root/ANTIBODY_PATH),
         selection=('every eligible structure' if full else 'first 5000 eligible structures in deterministic shuffled order')+'; same cohort for raw and cleaned labels',
         component_policy=POLICY,
         masks='long-gap-v1 gap rule (anchor tiers + calibrated long-gap radii); components never reject; train/eval radii ligand 15/25, buffer 15/25, glycan 20/25, exposed ion 25/25, bound metal/complex 30/30 A',
         scope='Temporary pilot; deposited asymmetric units, 30-1500 declared protein residues, no nonprotein polymer. No pKa recalculation or structural reconstruction.',
         code={p.name: digest(p) for p in sorted(here.glob('pkpdb_pilot*.py'))+
               [here/name for name in ('pkpdb_mask_all.py', 'component_mask_policy.py', 'long_gap_policy.py', 'audit.py', 'conformers.py', 'supervision.py', 'anchor_tiers.py')]})
-    if (out/'protocol.json').exists(): assert read(out/'protocol.json') == manifest
+    if (out/'protocol.json').exists():
+        stored = read(out/'protocol.json')
+        if {k: v for k, v in stored.items() if k != 'revises_protocol_sha256'} == manifest:
+            if verified: return
+            manifest = stored
+        else:
+            assert revise, 'protocol changed; rerun with --revise to supersede the previous build in place'
+            manifest['revises_protocol_sha256'] = revise_outputs(out); atomic_json(out/'protocol.json', manifest)
     else: atomic_json(out/'protocol.json', manifest)
     accepted = []; audit = []; reserved = set(refs['reserved_pdb_ids']); batch_size = 40 if smoke else 2000
     import csv
     listed_70 = {r['pdb'] for r in csv.DictReader(open(root/EXCLUSIONS_70), delimiter='\t')}
+    released = antibody_released(root/ANTIBODY_PATH)
     with concurrent.futures.ProcessPoolExecutor(max_workers=min(16, threads//2)) as pool:
         for batch_number, start in enumerate(range(0, len(order), batch_size)):
             ids = order[start:start+batch_size]; tasks = []
@@ -178,7 +213,7 @@ def run(root, out, smoke=False, full=False):
             meta = list(pool.map(metadata, tasks, chunksize=4)); audit.extend(r for r in meta if r['status'] != 'candidate')
             candidates = [r for r in meta if r['status'] == 'candidate']
             atomic_json(out/'status.json', dict(stage='sequence screening', batch=batch_number, accepted=len(accepted), candidates=len(candidates), target=target or 'all'))
-            excluded = set(search(root, out, candidates, refs, batch_number, threads)) | excluded_70(out, batch_number, refs, candidates) | (listed_70 & {r['pdb_id'] for r in candidates})
+            excluded = (set(search(root, out, candidates, refs, batch_number, threads)) | excluded_70(out, batch_number, refs, candidates) | (listed_70 & {r['pdb_id'] for r in candidates})) - released
             passing = []
             for r in candidates:
                 if r['pdb_id'] in excluded: audit.append(dict(pdb_id=r['pdb_id'], status='rejected', reason='sequence_overlap'))
@@ -208,14 +243,16 @@ def run(root, out, smoke=False, full=False):
             'Structures must have at least one clean site in both arms; raw/clean comparison is conditional on this cohort.',
             'Within-training component_id groups exact sequence sets only; 90%/70% exclusions are against held-out chains, not a within-training clustering claim.',
             'Gap policy long-gap-v1: calibrated long-gap radii on pKAI deletions; pKPDB labels are PypKa, so these radii are not validated for them.',
-            'Component policy mask-all-v1: component chemistry never rejects; masks only.'])
+            'Component policy mask-all-v1: component chemistry never rejects; masks only.',
+            'Antibody path: entries excluded only through antibody chains with CDRs < 70% identical to held-out/experimental antibody CDRs are released.'])
+    if manifest.get('revises_protocol_sha256'): release['revises_protocol_sha256'] = manifest['revises_protocol_sha256']
     atomic_json(out/'pilot.json', release); atomic_json(out/'verification.json', dict(passed=True, structures=len(selected), raw_sites=release['raw_sites'], clean_sites=release['clean_sites'], pilot_sha256=digest(out/'pilot.json')))
-    text = [f'# pKPDB {"full build" if full else "5k pilot"} (mask-all-v1, long-gap-v1, 70% held-out)', '', f'{len(selected):,} structures; {release["raw_sites"]:,} raw mapped sites; {release["clean_sites"]:,} clean training sites; {release["pipeline_errors"]} pipeline errors recorded.',
-        'Cohort rules as pkpdb-5k-v2; leakage adds the 70%/80%-both held-out rule. Components never reject (component_mask_policy); gaps per long_gap_policy.',
+    text = [f'# pKPDB {"full build" if full else "5k pilot"} (mask-all-v1, long-gap-v1, 70% held-out, antibody path)', '', f'{len(selected):,} structures; {release["raw_sites"]:,} raw mapped sites; {release["clean_sites"]:,} clean training sites; {release["pipeline_errors"]} pipeline errors recorded.',
+        'Cohort rules as pkpdb-5k-v2; leakage adds the 70%/80%-both held-out rule and the CDR-based antibody path. Components never reject (component_mask_policy); gaps per long_gap_policy.',
         'Raw and clean arms share identical inputs and structure membership. No training launched.', '', '| Audit reason | Structures |', '|---|---:|']
     text.extend(f'| {k} | {v} |' for k, v in sorted(Counter(r.get('reason', r['status']) for r in audit).items()))
     text += ['', *release['notes']]; (out/'report.md').write_text('\n'.join(text)+'\n')
 
 
 if __name__ == '__main__':
-    root = Path(os.environ['PKABENCH_RUNTIME']); out = Path(sys.argv[1]); run(root, out, '--smoke' in sys.argv, '--full' in sys.argv)
+    root = Path(os.environ['PKABENCH_RUNTIME']); out = Path(sys.argv[1]); run(root, out, '--smoke' in sys.argv, '--full' in sys.argv, '--revise' in sys.argv)

@@ -1,0 +1,15 @@
+{
+ "version": "pinder-heldout-exclusions-v2",
+ "sha256": "332eb8fcecf1ac21565ff20000faa9f12f9ed527af3d17ab71d4c99e9e106258",
+ "supersedes": "pinder-heldout-exclusions-v1",
+ "v1_sha256": "9106920466e0d9b53ef6f2a54907f5742d4883bfeff4e5e2c08729f2c9559ee9",
+ "complexes_excluded": 4017,
+ "clusters_touched": 1882,
+ "released_from_v1_by_antibody_path": 1588,
+ "abag_excluded": 364,
+ "antibody_path": "Ab/Ag dimers: antigen chain whole-chain experimental_30 / fragment_90; antibody chain concatenated CDRs >= 0.70 identity (same chain type) vs CDRs of experimental antibody references (1igc, 1axt H/L), CDRs transferred by alignment to SAbDab-annotated V domains as in pinder-prefilter-v1; reserved_pdb_id unchanged; other dimers as v1",
+ "factorial_cohort_flagged": {
+  "train": 250,
+  "val": 12
+ }
+}
