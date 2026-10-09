@@ -7,8 +7,9 @@ Same cohort rules, label mapping and backbone inputs as pkpdb_pilot.py / pkpdb_p
   sequences excludes the entry, as does the precomputed list against the PINDER held-out reference
   (audits/seq-overlap-v1/pkpdb_heldout_exclusions_70.tsv) (2026-10-08);
 - antibody path: entries excluded only through antibody chains whose CDRs are < 70% identical to held-out and
-  experimental antibody CDRs are released (audits/pkpdb-ab-path-v1/pkpdb_ab_path.tsv, as PINDER
-  pinder-heldout-exclusions-v2) (2026-10-09).
+  experimental antibody CDRs are released (audits/pkpdb-ab-path-v1/pkpdb_ab_path_v2.tsv, as PINDER
+  pinder-heldout-exclusions-v3; v2 uses complete held-out CDR sets, including held-out antibodies without SAbDab
+  CDR annotations) (2026-10-09).
 Kept as a separate module so the existing pkpdb-5k-v2 protocol hashes are unchanged.
 Usage (compute node): python -m pkabench.pkpdb_mask_all <out> [--smoke] [--full]
 --full processes every pKPDB entry (no 5,000 cap); pipeline errors are then recorded in audit.json instead of aborting.
@@ -39,7 +40,7 @@ from .component_mask_policy import POLICY, classify, class_trees, nearest_by_cla
 from .long_gap_policy import POLICY as GAP_POLICY, site_usable
 
 EXCLUSIONS_70 = 'audits/seq-overlap-v1/pkpdb_heldout_exclusions_70.tsv'
-ANTIBODY_PATH = 'audits/pkpdb-ab-path-v1/pkpdb_ab_path.tsv'
+ANTIBODY_PATH = 'audits/pkpdb-ab-path-v1/pkpdb_ab_path_v2.tsv'
 REVISION_OUTPUTS = ('protocol.json', 'pilot.json', 'verification.json', 'audit.json', 'status.json', 'report.md')
 
 
