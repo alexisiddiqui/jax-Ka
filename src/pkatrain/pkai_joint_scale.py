@@ -422,75 +422,121 @@ def _weighted_mse(torch, prediction, target, weight):
     return (weight * (prediction-target).square()).sum() / weight.sum().clamp_min(1e-8)
 
 
-def _predict_mse(torch, model, x, y, batch=BATCH_SIZE):
-    total = 0.; squared = 0.
-    model.eval()
+def _squared_sums(torch, model, source, length, terms, config, forward):
+    """Mean squared error per term over contiguous BATCH_SIZE slices. Per-batch float32 sums are added as Python floats
+    in slice order (the same arithmetic as reading each batch sum back with float()), but read back in one transfer.
+    forward(batch) runs the model once per batch; each term maps (batch, outputs) to per-row squared errors."""
+    from .loading import DeferredScalars, Prefetcher
+    sums = {name: DeferredScalars(every=1 << 30) for name in terms}
+    specs = [np.arange(start, min(start + BATCH_SIZE, length)) for start in range(0, length, BATCH_SIZE)]
+    to_device, on_consume = source.hooks(); model.eval()
     with torch.no_grad():
-        for start in range(0, len(y), batch):
-            stop = min(start+batch, len(y)); xx=torch.tensor(np.asarray(x[start:stop]),device="cuda")
-            yy=torch.tensor(np.asarray(y[start:stop]),device="cuda"); squared += float((model(xx)-yy).square().sum()); total += stop-start
-    return squared/total
+        for _, batch in Prefetcher(source, specs, config, to_device, on_consume):
+            outputs = forward(batch)
+            for name, term in terms.items(): sums[name].add(term(batch, outputs).sum())
+    return {name: sum(values.flush()) / length for name, values in sums.items()}
 
 
-def _validation(torch, model, root, mode, objective):
+def _pkpdb_validation_arrays(root, mode):
+    """Frozen 5k-pilot validation rows: the compact package (pkabench.dataset_transfer build-validation) when present,
+    checked against the pilot row selection, else the pilot arrays themselves."""
+    pilot = Path(root) / "pretraining/pkpdb-5k-comparison-v1/pkai-packed"; package = Path(root) / "pretraining/pkpdb-val-pkai-v1"
+    if package.exists():
+        if (pilot / "rows.json").exists():
+            rows = read(pilot / "rows.json"); ids = np.asarray([i for i, r in enumerate(rows) if r["split"] == "val" and r["group"] in SIDECHAIN_GROUPS])
+            if not np.array_equal(ids, np.load(package / "source_rows.npy")): raise AssertionError("validation package rows differ from the pilot")
+        return {"x": np.load(package / ("full.npy" if mode == "full" else "backbone.npy"), mmap_mode="r"), "y": np.load(package / "target.npy")}
+    rows = read(pilot / "rows.json"); ids = np.asarray([i for i, r in enumerate(rows) if r["split"] == "val" and r["group"] in SIDECHAIN_GROUPS])
+    feature_path = pilot / "features.npy" if mode == "full" else Path(root) / "pretraining/pkai-backbone-ablation-v1/backbone-features.npy"
+    return {"x": np.load(feature_path, mmap_mode="r")[ids], "y": np.asarray([rows[i]["pka"] - rows[i]["model_pka"] for i in ids], np.float32)}
+
+
+def _validation_sources(torch, root, mode, objective, config):
+    from .loading_torch import PackedSiteSource
+    sources = {"pk": PackedSiteSource(_pkpdb_validation_arrays(root, mode), config=config)}
+    if objective == "joint":
+        pi = _arrays(output(root) / "packed/pinder-val", (f"{mode}_ab", f"{mode}_free", "target_ab", "target_free"))
+        sources["pi"] = PackedSiteSource({"xa": pi[f"{mode}_ab"], "xf": pi[f"{mode}_free"], "ya": pi["target_ab"], "yf": pi["target_free"]}, config=config)
+    return sources
+
+
+def _validation(torch, model, sources, config):
     # The established clean 5k validation is independent of the new 10% pool.
-    pilot = Path(root) / "pretraining/pkpdb-5k-comparison-v1/pkai-packed"
-    rows = read(pilot / "rows.json"); ids=np.asarray([i for i,r in enumerate(rows) if r["split"]=="val" and r["group"] in SIDECHAIN_GROUPS])
-    feature_path = pilot/"features.npy" if mode=="full" else Path(root)/"pretraining/pkai-backbone-ablation-v1/backbone-features.npy"
-    px=np.load(feature_path,mmap_mode="r"); py=np.asarray([rows[i]["pka"]-rows[i]["model_pka"] for i in ids],np.float32)
-    pk_mse=_predict_mse(torch,model,px[ids],py)
-    result={"pkpdb_mse":pk_mse}
-    if objective=="joint":
-        pi=_arrays(output(root)/"packed/pinder-val",(f"{mode}_ab",f"{mode}_free","target_ab","target_free"))
-        state_a=_predict_mse(torch,model,pi[f"{mode}_ab"],pi["target_ab"]); state_f=_predict_mse(torch,model,pi[f"{mode}_free"],pi["target_free"])
-        # Stream paired predictions to avoid retaining the validation tensor on device.
-        ss=0.; nn=0
-        model.eval()
-        with torch.no_grad():
-            for start in range(0,len(pi["target_ab"]),BATCH_SIZE):
-                stop=min(start+BATCH_SIZE,len(pi["target_ab"])); a=model(torch.tensor(np.asarray(pi[f"{mode}_ab"][start:stop]),device="cuda")); f=model(torch.tensor(np.asarray(pi[f"{mode}_free"][start:stop]),device="cuda"))
-                target=torch.tensor(np.asarray(pi["target_ab"][start:stop]-pi["target_free"][start:stop]),device="cuda");ss+=float(((a-f)-target).square().sum());nn+=stop-start
-        result.update(pinder_state_mse=(state_a+state_f)/2,pinder_paired_mse=ss/nn)
-    result["selection_mse"]=sum(result.values())/len(result)
+    pk = sources["pk"]
+    result = {"pkpdb_mse": _squared_sums(torch, model, pk, pk.length, {"pk": lambda b, o: (o - b["y"]).square()}, config,
+                                         lambda b: model(b["x"]))["pk"]}
+    if "pi" in sources:
+        pi = sources["pi"]
+        terms = {"a": lambda b, o: (o[0] - b["ya"]).square(), "f": lambda b, o: (o[1] - b["yf"]).square(),
+                 "pair": lambda b, o: ((o[0] - o[1]) - (b["ya"] - b["yf"])).square()}
+        mse = _squared_sums(torch, model, pi, pi.length, terms, config, lambda b: (model(b["xa"]), model(b["xf"])))
+        result.update(pinder_state_mse=(mse["a"] + mse["f"]) / 2, pinder_paired_mse=mse["pair"])
+    result["selection_mse"] = sum(result.values()) / len(result)
     return result
 
 
+def _epoch_specs(order_pk, order_pi):
+    """The same index slices as before: BATCH_SIZE rows per step, wrapping to the start of the permutation."""
+    steps = max(math.ceil(len(order_pk) / BATCH_SIZE), math.ceil(len(order_pi) / BATCH_SIZE) if order_pi is not None else 0)
+    specs = []
+    for step in range(steps):
+        ip = order_pk[(step * BATCH_SIZE) % len(order_pk):((step * BATCH_SIZE) % len(order_pk)) + BATCH_SIZE]
+        if len(ip) < BATCH_SIZE: ip = np.concatenate((ip, order_pk[:BATCH_SIZE - len(ip)]))
+        spec = {"pk": ip}
+        if order_pi is not None:
+            ii = order_pi[(step * BATCH_SIZE) % len(order_pi):((step * BATCH_SIZE) % len(order_pi)) + BATCH_SIZE]
+            if len(ii) < BATCH_SIZE: ii = np.concatenate((ii, order_pi[:BATCH_SIZE - len(ii)]))
+            spec["pi"] = ii
+        specs.append(spec)
+    return specs
+
+
 def train_scale(root, mode, objective):
+    from .loading import DeferredScalars, LoaderConfig, Prefetcher
+    from .loading_torch import CombinedSource, PackedSiteSource
     if mode not in MODES or objective not in OBJECTIVES: raise ValueError((mode,objective))
     root=Path(root);out=output(root); packed=read(out/"packed/verification.json")
     if not packed["passed"]: raise AssertionError("unverified packed inputs")
     torch,_=native();require_compute(threads=2,gpu_benchmark=True,allow_comp1400=True)
     torch.set_num_threads(2);torch.manual_seed(SEED);np.random.seed(SEED);torch.backends.cuda.matmul.allow_tf32=False
     model=model_class(torch)().cuda().train();opt=torch.optim.Adam(model.parameters(),lr=LEARNING_RATE,weight_decay=1e-4)
+    config=LoaderConfig()
     pk=_arrays(out/"packed/pkpdb-train",(mode,"target","weight")); pi=None
-    if objective=="joint":pi=_arrays(out/"packed/pinder-train",(f"{mode}_ab",f"{mode}_free","target_ab","target_free","w_burial","w_interface"))
+    sources={"pk":PackedSiteSource({"x":pk[mode],"y":pk["target"],"w":pk["weight"]},config=config)}
+    if objective=="joint":
+        pi=_arrays(out/"packed/pinder-train",(f"{mode}_ab",f"{mode}_free","target_ab","target_free","w_burial","w_interface"))
+        sources["pi"]=PackedSiteSource({"xa":pi[f"{mode}_ab"],"xf":pi[f"{mode}_free"],"ya":pi["target_ab"],"yf":pi["target_free"],"wb":pi["w_burial"],"wi":pi["w_interface"]},config=config)
+    train_source=CombinedSource(sources); validation_sources=_validation_sources(torch,root,mode,objective,config)
     dest=out/"runs"/f"{mode}-{objective}"/f"seed-{SEED}";dest.mkdir(parents=True,exist_ok=True)
-    provenance={"mode":mode,"objective":objective,"seed":SEED,"batch_size":BATCH_SIZE,"learning_rate":LEARNING_RATE,"lr_rule":"1e-6*sqrt(batch/64)","precision":"float32","cpus":2,"initialization":"scratch","packed_verification_sha256":digest(out/"packed/verification.json"),"manifest_sha256":digest(out/"manifest.json"),"test_data_included":False}
+    provenance={"mode":mode,"objective":objective,"seed":SEED,"batch_size":BATCH_SIZE,"learning_rate":LEARNING_RATE,"lr_rule":"1e-6*sqrt(batch/64)","precision":"float32","cpus":2,"initialization":"scratch","packed_verification_sha256":digest(out/"packed/verification.json"),"manifest_sha256":digest(out/"manifest.json"),"test_data_included":False,
+                "loader":{"workers":config.workers,"prefetch":config.prefetch,"train":train_source.provenance(),"validation":{k:v.provenance() for k,v in validation_sources.items()}}}
     atomic_json(dest/"manifest.json",provenance)
+    params=list(model.parameters())
     rng=np.random.default_rng(SEED);best=float("inf");anchor=float("inf");stall=0;history=[];began=time.monotonic();max_epochs=100;patience=8
     for epoch in range(1,max_epochs+1):
         if stall>=patience:break
         model.train();order_pk=rng.permutation(len(pk["target"]));order_pi=rng.permutation(len(pi["target_ab"])) if pi else None
-        steps=max(math.ceil(len(order_pk)/BATCH_SIZE),math.ceil(len(order_pi)/BATCH_SIZE) if pi else 0); losses=[]
-        for step in range(steps):
-            ip=order_pk[(step*BATCH_SIZE)%len(order_pk):((step*BATCH_SIZE)%len(order_pk))+BATCH_SIZE]
-            if len(ip)<BATCH_SIZE:ip=np.concatenate((ip,order_pk[:BATCH_SIZE-len(ip)]))
-            xp=torch.tensor(np.asarray(pk[mode][ip]),device="cuda");yp=torch.tensor(np.asarray(pk["target"][ip]),device="cuda");wp=torch.tensor(np.asarray(pk["weight"][ip]),device="cuda")
-            lpk=_weighted_mse(torch,model(xp),yp,wp);components=[lpk]
+        losses=DeferredScalars(every=50)
+        prefetcher=Prefetcher(train_source,_epoch_specs(order_pk,order_pi),config,train_source.to_device,train_source.on_consume)
+        for _,batch in prefetcher:
+            b=batch["pk"];lpk=_weighted_mse(torch,model(b["x"]),b["y"],b["w"]);components=[lpk]
             if pi:
-                ii=order_pi[(step*BATCH_SIZE)%len(order_pi):((step*BATCH_SIZE)%len(order_pi))+BATCH_SIZE]
-                if len(ii)<BATCH_SIZE:ii=np.concatenate((ii,order_pi[:BATCH_SIZE-len(ii)]))
-                xa=torch.tensor(np.asarray(pi[f"{mode}_ab"][ii]),device="cuda");xf=torch.tensor(np.asarray(pi[f"{mode}_free"][ii]),device="cuda")
-                ya=torch.tensor(np.asarray(pi["target_ab"][ii]),device="cuda");yf=torch.tensor(np.asarray(pi["target_free"][ii]),device="cuda");wb=torch.tensor(np.asarray(pi["w_burial"][ii]),device="cuda");wi=torch.tensor(np.asarray(pi["w_interface"][ii]),device="cuda")
-                pa=model(xa);pf=model(xf);components += [(_weighted_mse(torch,pa,ya,wb)+_weighted_mse(torch,pf,yf,wb))/2,_weighted_mse(torch,pa-pf,ya-yf,wi)]
+                b=batch["pi"];pa=model(b["xa"]);pf=model(b["xf"])
+                components += [(_weighted_mse(torch,pa,b["ya"],b["wb"])+_weighted_mse(torch,pf,b["yf"],b["wb"]))/2,_weighted_mse(torch,pa-pf,b["ya"]-b["yf"],b["wi"])]
             loss=sum(components)/len(components);opt.zero_grad(set_to_none=True);loss.backward()
-            if not torch.isfinite(loss) or not all(p.grad is not None and torch.isfinite(p.grad).all() for p in model.parameters()):raise FloatingPointError("nonfinite training step")
-            opt.step();losses.append(float(loss.detach()))
-        metrics=_validation(torch,model,root,mode,objective);score=metrics["selection_mse"]
+            if any(p.grad is None for p in params):raise FloatingPointError("missing gradient")
+            finite=torch.isfinite(loss)&torch.stack([torch.isfinite(p.grad).all() for p in params]).all()
+            if not bool(finite):raise FloatingPointError("nonfinite training step")  # one synchronisation per step
+            opt.step();losses.add(loss.detach())
+        loader=prefetcher.telemetry.summary()
+        metrics=_validation(torch,model,validation_sources,config);score=metrics["selection_mse"]
         if score<best:best=score;torch.save(model.state_dict(),dest/"best.pending.pt");os.replace(dest/"best.pending.pt",dest/"best.pt")
         if score<anchor-.001:anchor=score;stall=0
         else:stall+=1
-        row={"epoch":epoch,"train_mse":float(np.mean(losses)),**metrics,"stall":stall,"seconds":time.monotonic()-began,"peak_allocated_bytes":torch.cuda.max_memory_allocated()};history.append(row);atomic_json(dest/"history.json",history);atomic_json(dest/"progress.json",row);print(json.dumps(row),flush=True)
+        row={"epoch":epoch,"train_mse":float(np.mean(losses.flush())),**metrics,"stall":stall,"seconds":time.monotonic()-began,"peak_allocated_bytes":torch.cuda.max_memory_allocated(),
+             "loader_wait_fraction":loader["wait_fraction"],"loader_max_wait_seconds":loader["max_wait_seconds"]};history.append(row);atomic_json(dest/"history.json",history);atomic_json(dest/"progress.json",row);print(json.dumps(row),flush=True)
+    train_source.close()
+    for source in validation_sources.values(): source.close()
     atomic_json(dest/"final.json",{"complete":True,"epochs":len(history),"best_selection_mse":best,"history_sha256":digest(dest/"history.json"),"peak_allocated_bytes":torch.cuda.max_memory_allocated(),"peak_reserved_bytes":torch.cuda.max_memory_reserved(),"test_data_included":False})
 
 

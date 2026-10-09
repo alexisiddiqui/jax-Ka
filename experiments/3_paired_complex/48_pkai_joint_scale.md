@@ -37,3 +37,16 @@ The first production screen is restricted to the nested 10% pools and uses a 2 x
 | Four A40 training arms | 747977 |
 
 CPU preparation excludes comp1400 and caps the array at 400 queued cores. Each GPU task requests exactly two CPUs and 8 GiB host RAM. Every downstream stage uses `afterok`, so failed feature validation cannot fall through into training.
+
+## Loader update (2026-10-09)
+
+`train_scale` uses the shared loader protocol (`pkatrain.loading`, `loading_torch.PackedSiteSource`):
+- the packed arrays stay on the GPU when they fit, otherwise they're streamed through pinned asynchronous copies;
+- one fused finite check per step replaces the per-parameter checks;
+- losses are read back in groups.
+
+Batch membership, order and the loss arithmetic are unchanged. On synthetic data the losses are bit-identical, and
+throughput rises from 81 to 117 steps/s (resident) or 88 (streaming); see
+[06_loader_protocol_and_transfer.md](../4_backbone/06_loader_protocol_and_transfer.md). Each history row now includes
+`loader_wait_fraction`. pKPDB validation reads the compact package `pretraining/pkpdb-val-pkai-v1` (the same pilot
+validation rows, checked against `rows.json`) when it exists.
