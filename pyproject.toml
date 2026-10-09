@@ -17,7 +17,7 @@ reference = ["propka==3.5.1"]
 benchmark = ["pyarrow>=20,<21"]
 solver = ["optimistix>=0.0.10", "lineax>=0.0.7", "equinox>=0.11"]
 train = ["optimistix>=0.0.10", "lineax>=0.0.7", "equinox>=0.11", "optax>=0.2.5", "pyarrow>=20", "filelock>=3.16"]
-triton = ["jax-triton==0.3.0", "triton==3.3.0"]
+triton = ["jax-triton==0.4.1", "triton==3.8.0"]
 mps = [
   "jax==0.11.1; python_version >= '3.12'",
   "jaxlib==0.11.1; python_version >= '3.12'",

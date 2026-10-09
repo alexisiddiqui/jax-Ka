@@ -22,7 +22,7 @@ def site_graph():
 
 @pytest.mark.skipif(jax.default_backend() != "gpu", reason="indexed attention requires CUDA")
 def test_site_dropout_zero_and_shared_branch_rng():
-    with jax.experimental.enable_x64(False):
+    with jax.enable_x64(False):
         params = initialize_site(jax.random.PRNGKey(17)); graph = site_graph()
         deterministic = predict_site_shift_indexed(params, graph)
         zero = predict_site_shift_indexed(params, graph, key=jax.random.PRNGKey(8), dropout_rate=0.0)

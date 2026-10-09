@@ -26,7 +26,7 @@ def relative(left, right):
 def test_indexed_model_matches_native_under_batch_and_gradient():
     # The repository test suite enables x64 globally for the physical solver;
     # GQT training and this optional kernel are deliberately full float32.
-    with jax.experimental.enable_x64(False):
+    with jax.enable_x64(False):
         params = initialize(jax.random.PRNGKey(17), width=92, ff=184)
         one, _ = graph(); one, _, _ = pad(one, np.zeros(4,np.float32),(32,32,16))
         np.testing.assert_allclose(

@@ -136,14 +136,14 @@ def _forward(q, k, v, neighbors, bias, mask, switch):
     return jt.triton_call(
         q, k, v, neighbors, bias, mask, switch,
         kernel=_indexed_attention_fwd,
-        out_shape=jax.ShapeDtypeStruct(q.shape, q.dtype),
+        out_type=jax.ShapeDtypeStruct(q.shape, q.dtype),
         grid=(b * queries, h), name="gqt_indexed_attention_fwd",
         B=b, Q=queries, N=n, H=h, D=d, K=slots,
         SCALE=float(1 / np.sqrt(d)),
         EPSILON=EPS,
         BLOCK_D=triton.next_power_of_2(d),
         BLOCK_K=triton.next_power_of_2(slots),
-        num_warps=WARPS, enable_fp_fusion=False,
+        num_warps=WARPS, backend_options={"enable_fp_fusion": False},
     )
 
 
@@ -170,14 +170,14 @@ def _backward(q, k, v, neighbors, bias, mask, switch, gout):
     dq, dk, dv, dbias = jt.triton_call(
         q, k, v, neighbors, bias, mask, switch, gout,
         kernel=_indexed_attention_bwd,
-        out_shape=shapes, grid=(b * queries, h),
+        out_type=shapes, grid=(b * queries, h),
         name="gqt_indexed_attention_bwd",
         B=b, Q=queries, N=n, H=h, D=d, K=slots,
         SCALE=float(1 / np.sqrt(d)),
         EPSILON=EPS,
         BLOCK_D=triton.next_power_of_2(d),
         BLOCK_K=triton.next_power_of_2(slots),
-        num_warps=WARPS, zeroed_outputs=(1, 2), enable_fp_fusion=False,
+        num_warps=WARPS, zeroed_outputs=(1, 2), backend_options={"enable_fp_fusion": False},
     )
     return dq, dk, dv, dbias
 
