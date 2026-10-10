@@ -149,7 +149,10 @@ def test_squash_dir_verify_and_link(tmp_path, monkeypatch):
     out = tmp_path / "extracted"
     subprocess.run([tools[1], "-q", "-n", "-d", str(out), str(tmp_path / "root" / "images" / "x-store.sqfs")], check=True)
     assert dt.verify_dir(out, workers=1)["passed"]
+    monkeypatch.setattr(dt, "RANGE_BYTES", 1024)
+    assert dt.compare_dir(out, store, workers=2)["passed"]
     (out / "a.npy").write_bytes(b"\1" * 5000)
+    assert not dt.compare_dir(out, store, workers=2)["passed"]
     assert not dt.verify_dir(out, workers=1)["passed"]
     dt.link_dir(tmp_path / "root", "training/x/store-v1", "x-store")
     assert os.readlink(store) == str(tmp_path / "mnt" / "x-store")
