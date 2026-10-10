@@ -413,11 +413,18 @@ def pack_features(root):
         if not rr or sum(r["completed"] for r in rr) + len(failures) != expected[dataset]:
             raise AssertionError((dataset, len(rr), sum(r["completed"] for r in rr), len(failures), expected[dataset]))
         receipts[f"{dataset}_excluded"] = sorted(failures, key=lambda f: (f["split"], f["id"]))
-    pkpaths = sorted((out / "features/pkpdb").glob("train-*.npz"))
+    # Only this run's registered records (features/ may be shared with a larger, nested fraction); sorted by file name as
+    # before, so runs whose features/ holds exactly their records pack identically.
+    def record_paths(dataset, split, ids):
+        paths = [out / f"features/{dataset}/{split}-{cid}.npz" for cid in ids]
+        return sorted((p for p in paths if p.exists()), key=lambda p: p.name)
+    pkpaths = record_paths("pkpdb", "train", records["pkpdb_train"])
+    if len(pkpaths) != sum(r["completed"] for r in [read(p) for p in sorted(out.glob("prepare-pkpdb-*.json"))]):
+        raise AssertionError(("pkpdb", "feature files differ from completed records", len(pkpaths)))
     receipts["pkpdb_train"] = _pack_group(pkpaths, out / "packed/pkpdb-train",
         ("full","backbone","target","weight"))
     for split in ("train", "val"):
-        paths = sorted((out / "features/pinder").glob(f"{split}-*.npz"))
+        paths = record_paths("pinder", split, records[f"pinder_{split}"])
         receipts[f"pinder_{split}"] = _pack_group(paths, out / f"packed/pinder-{split}",
             ("full_ab","full_free","backbone_ab","backbone_free","target_ab","target_free","w_burial","w_interface"))
     excluded = {k: receipts.pop(k) for k in [k for k in receipts if k.endswith("_excluded")]}
