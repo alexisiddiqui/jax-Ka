@@ -37,6 +37,13 @@ REFERENCE_BATCH = 64
 REFERENCE_LR = 1e-6
 LEARNING_RATE = REFERENCE_LR * math.sqrt(BATCH_SIZE / REFERENCE_BATCH)
 OBJECTIVES = ("pkpdb", "joint")
+# Feature failures that are properties of the record, not of the code: the record is excluded and listed in the packed
+# verification. Any other error still fails the shard and blocks packing.
+EXCLUDABLE = ("no mapped pKPDB sites", "no paired sites", "PDB capacity", "Coincident pKAI environment/reference atoms")
+
+
+def _excludable(failure):
+    return any(reason in failure["error"] for reason in EXCLUDABLE)
 
 
 def read(path):
@@ -251,6 +258,10 @@ def _pkpdb_atoms(root, cid):
     chain = field("label_asym_id", ""); seq = field("label_seq_id", "?")
     auth = field("auth_seq_id", "?"); ins = field("pdbx_PDB_ins_code", "?")
     alt = field("label_alt_id", "."); occ = field("occupancy", "0").astype(float)
+    # defects.json lists the polymer chains by label_asym_id, while the structure below carries author chain IDs, so the
+    # chains are selected here on the label IDs (selecting on author IDs kept nothing when they differ, e.g. 5ma7 A -> E,
+    # and could keep the wrong chain when the letters overlap)
+    chains = {row["chain"] for row in read(Path(root) / "pretraining/pkpdb-full-v1/entries" / cid / "defects.json")["sequences"]}
     groups = {}
     for i, key in enumerate(zip(chain, seq, auth, ins)): groups.setdefault(key, []).append(i)
     keep = np.zeros(n, bool); blank = {"", " ", "?", "."}
@@ -261,15 +272,14 @@ def _pkpdb_atoms(root, cid):
         selected = alternatives[0] if alternatives else None
         keep[shared] = True
         if selected is not None: keep[positive[alt[positive] == selected]] = True
+    keep &= np.isin(chain, list(chains))
     new = pdbx.CIFCategory()
     for name in cat: new[name] = pdbx.CIFColumn(cat[name].as_array(str)[keep])
     new["label_alt_id"] = pdbx.CIFColumn(np.full(int(keep.sum()), "."))
     file.block["atom_site"] = new
     atoms = pdbx.get_structure(file, model=1, altloc="occupancy", use_author_fields=True, include_bonds=False)
-    selected = {row["chain"] for row in read(Path(root) / "pretraining/pkpdb-full-v1/entries" / cid / "defects.json")["sequences"]}
     canonical = {"ALA","ARG","ASN","ASP","CYS","GLN","GLU","GLY","HIS","ILE","LEU","LYS","MET","PHE","PRO","SER","THR","TRP","TYR","VAL"}
-    mask = (np.isin(atoms.res_name, list(canonical)) & np.isin(atoms.chain_id, list(selected)) &
-            ~np.isin(np.char.upper(atoms.element), ["H", "D"]))
+    mask = np.isin(atoms.res_name, list(canonical)) & ~np.isin(np.char.upper(atoms.element), ["H", "D"])
     return atoms[mask]
 
 
@@ -299,7 +309,7 @@ def _pkpdb_feature_record(root, cid):
     keys = [tuple(s[k] for k in KEY_FIELDS) for s in sites]
     atoms = _pkpdb_atoms(root, cid)
     full, kf = _native_features_for_atoms(atoms, keys); bb, kb = backbone_features(atoms, keys)
-    keep = kf & kb & np.asarray([key in env for key in keys])
+    keep = kf & kb & np.asarray([key in env for key in keys], bool)  # bool also when there are no keys
     if not keep.any(): raise ValueError((cid, "no mapped pKPDB sites"))
     from protein import PK_MODS
     target = np.asarray([s["pka"] - PK_MODS[s["group"]] for s in sites], np.float32)
@@ -358,7 +368,8 @@ def prepare_shard(root, dataset, task, tasks):
         if (done + len(failures)) % 10 == 0: print(json.dumps({"dataset":dataset,"task":task,"done":done,"failures":len(failures)}), flush=True)
     receipt = {"dataset":dataset,"task":task,"tasks":tasks,"assigned":len(selected),"completed":done,"sites":sites,"failures":failures}
     atomic_json(out / f"prepare-{dataset}-{task:03d}.json", receipt)
-    if failures: raise RuntimeError(f"{len(failures)} feature failures; see receipt")
+    blocking = [f for f in failures if not _excludable(f)]
+    if blocking: raise RuntimeError(f"{len(blocking)} feature failures ({len(failures) - len(blocking)} excludable); see receipt")
 
 
 def _pack_group(paths, destination, fields):
@@ -388,10 +399,12 @@ def pack_features(root):
                 "pinder": len(records["pinder_train"]) + len(records["pinder_val"])}
     receipts = {}
     for dataset in ("pkpdb", "pinder"):
-        rr = sorted(out.glob(f"prepare-{dataset}-*.json"))
-        if not rr or sum(read(p)["completed"] for p in rr) != expected[dataset]:
-            raise AssertionError((dataset, len(rr), sum(read(p)["completed"] for p in rr), expected[dataset]))
-        if any(read(p)["failures"] for p in rr): raise AssertionError((dataset, "feature failures"))
+        rr = [read(p) for p in sorted(out.glob(f"prepare-{dataset}-*.json"))]
+        failures = [f for r in rr for f in r["failures"]]
+        if any(not _excludable(f) for f in failures): raise AssertionError((dataset, "feature failures"))
+        if not rr or sum(r["completed"] for r in rr) + len(failures) != expected[dataset]:
+            raise AssertionError((dataset, len(rr), sum(r["completed"] for r in rr), len(failures), expected[dataset]))
+        receipts[f"{dataset}_excluded"] = sorted(failures, key=lambda f: (f["split"], f["id"]))
     pkpaths = sorted((out / "features/pkpdb").glob("train-*.npz"))
     receipts["pkpdb_train"] = _pack_group(pkpaths, out / "packed/pkpdb-train",
         ("full","backbone","target","weight"))
@@ -399,8 +412,9 @@ def pack_features(root):
         paths = sorted((out / "features/pinder").glob(f"{split}-*.npz"))
         receipts[f"pinder_{split}"] = _pack_group(paths, out / f"packed/pinder-{split}",
             ("full_ab","full_free","backbone_ab","backbone_free","target_ab","target_free","w_burial","w_interface"))
-    atomic_json(out / "packed/verification.json", {"passed":True,"groups":receipts,"test_data_included":False})
-    print(json.dumps({k:v["sites"] for k,v in receipts.items()}, sort_keys=True), flush=True)
+    excluded = {k: receipts.pop(k) for k in [k for k in receipts if k.endswith("_excluded")]}
+    atomic_json(out / "packed/verification.json", {"passed":True,"groups":receipts,"excluded":excluded,"test_data_included":False})
+    print(json.dumps({**{k:v["sites"] for k,v in receipts.items()}, **{k:len(v) for k,v in excluded.items()}}, sort_keys=True), flush=True)
 
 
 def feature_smoke(root):
