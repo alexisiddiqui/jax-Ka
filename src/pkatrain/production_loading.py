@@ -7,7 +7,7 @@ mask cleared and valid False, as SiteBatchLoader does), so each bucket compiles 
 - PinderSource.load -> (graphs, targets, mask, burial, interface, metadata, valid): gqt_paired_pinder._load_one on
   each record (AB and partner-free branches, burial/interface weights divided by the training normalisation), the
   format PairedEngine.step consumes (valid passed explicitly).
-- PkpdbSource.load -> (graphs, targets, eligible, valid): the SiteBatchLoader format (residue graph padded as
+- PkpdbSource.load -> (graphs, targets, eligible, valid), also for benchmark-val (mask="eval_mask"): the SiteBatchLoader format (residue graph padded as
   graph_data.pad, site graph as site_graph_data.pad_site). The store keeps every mapped site, so `eligible` is the
   store's train_mask (training) or eval_mask (evaluation); sites without a site token (query_site -1, never
   eligible) point at site 0.
@@ -50,7 +50,7 @@ def _pool(root, dataset):
 
 def build_manifest(root, dataset, policy=PRODUCTION, workers=8):
     root = Path(root); out = output(root, dataset); store_path = out / "store-v2"; store = ProductionStore(store_path)
-    pool, pool_path = _pool(root, dataset); records = []
+    pool, pool_path = _pool(root, dataset) if dataset != "benchmark-val" else ({}, None); records = []
     def weights(cid):
         raw = store.raw(cid); return float(np.mean(raw["w_burial"])), float(np.mean(raw["w_interface"]))
     means = {}
@@ -67,8 +67,8 @@ def build_manifest(root, dataset, policy=PRODUCTION, workers=8):
         records.append(record)
     store.close()
     manifest = {"version": "gqt-production-v1", "dataset": dataset, "store": str(store_path),
-                "store_verification_sha256": digest(store_path / "verification.json"), "pool": str(pool_path),
-                "pool_sha256": digest(pool_path), "bucket_policy": policy.to_json(), "capacities": policy.capacities(records),
+                "store_verification_sha256": digest(store_path / "verification.json"), "pool": str(pool_path) if pool_path else None,
+                "pool_sha256": digest(pool_path) if pool_path else None, "bucket_policy": policy.to_json(), "capacities": policy.capacities(records),
                 "records": records, "test_data_included": False}
     atomic_json(out / MANIFEST, manifest)
     return manifest
@@ -104,7 +104,7 @@ class _Source:
     def __init__(self, manifest, store_path=None, config: LoaderConfig | None = None):
         self.manifest = manifest; self.config = config or LoaderConfig()
         self.policy = BucketPolicy.from_json(manifest["bucket_policy"])
-        self.store = ProductionStore(store_path or os.environ.get(f"PKATRAIN_{manifest['dataset'].upper()}_STORE") or manifest["store"])
+        self.store = ProductionStore(store_path or os.environ.get(f"PKATRAIN_{manifest['dataset'].upper().replace('-', '_')}_STORE") or manifest["store"])
         if digest(self.store.path / "verification.json") != manifest["store_verification_sha256"]: raise AssertionError("store differs from manifest")
         self.by_id = {row["id"]: row for row in manifest["records"]}
         self.pool = ThreadPoolExecutor(max_workers=self.config.workers, thread_name_prefix=f"{manifest['dataset']}-assembly")
@@ -162,11 +162,12 @@ def check(root, dataset, fraction=1.0, batches=300):
     `batches` training batches at 8 and 32 workers."""
     from .loading import Prefetcher
     root = Path(root); manifest = read(output(root, dataset) / MANIFEST); rng = np.random.default_rng(17)
-    train = select(manifest, "train", fraction); plans = BucketPolicy.from_json(manifest["bucket_policy"]).plans(train, rng)
-    report = {"dataset": dataset, "fraction": fraction, "train_structures": len(train), "batches_per_epoch": len(plans),
+    split = "val" if dataset == "benchmark-val" else "train"; mask = "eval_mask" if dataset == "benchmark-val" else "train_mask"
+    train = select(manifest, split, fraction); plans = BucketPolicy.from_json(manifest["bucket_policy"]).plans(train, rng)
+    report = {"dataset": dataset, "fraction": fraction, "split": split, "structures": len(train), "batches_per_epoch": len(plans),
               "buckets": {b: sum(1 for r in train if BucketPolicy.from_json(manifest["bucket_policy"]).bucket(r["n"]) == b)
                           for b in manifest["capacities"]}}
-    source = PinderSource(manifest, fraction=fraction) if dataset == "pinder" else PkpdbSource(manifest)
+    source = PinderSource(manifest, fraction=fraction) if dataset == "pinder" else PkpdbSource(manifest, mask=mask)
     for ids in plans[:20]:  # content
         batch = source.load(ids); graphs = batch[0]
         for slot, cid in enumerate(ids):
@@ -174,8 +175,8 @@ def check(root, dataset, fraction=1.0, batches=300):
             nodes = graphs["nodes"][slot][0] if dataset == "pinder" else graphs["nodes"][slot]
             if not (np.array_equal(nodes[:row["n"]], raw["nodes"]) and not nodes[row["n"]:].any()): raise AssertionError((cid, "nodes"))
             q = row["q"]
-            if dataset == "pkpdb":
-                if not (np.array_equal(batch[1][slot][:q], raw["labels"]) and np.array_equal(batch[2][slot][:q], raw["train_mask"]) and not batch[2][slot][q:].any()):
+            if dataset != "pinder":
+                if not (np.array_equal(batch[1][slot][:q], raw["labels"]) and np.array_equal(batch[2][slot][:q], raw[mask]) and not batch[2][slot][q:].any()):
                     raise AssertionError((cid, "labels/mask"))
             else:
                 if not (np.array_equal(batch[1][slot][:, :q], raw["targets"]) and batch[2][slot][:q].all() and not batch[2][slot][q:].any()):
@@ -183,7 +184,7 @@ def check(root, dataset, fraction=1.0, batches=300):
         if batch[-1].sum() != len(ids) or (len(ids) < len(batch[-1]) and batch[2][len(ids):].any()): raise AssertionError("padding")
     report["content_checked_batches"] = 20; source.close()
     for workers in (8, 32):
-        config = LoaderConfig(workers=workers, prefetch=4); source = PinderSource(manifest, config=config, fraction=fraction) if dataset == "pinder" else PkpdbSource(manifest, config=config)
+        config = LoaderConfig(workers=workers, prefetch=4); source = PinderSource(manifest, config=config, fraction=fraction) if dataset == "pinder" else PkpdbSource(manifest, config=config, mask=mask)
         chosen = plans[:batches]; began = time.time(); structures = 0
         prefetcher = Prefetcher(source, chosen, config)
         for spec, batch in prefetcher: structures += len(spec)

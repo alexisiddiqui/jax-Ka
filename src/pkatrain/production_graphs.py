@@ -8,7 +8,10 @@ Nothing here changes how a graph is made; each builder repeats an existing, veri
 - PINDER (pretraining/pinder-pkai-v1): gqt_paired_pinder._prepare_one (load_topology, 20 A geometry, paired rows,
   partner-removed branch masks) for every pool-v3 complex (training masks) and the 400 validation complexes
   (evaluation masks). Complexes without a graph-mapped paired interface site are recorded and skipped, as in prepare.
-Both add the site graph of site_graph_data.build_site_graph.
+- benchmark-val (training/shared-v4-float32 'val', the 142-complex PypKa validation set both pools were screened
+  against): graph_data.prepare (AB state, load_topology, 20 A geometry, supervision_eligible finite PypKa midpoints),
+  node column 22 zeroed (strict backbone); eval_mask all True. Record paths are mapped from the source cluster's runtime.
+All add the site graph of site_graph_data.build_site_graph.
 
 Layout under <runtime>/training/gqt-production-v1/<dataset>/:
   ids.json                      the deterministic structure list (pool order, then validation)
@@ -21,7 +24,7 @@ Layout under <runtime>/training/gqt-production-v1/<dataset>/:
   compare.json                  `compare`: rebuilt arrays vs reference graphs from the source cluster
 
 Run under scripts/sqfs_run.sh (the sources are squashfs images).
-  python -m pkatrain.production_graphs ids {pkpdb,pinder}
+  python -m pkatrain.production_graphs ids {pkpdb,pinder,benchmark-val}
   python -m pkatrain.production_graphs build {pkpdb,pinder} TASK TASKS
   python -m pkatrain.production_graphs pack {pkpdb,pinder}
   python -m pkatrain.production_graphs compress {pkpdb,pinder}      (store-v1 -> store-v2)
@@ -43,7 +46,9 @@ import numpy as np
 from pkabench.runtime import atomic_json, digest
 
 VERSION = "gqt-production-v1"
-DATASETS = ("pkpdb", "pinder")
+DATASETS = ("pkpdb", "pinder", "benchmark-val")
+BENCHMARK_SOURCE = "training/shared-v4-float32"   # benchmark records; its 'val' split is the 142-complex PypKa validation set
+SOURCE_RUNTIME = "/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench"  # absolute prefix inside the benchmark records
 PKPDB = "pretraining/pkpdb-full-v1"
 PKPDB_STRUCTURES = "pretraining/pkpdb-v1/structures"
 PINDER = "pretraining/pinder-pkai-v1"
@@ -55,6 +60,7 @@ FIELDS = {
     "pkpdb": GRAPH_FIELDS + ("labels",) + SITE_FIELDS + ("train_mask", "eval_mask", "rsa", "w_burial", "chain_distance_A"),
     "pinder": GRAPH_FIELDS + SITE_FIELDS + ("branch_edge_mask", "branch_site_edge_mask", "targets", "w_burial",
                                             "w_interface", "interface", "partner_distance_A", "rsa_free"),
+    "benchmark-val": GRAPH_FIELDS + ("labels",) + SITE_FIELDS + ("eval_mask",),
 }
 DIMS = ("n", "k", "q", "s", "sk")
 
@@ -88,6 +94,8 @@ def ids(root, dataset):
     elif dataset == "pinder":
         items = [(row["id"], "train") for row in _tsv(root / PINDER / "pool-v3.tsv")]
         items += [(row["id"], "val") for row in read(root / PINDER_COHORT)["records"] if row["split"] == "val"]
+    elif dataset == "benchmark-val":
+        items = [(cid, "val") for cid in read(root / BENCHMARK_SOURCE / "manifest.json")["val"]]
     else: raise ValueError(dataset)
     if len({cid for cid, _ in items}) != len(items): raise AssertionError("duplicate structure id")
     return items
@@ -96,7 +104,8 @@ def ids(root, dataset):
 def write_ids(root, dataset):
     root = Path(root); out = output(root, dataset); out.mkdir(parents=True, exist_ok=True)
     items = ids(root, dataset); path = out / "ids.json"
-    sources = {"pkpdb": [f"{PKPDB}/pool-v3.tsv"], "pinder": [f"{PINDER}/pool-v3.tsv", PINDER_COHORT]}[dataset]
+    sources = {"pkpdb": [f"{PKPDB}/pool-v3.tsv"], "pinder": [f"{PINDER}/pool-v3.tsv", PINDER_COHORT],
+               "benchmark-val": [f"{BENCHMARK_SOURCE}/manifest.json"]}[dataset]
     value = {"dataset": dataset, "version": VERSION, "ids": items, "sources": {p: digest(root / p) for p in sources}}
     if path.exists():
         if read(path)["ids"] != [list(x) for x in items]: raise AssertionError(f"{path} exists with a different list")
@@ -211,10 +220,64 @@ def _pinder_one(root, cid, split):
     return graph, {"q_interface": int(np.sum(interface))}
 
 
+# ---------------------------------------------------------------- benchmark validation (graph_data.prepare)
+def _local(root, path):
+    """Benchmark records hold absolute source-cluster paths; map them under this runtime."""
+    path = str(path)
+    return Path(root) / Path(path).relative_to(SOURCE_RUNTIME) if path.startswith(SOURCE_RUNTIME + "/") else Path(path)
+
+
+def _benchmark_one(root, cid):
+    """graph_data.prepare for one benchmark validation complex: AB structure, load_topology (gap cap), 20 A geometry,
+    current PypKa midpoints that are supervision_eligible and finite, plus the site graph. Node column 22 (disulfide,
+    not a backbone observable) is zeroed here, as graph_data.mask_features does at load under strict_backbone."""
+    from jaxpropka.parameters import GROUP_AA, GROUPS
+    from jaxpropka.topology import load_topology
+    from pkabench.prep import read_cif
+    from pkanet.graph import geometry
+    from .records import KEY
+    from .site_graph_data import build_site_graph
+    source = root / BENCHMARK_SOURCE; parent = read(source / "manifest.json")
+    record_path = source / "records" / f"{cid}.json"
+    if digest(record_path) != parent["records_sha256"][cid]: raise AssertionError((cid, "record hash"))
+    r = read(record_path); state = r["states"]["AB"]; raw = _local(root, state["source"])
+    cif = _local(root, r["structures"]["AB"])
+    if digest(cif) != r["structure_sha256"]["AB"]: raise AssertionError((cid, "structure hash"))
+    for name in ("mapping.json", "result.json"):
+        if digest(raw / name) != state["source_hashes"][name]: raise AssertionError((cid, name))
+    sitepath = _local(root, state["export"]) / "sites.json"
+    if digest(sitepath) != state["sites_sha256"]: raise AssertionError((cid, "sites hash"))
+    masks = {tuple(s[k] for k in KEY): s for s in read(sitepath)}
+    mapping = {(m["chain"], m["resnum"]): tuple(m["original"]) for m in read(raw / "mapping.json")}
+    topology = load_topology(read_cif(cif), gap_policy="cap", freeze_disulfides=True)
+    lookup = {(k.chain, k.number, k.insertion): i for i, k in enumerate(topology.keys)}
+    graph, frames_valid = geometry(topology.backbone, topology.chain_index)
+    nodes = np.concatenate((np.eye(20, dtype=np.float32)[topology.native_index],
+        np.stack((topology.nterm, topology.cterm, topology.disulfide, frames_valid), axis=-1)), axis=-1).astype(np.float32)
+    nodes[:, 22] = 0.0
+    graph.update(nodes=nodes, node_mask=np.ones(topology.n_residues, bool))
+    queries = []; labels = []; seen = set()
+    for s in read(raw / "result.json")["rows"]:
+        original = mapping[s["chain"], s["resnum"]]; key = (cid, *original, s["group"])
+        if key in seen: raise AssertionError((cid, "duplicate site"))
+        seen.add(key)
+        if not masks[key]["supervision_eligible"]: continue
+        if s["pka"] is None or not np.isfinite(s["pka"]): continue
+        i = lookup[original]; g = GROUPS.index(s["group"])
+        if g < 7 and topology.native_index[i] != GROUP_AA[g]: raise AssertionError((cid, "residue type", key))
+        queries.append((i, g)); labels.append(s["pka"])
+    if not labels: raise AssertionError((cid, "no eligible scalar sites"))
+    q = np.asarray(queries, np.int32); graph.update(query_residue=q[:, 0], query_group=q[:, 1])
+    graph.update(build_site_graph(topology.backbone, topology.chain_index, nodes, q[:, 0], q[:, 1]))
+    graph.update(labels=np.asarray(labels, np.float32), eval_mask=np.ones(len(labels), bool))
+    return graph, {"component_id": r["component_id"], "role": r["role"]}
+
+
 def build_one(root, dataset, cid, split):
     """(arrays, record) or (None, skip record)."""
     root = Path(root)
     if dataset == "pkpdb": arrays, extra = _pkpdb_one(root, cid)
+    elif dataset == "benchmark-val": arrays, extra = _benchmark_one(root, cid)
     else: arrays, extra = _pinder_one(root, cid, split)
     if arrays is None: return None, {"id": cid, "split": split, **extra}
     dims = {"n": arrays["nodes"].shape[0], "k": arrays["neighbors"].shape[1], "q": arrays["query_residue"].shape[0],
@@ -413,7 +476,9 @@ def compare(root, dataset, reference):
         if cid not in split_of: results["not_in_ids"] += 1; continue
         arrays, _ = build_one(root, dataset, cid, split_of[cid])
         with np.load(path, allow_pickle=False) as ref:
-            names = [n for n in ref.files if n in arrays] if dataset == "pinder" else list(GRAPH_FIELDS) + ["labels"]
+            ref = {n: ref[n] for n in ref.files}
+            if dataset == "benchmark-val": ref["nodes"] = ref["nodes"].copy(); ref["nodes"][:, 22] = 0.0
+            names = [n for n in ref if n in arrays] if dataset == "pinder" else list(GRAPH_FIELDS) + ["labels"]
             bad = []
             for n in names:
                 same_shape = ref[n].shape == arrays[n].shape
