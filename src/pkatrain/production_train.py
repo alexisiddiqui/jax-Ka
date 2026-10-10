@@ -17,7 +17,8 @@ the 67,725-parameter backbone oGQT (width 44, ff 88); first run on the 10% pool.
   benchmark PypKa set (benchmark-val store; group-macro MAE, gqt_site_weighting.metrics_from_rows). Selection: lowest
   PINDER state MAE + interface paired MAE (experiments 41-43). No test data.
 
-Layout: <runtime>/training/gqt-production-v1/runs/<run>/ protocol.json, history.jsonl, checkpoints/epoch-NNN/,
+Layout: <runtime>/training/<version>/runs/<run>/ (PKATRAIN_GQT_VERSION, default gqt-production-v2: pool-v4 with
+the new PINDER and pKPDB validation sets, the latter scored on pKPDB's own train_mask labels; protocol.json, history.jsonl, checkpoints/epoch-NNN/,
 selection.json, predictions-{pinder,benchmark}-epoch-NNN.csv.
 
 Batch-size sweep (2026-10-10): --batch B trains with a constant B structures per batch in every bucket and the
@@ -47,7 +48,7 @@ import numpy as np
 
 from pkabench.runtime import atomic_json, digest
 from .loading import PRODUCTION_BOUNDS, BucketPolicy, DeferredScalars, LoaderConfig, Prefetcher
-from .production_graphs import output, read
+from .production_graphs import VERSION, output, read
 from .production_loading import MANIFEST, PinderSource, PkpdbSource, normalization, select
 
 SEED = 17
@@ -71,7 +72,7 @@ def chunked(batch):
     return batch * max(PRODUCTION_BOUNDS) > MICRO_RESIDUES
 
 
-def run_dir(root, run): return Path(root) / "training/gqt-production-v1/runs" / run
+def run_dir(root, run): return Path(root) / "training" / VERSION / "runs" / run
 
 
 def code_hashes():
@@ -171,6 +172,32 @@ def _pinder_rows(engine, params, source, records, config):
     return rows
 
 
+def _pkpdb_rows(predict, params, source, records, config):
+    """pKPDB validation rows (gqt-production-v2): train_mask sites of the held-out pKPDB structures, shift relative to
+    PKPDB_PK_MOD, the training loss's definition."""
+    from pkanet.model import PKPDB_PK_MOD
+    reference_table = np.asarray(PKPDB_PK_MOD); rows = []
+    plans = source.policy.plans(records, np.random.default_rng(0))
+    for ids, batch in Prefetcher(source, plans, config):
+        graphs, targets, eligible, valid = batch
+        predicted = np.asarray(predict(params, graphs))
+        for slot, cid in enumerate(ids):
+            active = eligible[slot]; groups = graphs["query_group"][slot][active]; reference = reference_table[groups]
+            for site, (y, shift, ref) in enumerate(zip(targets[slot][active], predicted[slot][active], reference)):
+                rows.append({"structure_id": cid, "site": site, "group": int(groups[site]), "teacher_shift": float(y - ref),
+                             "predicted_shift": float(shift)})
+    return rows
+
+
+def pkpdb_metrics(rows):
+    """Site-level MAE/MSE and the structure-macro MAE (mean over structures of each structure's site MAE)."""
+    from collections import defaultdict
+    error = np.asarray([r["predicted_shift"] - r["teacher_shift"] for r in rows]); by = defaultdict(list)
+    for r, e in zip(rows, error): by[r["structure_id"]].append(abs(e))
+    return {"structures": len(by), "sites": len(rows), "site_mae": float(np.mean(np.abs(error))), "site_mse": float(np.mean(error ** 2)),
+            "structure_macro_mae": float(np.mean([np.mean(v) for v in by.values()]))}
+
+
 def _benchmark_rows(predict, params, source, records, config):
     """Per-site rows with gqt_site_weighting.evaluate's definitions (shift relative to PKPDB_PK_MOD)."""
     from pkanet.model import PKPDB_PK_MOD
@@ -214,9 +241,13 @@ def validate(engine, predict, params, sources, manifests, config, out=None, epoc
     bench_rows = _benchmark_rows(predict, params, sources["benchmark"], select(manifests["benchmark-val"], "val"), config)
     pinder = _metrics(pair_rows); overall, bins, equal_bin = metrics_from_rows(bench_rows)
     pinder_squared, bench_squared = squared_errors(pair_rows, bench_rows); pinder.update(pinder_squared)
+    pkpdb = None
+    if "pkpdb-val" in sources:
+        pk_rows = _pkpdb_rows(predict, params, sources["pkpdb-val"], select(manifests["pkpdb"], "val"), config); pkpdb = pkpdb_metrics(pk_rows)
+        if out is not None: _write(out / f"predictions-pkpdb-epoch-{epoch:03d}.csv", pk_rows)
     if out is not None:
         _write(out / f"predictions-pinder-epoch-{epoch:03d}.csv", pair_rows); _write(out / f"predictions-benchmark-epoch-{epoch:03d}.csv", bench_rows)
-    return {"pinder": pinder, "benchmark": {"overall": overall, "bins": bins, "equal_bin_mae": equal_bin, **bench_squared},
+    return {"pinder": pinder, **({"pkpdb": pkpdb} if pkpdb else {}), "benchmark": {"overall": overall, "bins": bins, "equal_bin_mae": equal_bin, **bench_squared},
             "selection": pinder["state_mae"] + pinder["interface_paired_mae"]}
 
 
@@ -237,9 +268,11 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH):
         "optimizer": "AdamW weight decay 1e-4, global clip 1 after gradient summation",
         "schedule": f"gqt_crop_radius.learning_rate x {scale:.4f} (1e-3 hold to epoch 10, cosine to 1e-5 by epoch {EPOCHS}); patience {PATIENCE}, min delta {MIN_DELTA}",
         "sampling": "full PINDER fraction per epoch; one pKPDB batch per PINDER batch from a continuing shuffled stream",
-        "selection": "min PINDER validation state MAE + interface paired MAE", "validation": ["PINDER 400 (pKAI)", "benchmark-val 142 (PypKa)"],
+        "selection": "min PINDER validation state MAE + interface paired MAE", "validation": (["PINDER 400 (pKAI)", "benchmark-val 142 (PypKa)"] if VERSION == "gqt-production-v1" else
+            ["PINDER pool-v4 validation (pKAI, eval_mask)", "pKPDB pool-v4 validation (pKPDB labels, train_mask)", "benchmark-val 142 (PypKa)"]),
         "counts": {"pinder_train": len(select(manifests["pinder"], "train", fraction)), "pkpdb_train": len(select(manifests["pkpdb"], "train", fraction)),
-                   "pinder_val": len(select(manifests["pinder"], "val")), "benchmark_val": len(select(manifests["benchmark-val"], "val"))},
+                   "pinder_val": len(select(manifests["pinder"], "val")), "benchmark_val": len(select(manifests["benchmark-val"], "val")),
+                   **({"pkpdb_val": len(select(manifests["pkpdb"], "val"))} if select(manifests["pkpdb"], "val") else {})},
         **({"micro_residues": MICRO_RESIDUES, "accumulation": "exact: per-bucket chunks (largest divisor of the batch within the residue budget), values/gradients weighted by valid structures"} if chunked(batch) else {}),
         "pinder_weight_normalization": norms, "smoke": smoke, "test_data_included": False,
         "manifests": {d: digest(output(root, d) / MANIFEST) for d in manifests}, "code": code_hashes()}
@@ -252,7 +285,8 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH):
     sources = {"train": JointSource(PinderSource(_with_policy(manifests["pinder"], batch), config=config, norms=norms),
                                     PkpdbSource(_with_policy(manifests["pkpdb"], batch), config=config)),
                "pinder-val": PinderSource(_with_policy(manifests["pinder"]), config=config, norms=norms),
-               "benchmark": PkpdbSource(_with_policy(manifests["benchmark-val"]), config=config, mask="eval_mask")}
+               "benchmark": PkpdbSource(_with_policy(manifests["benchmark-val"]), config=config, mask="eval_mask"),
+               **({"pkpdb-val": PkpdbSource(_with_policy(manifests["pkpdb"]), config=config, mask="train_mask")} if select(manifests["pkpdb"], "val") else {})}
     params = initialize_ogqt(jax.random.PRNGKey(SEED), **ARCHITECTURE); engine = JointEngine(params); state = engine.optimizer.init(params)
     predict = jax.jit(jax.vmap(predict_shift, in_axes=(None, 0)))
     history = [json.loads(l) for l in (out / "history.jsonl").read_text().splitlines()] if (out / "history.jsonl").exists() else []
@@ -296,7 +330,8 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH):
         stale = 0 if improved else stale + 1
         print(json.dumps({"epoch": epoch, "loss": row["train_loss"]["total"], "pinder_state_mae": validation["pinder"]["state_mae"],
                           "interface_paired_mae": validation["pinder"]["interface_paired_mae"],
-                          "benchmark_mae": validation["benchmark"]["overall"]["mae"], "selection": validation["selection"],
+                          "benchmark_mae": validation["benchmark"]["overall"]["mae"], "pkpdb_val_mae": validation.get("pkpdb", {}).get("site_mae"),
+                          "selection": validation["selection"],
                           "train_s": row["train_seconds"], "val_s": row["validation_seconds"], "wait": row["loader_wait_fraction"]}), flush=True)
     selected = best["epoch"]
     params, state, _ = load_checkpoint(out / "checkpoints" / f"epoch-{selected:03d}", (params, state))
@@ -318,7 +353,8 @@ def rescore(root, run, epochs=None):
     manifests = {d: read(output(root, d) / MANIFEST) for d in ("pinder", "pkpdb", "benchmark-val")}
     config = LoaderConfig(); norms = protocol["pinder_weight_normalization"]
     sources = {"pinder-val": PinderSource(_with_policy(manifests["pinder"]), config=config, norms=norms),
-               "benchmark": PkpdbSource(_with_policy(manifests["benchmark-val"]), config=config, mask="eval_mask")}
+               "benchmark": PkpdbSource(_with_policy(manifests["benchmark-val"]), config=config, mask="eval_mask"),
+               **({"pkpdb-val": PkpdbSource(_with_policy(manifests["pkpdb"]), config=config, mask="train_mask")} if select(manifests["pkpdb"], "val") else {})}
     params = initialize_ogqt(jax.random.PRNGKey(SEED), **ARCHITECTURE); engine = JointEngine(params); state = engine.optimizer.init(params)
     predict = jax.jit(jax.vmap(predict_shift, in_axes=(None, 0)))
     folders = sorted((out / "checkpoints").glob("epoch-*")); rows = []

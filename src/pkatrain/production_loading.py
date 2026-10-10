@@ -18,10 +18,11 @@ mask cleared and valid False, as SiteBatchLoader does), so each bucket compiles 
   residues (mode "rotate": masked slot j of row i -> row (i + j + 1) mod rows). Those slots carry zero attention weight and padded tokens zero upstream gradient, so the loss is unchanged
   and gradients change only in float summation order.
 
-Manifests (<runtime>/training/gqt-production-v1/<dataset>/manifest-v1.json, `manifest` action, built once under
+Manifests (<runtime>/training/<version>/<dataset>/manifest-v1.json, `manifest` action, built once under
 scripts/sqfs_run.sh because it reads pool-v3.tsv from the dataset image):
 - bucket_policy and capacities over all records, so every pool fraction uses the same compiled shapes;
-- per record: split, n/k/q/s/sk, min_fraction (pool-v3; training subsets are min_fraction <= fraction);
+- per record: split, n/k/q/s/sk, min_fraction (pool-v3 or pool-v4; training subsets are min_fraction <= fraction);
+  gqt-production-v2 pKPDB stores also hold the pool-v4 pKPDB validation set (split 'val', scored on train_mask);
 - PINDER: per-complex means of w_burial and w_interface over its sites, so normalisation(manifest, fraction) is the
   mean complex-level weight over that fraction's training complexes (the factorial's definition).
 
@@ -42,7 +43,7 @@ import numpy as np
 
 from pkabench.runtime import atomic_json, digest
 from .loading import PRODUCTION, BucketPolicy, LoaderConfig
-from .production_graphs import DIMS, PINDER, PKPDB, ProductionStore, output, read
+from .production_graphs import DIMS, PINDER, PKPDB, POOL_V4, VERSION, ProductionStore, output, read
 
 MANIFEST = "manifest-v1.json"
 RESIDUE_FIELDS = ("nodes", "node_mask", "neighbors", "edge", "edge_mask", "switch", "query_residue", "query_group")
@@ -50,7 +51,9 @@ SITE_FIELDS = ("site_residue", "site_type", "site_mask", "site_neighbors", "site
 
 
 def _pool(root, dataset):
-    path = Path(root) / (PKPDB if dataset == "pkpdb" else PINDER) / "pool-v3.tsv"
+    """The training pool with min_fraction: pool-v3 (gqt-production-v1) or pool-v4 (gqt-production-v2)."""
+    path = Path(root) / POOL_V4 / f"{dataset}.tsv" if VERSION == "gqt-production-v2" else \
+        Path(root) / (PKPDB if dataset == "pkpdb" else PINDER) / "pool-v3.tsv"
     with open(path) as handle: return {row["id"]: row for row in csv.DictReader(handle, delimiter="\t")}, path
 
 
@@ -67,13 +70,13 @@ def build_manifest(root, dataset, policy=PRODUCTION, workers=8):
         record = {"id": row["id"], "split": row["split"], **{d: row[d] for d in DIMS}}
         if "component_id" in row: record["component_id"] = row["component_id"]  # group-macro metrics group by component
         if row["split"] == "train":
-            if row["id"] not in pool: raise AssertionError((row["id"], "training record not in pool-v3"))
+            if row["id"] not in pool: raise AssertionError((row["id"], f"training record not in {pool_path.name}"))
             record["min_fraction"] = float(pool[row["id"]]["min_fraction"])
         if dataset == "pinder": record["w_burial_mean"], record["w_interface_mean"] = means[row["id"]]
         else: record["train_sites"], record["eval_sites"] = row.get("train_sites"), row.get("eval_sites")
         records.append(record)
     store.close()
-    manifest = {"version": "gqt-production-v1", "dataset": dataset, "store": str(store_path),
+    manifest = {"version": VERSION, "dataset": dataset, "store": str(store_path),
                 "store_verification_sha256": digest(store_path / "verification.json"), "pool": str(pool_path) if pool_path else None,
                 "pool_sha256": digest(pool_path) if pool_path else None, "bucket_policy": policy.to_json(), "capacities": policy.capacities(records),
                 "records": records, "test_data_included": False}

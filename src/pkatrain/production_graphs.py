@@ -13,7 +13,14 @@ Nothing here changes how a graph is made; each builder repeats an existing, veri
   node column 22 zeroed (strict backbone); eval_mask all True. Record paths are mapped from the source cluster's runtime.
 All add the site graph of site_graph_data.build_site_graph.
 
-Layout under <runtime>/training/gqt-production-v1/<dataset>/:
+Versions (PKATRAIN_GQT_VERSION, default gqt-production-v2):
+- gqt-production-v1: pool-v3 training structures; validation = the 400 PINDER complexes of the factorial cohort.
+- gqt-production-v2 (2026-10-10): pool-v4 (training/pool-v4, pkabench.training_pools build_v4): training pools plus
+  the new validation sets, PINDER pinder-val.tsv (1,600 clusters, evaluation masks) and pKPDB pkpdb-val.tsv (1,600
+  groups; split 'val', scored on train_mask by the loader). Sources not in the dataset images are read from
+  <runtime>/overlay/<same relative path> (entries transferred after the images were made).
+
+Layout under <runtime>/training/<version>/<dataset>/:
   ids.json                      the deterministic structure list (pool order, then validation)
   shards/<t>-of-<T>/            written by `build` tasks (task t takes ids[t::T]): records.bin (one zstd record per
                                 structure) + receipt.json; re-runs skip finished shards
@@ -45,7 +52,11 @@ import numpy as np
 
 from pkabench.runtime import atomic_json, digest
 
-VERSION = "gqt-production-v1"
+VERSION = os.environ.get("PKATRAIN_GQT_VERSION", "gqt-production-v2")
+VERSIONS = ("gqt-production-v1", "gqt-production-v2")
+if VERSION not in VERSIONS: raise ValueError(VERSION)
+POOL_V4 = "training/pool-v4"
+OVERLAY = "overlay"
 DATASETS = ("pkpdb", "pinder", "benchmark-val")
 BENCHMARK_SOURCE = "training/shared-v4-float32"   # benchmark records; its 'val' split is the 142-complex PypKa validation set
 SOURCE_RUNTIME = "/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench"  # absolute prefix inside the benchmark records
@@ -85,11 +96,23 @@ def _tsv(path):
     with open(path) as handle: return list(csv.DictReader(handle, delimiter="\t"))
 
 
+def source(root, rel):
+    """root/rel, or root/overlay/rel when the dataset image lacks it."""
+    path = Path(root) / rel
+    if path.exists(): return path
+    overlay = Path(root) / OVERLAY / rel
+    return overlay if overlay.exists() else path
+
+
 # ---------------------------------------------------------------- structure lists
 def ids(root, dataset):
-    """[(id, split)]: pool-v3 order (training), then for PINDER the fixed 400 validation complexes."""
+    """[(id, split)]: v1: pool-v3 order (training), then for PINDER the fixed 400 validation complexes; v2: pool-v4
+    order, then the dataset's pool-v4 validation set."""
     root = Path(root)
-    if dataset == "pkpdb":
+    if VERSION == "gqt-production-v2" and dataset in ("pkpdb", "pinder"):
+        items = [(row["id"], "train") for row in _tsv(root / POOL_V4 / f"{dataset}.tsv")]
+        items += [(row["id"], "val") for row in _tsv(root / POOL_V4 / f"{dataset}-val.tsv")]
+    elif dataset == "pkpdb":
         items = [(row["id"], "train") for row in _tsv(root / PKPDB / "pool-v3.tsv")]
     elif dataset == "pinder":
         items = [(row["id"], "train") for row in _tsv(root / PINDER / "pool-v3.tsv")]
@@ -106,6 +129,8 @@ def write_ids(root, dataset):
     items = ids(root, dataset); path = out / "ids.json"
     sources = {"pkpdb": [f"{PKPDB}/pool-v3.tsv"], "pinder": [f"{PINDER}/pool-v3.tsv", PINDER_COHORT],
                "benchmark-val": [f"{BENCHMARK_SOURCE}/manifest.json"]}[dataset]
+    if VERSION == "gqt-production-v2" and dataset != "benchmark-val":
+        sources = [f"{POOL_V4}/{dataset}.tsv", f"{POOL_V4}/{dataset}-val.tsv", f"{POOL_V4}/pool-v4.json"]
     value = {"dataset": dataset, "version": VERSION, "ids": items, "sources": {p: digest(root / p) for p in sources}}
     if path.exists():
         if read(path)["ids"] != [list(x) for x in items]: raise AssertionError(f"{path} exists with a different list")
@@ -123,10 +148,10 @@ def _pkpdb_one(root, cid):
     from pkabench.prep import CANONICAL
     from pkanet.graph import geometry
     from .site_graph_data import build_site_graph, candidate_sites
-    entry = root / PKPDB / "entries" / cid
+    entry = source(root, f"{PKPDB}/entries/{cid}")
     receipt = read(entry / "receipt.json"); defects = read(entry / "defects.json")
     if receipt.get("status") != "accepted": raise AssertionError((cid, "receipt not accepted"))
-    path = root / PKPDB_STRUCTURES / cid[1:3] / f"{cid}.cif.gz"
+    path = source(root, f"{PKPDB_STRUCTURES}/{cid[1:3]}/{cid}.cif.gz")
     if digest(path) != receipt["source_sha256"]: raise AssertionError((cid, "source structure hash"))
     selected = [row["chain"] for row in defects["sequences"]]
     polylen = {row["chain"]: len(row["sequence"]) for row in defects["sequences"]}
@@ -192,7 +217,7 @@ def _pinder_one(root, cid, split):
     from pkanet.graph import geometry
     from .gqt_paired_pinder import _paired_rows, _read_cif_gz
     from .site_graph_data import build_site_graph
-    src = root / PINDER / "entries" / cid
+    src = source(root, f"{PINDER}/entries/{cid}")
     topology = load_topology(_read_cif_gz(src / "AB.cif.gz"), gap_policy="cap", freeze_disulfides=True)
     graph, frames_valid = geometry(topology.backbone, topology.chain_index, radius=20.0)
     nodes = np.concatenate((np.eye(20, dtype=np.float32)[topology.native_index],
