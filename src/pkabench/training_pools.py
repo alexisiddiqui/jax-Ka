@@ -26,8 +26,9 @@ written with both training pools to training/pool-v4/.
 - Candidates are pool-v3's filters without the validation rules: PINDER accepted, not in exclusions v3, >= 1 labelled
   usable interface site; pKPDB every pilot.json record; both without a chain exactly identical to a held-out benchmark
   chain or a pKPDB reference sequence.
-- Validation: about 1,600 PINDER clusters and 1,600 pKPDB groups, one structure each (the group's first structure by
-  the pool-v4 rank; pKPDB needs >= 1 clean site). Groups are stratified by (stratum, size bucket of that structure,
+- Validation: about 1,600 PINDER clusters and 1,600 pKPDB groups, one structure each (the group's first eligible
+  structure by the pool-v4 rank; PINDER needs >= 1 labelled eval-mask interface site, the sites validation scores;
+  pKPDB >= 1 clean site). Groups are stratified by (stratum, size bucket of that structure,
   production bounds 128..1536); each cell gets its proportional share (largest remainder) and picks groups by a
   separate validation rank.
 - Training: every other candidate outside the validation groups and without a chain >= 70% identical over >= 80% of
@@ -294,6 +295,17 @@ def choose_validation(rows, total, eligible=lambda r: True):
     return sorted(chosen, key=lambda r: r['id']), summary
 
 
+def _pinder_complex_v4(task):
+    """_pinder_complex plus the eval-mask interface sites that validation scores (gqt_paired_pinder._paired_rows)."""
+    out = _pinder_complex(task); folder = Path(task[0])
+    sites = json.loads((folder/'sites.json').read_text()); labels = json.loads((folder/'labels.json').read_text())['pkai']
+    have = {state: {(str(c), int(n), str(i), GROUP_ALIAS.get(g, g)) for c, n, i, g, v in rows if v is not None} for state, rows in labels.items()}
+    out['eval_interface_sites'] = sum(1 for s in sites if s['eval_mask'] and s['interface'] and s.get('w_burial') is not None and s.get('w_interface') is not None
+                                      and (s['chain'], s['resnum'], s['icode'], s['group']) in have.get('AB', ())
+                                      and (s['chain'], s['resnum'], s['icode'], s['group']) in have.get(s['partner'], ()))
+    return out
+
+
 def pinder_candidates(root, workers):
     """pool-v3's PINDER filters without the validation rules; rows carry their chain sequences."""
     src = root/PINDER
@@ -304,7 +316,7 @@ def pinder_candidates(root, workers):
             row = json.loads(line)
             if row['status'] == 'accepted' and row['id'] not in excluded: tasks.append((str(src/'entries'/row['id']), row))
     with concurrent.futures.ProcessPoolExecutor(workers) as pool:
-        rows = [r for r in pool.map(_pinder_complex, tasks, chunksize=64) if r['labelled_interface_sites']]
+        rows = [r for r in pool.map(_pinder_complex_v4, tasks, chunksize=64) if r['labelled_interface_sites']]
     chains, seqs = pinder_chains(root); held = reference_sequences(root); labelled = len(rows)
     for r in rows: r['_sequences'] = sorted({seqs[k] for k in chains[r['id']]})
     rows = [r for r in rows if not any(s in held for s in r['_sequences'])]
@@ -343,7 +355,8 @@ def build_v4(root, workers):
     out = root/V4_DIR; out.mkdir(parents=True, exist_ok=True)
     candidates = {'pinder': pinder_candidates(root, workers), 'pkpdb': pkpdb_candidates(root, workers)}
     validation = {}; cells = {}
-    validation['pinder'], cells['pinder'] = choose_validation(candidates['pinder'][0], VALIDATION_GROUPS['pinder'])
+    validation['pinder'], cells['pinder'] = choose_validation(candidates['pinder'][0], VALIDATION_GROUPS['pinder'],
+                                                               eligible=lambda r: int(r['eval_interface_sites']) > 0)
     validation['pkpdb'], cells['pkpdb'] = choose_validation(candidates['pkpdb'][0], VALIDATION_GROUPS['pkpdb'],
                                                              eligible=lambda r: int(r['labelled_sites']) > 0)
     val_sequences = {s for rows in validation.values() for r in rows for s in r['_sequences']}
@@ -351,7 +364,7 @@ def build_v4(root, workers):
     queries = {sequence_key(s): s for d in candidates for r in candidates[d][0] if r['group'] not in val_groups[d] for s in r['_sequences']}
     near = {queries[k] for k in screen(root, queries, {sequence_key(s): s for s in val_sequences}, workers)}
     manifest = dict(version=V4, seed=SEED, created_by='pkabench.training_pools build_v4',
-                    rules=dict(validation='one structure per group (first by pool-v4 rank; pKPDB >= 1 clean site), groups stratified by (stratum, size bucket) '
+                    rules=dict(validation='one structure per group (first eligible by pool-v4 rank; PINDER >= 1 labelled eval-mask interface site, pKPDB >= 1 clean site), groups stratified by (stratum, size bucket) '
                                           'with proportional largest-remainder shares, chosen by the pool-v4-validation rank',
                                training='candidates outside the validation groups without a chain >= 70% identity over >= 80% of both sequences to, '
                                         'or exactly equal to, any chain of either validation set',
