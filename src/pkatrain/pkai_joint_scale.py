@@ -31,7 +31,8 @@ MODES = ("backbone", "full")
 SIDECHAIN_GROUPS = frozenset(("ASP", "CYS", "TYR", "GLU", "HIS", "LYS"))
 GROUP_ALIAS = {"NTR": "NTERM", "CTR": "CTERM"}
 KEY_FIELDS = ("chain", "resnum", "icode", "group")
-FRACTION = 0.1
+# pool-v3 fraction (nested 0.1/0.5/0.75/1.0 subsets); PKAI_FRACTION selects another one, with its own output directory
+FRACTION = float(os.environ.get("PKAI_FRACTION", "0.1"))
 BATCH_SIZE = 256
 REFERENCE_BATCH = 64
 REFERENCE_LR = 1e-6
@@ -51,7 +52,8 @@ def read(path):
 
 
 def output(root):
-    return Path(root) / "training/pkai-joint-scale-v1"
+    suffix = "" if FRACTION == 0.1 else f"-f{round(FRACTION * 100)}"  # the registered 10% runs keep their path
+    return Path(root) / f"training/pkai-joint-scale-v1{suffix}"
 
 
 def _pool_rows(path, fraction=FRACTION):
@@ -80,7 +82,7 @@ def register(root):
     }
     atomic_json(out / "records.json", records)
     manifest = {
-        "version": "pkai-joint-scale-10pct-v1", "fraction": FRACTION,
+        "version": f"pkai-joint-scale-{round(FRACTION * 100)}pct-v1", "fraction": FRACTION,
         "modes": list(MODES), "objectives": list(OBJECTIVES), "seed": SEED,
         "batch_size": BATCH_SIZE, "reference_batch_size": REFERENCE_BATCH,
         "reference_learning_rate": REFERENCE_LR, "learning_rate": LEARNING_RATE,
@@ -468,13 +470,13 @@ def _pkpdb_validation_arrays(root, mode):
 def _validation_sources(torch, root, mode, objective, config):
     from .loading_torch import PackedSiteSource
     sources = {"pk": PackedSiteSource(_pkpdb_validation_arrays(root, mode), config=config)}
-    if objective == "joint":
+    if objective in ("joint", "pkpdb"):  # PINDER validation is reported for pKPDB-only arms too (not used for their selection)
         pi = _arrays(output(root) / "packed/pinder-val", (f"{mode}_ab", f"{mode}_free", "target_ab", "target_free"))
         sources["pi"] = PackedSiteSource({"xa": pi[f"{mode}_ab"], "xf": pi[f"{mode}_free"], "ya": pi["target_ab"], "yf": pi["target_free"]}, config=config)
     return sources
 
 
-def _validation(torch, model, sources, config):
+def _validation(torch, model, sources, config, objective="joint"):
     # The established clean 5k validation is independent of the new 10% pool.
     pk = sources["pk"]
     result = {"pkpdb_mse": _squared_sums(torch, model, pk, pk.length, {"pk": lambda b, o: (o - b["y"]).square()}, config,
@@ -485,7 +487,8 @@ def _validation(torch, model, sources, config):
                  "pair": lambda b, o: ((o[0] - o[1]) - (b["ya"] - b["yf"])).square()}
         mse = _squared_sums(torch, model, pi, pi.length, terms, config, lambda b: (model(b["xa"]), model(b["xf"])))
         result.update(pinder_state_mse=(mse["a"] + mse["f"]) / 2, pinder_paired_mse=mse["pair"])
-    result["selection_mse"] = sum(result.values()) / len(result)
+    selected = ["pkpdb_mse"] if objective == "pkpdb" else list(result)
+    result["selection_mse"] = sum(result[k] for k in selected) / len(selected)
     return result
 
 
@@ -505,7 +508,14 @@ def _epoch_specs(order_pk, order_pi):
     return specs
 
 
-def train_scale(root, mode, objective):
+def train_scale(root, mode, objective, batch_size=None, max_epochs=100):
+    """batch_size/max_epochs other than the registered 256/100 (batch-size sweep, 2026-10-10) use the sqrt learning-rate
+    rule and write to runs/<mode>-<objective>-b<batch>-e<epochs>/; the defaults keep the registered run paths."""
+    global BATCH_SIZE, LEARNING_RATE
+    tag = ""
+    if (batch_size or BATCH_SIZE) != BATCH_SIZE or max_epochs != 100:
+        BATCH_SIZE = int(batch_size or BATCH_SIZE); LEARNING_RATE = REFERENCE_LR * math.sqrt(BATCH_SIZE / REFERENCE_BATCH)
+        tag = f"-b{BATCH_SIZE}-e{max_epochs}"
     from .loading import DeferredScalars, LoaderConfig, Prefetcher
     from .loading_torch import CombinedSource, PackedSiteSource
     if mode not in MODES or objective not in OBJECTIVES: raise ValueError((mode,objective))
@@ -521,12 +531,12 @@ def train_scale(root, mode, objective):
         pi=_arrays(out/"packed/pinder-train",(f"{mode}_ab",f"{mode}_free","target_ab","target_free","w_burial","w_interface"))
         sources["pi"]=PackedSiteSource({"xa":pi[f"{mode}_ab"],"xf":pi[f"{mode}_free"],"ya":pi["target_ab"],"yf":pi["target_free"],"wb":pi["w_burial"],"wi":pi["w_interface"]},config=config)
     train_source=CombinedSource(sources); validation_sources=_validation_sources(torch,root,mode,objective,config)
-    dest=out/"runs"/f"{mode}-{objective}"/f"seed-{SEED}";dest.mkdir(parents=True,exist_ok=True)
-    provenance={"mode":mode,"objective":objective,"seed":SEED,"batch_size":BATCH_SIZE,"learning_rate":LEARNING_RATE,"lr_rule":"1e-6*sqrt(batch/64)","precision":"float32","cpus":2,"initialization":"scratch","packed_verification_sha256":digest(out/"packed/verification.json"),"manifest_sha256":digest(out/"manifest.json"),"test_data_included":False,
+    dest=out/"runs"/f"{mode}-{objective}{tag}"/f"seed-{SEED}";dest.mkdir(parents=True,exist_ok=True)
+    provenance={"mode":mode,"objective":objective,"seed":SEED,"batch_size":BATCH_SIZE,"max_epochs":max_epochs,"learning_rate":LEARNING_RATE,"lr_rule":"1e-6*sqrt(batch/64)","precision":"float32","cpus":2,"initialization":"scratch","packed_verification_sha256":digest(out/"packed/verification.json"),"manifest_sha256":digest(out/"manifest.json"),"test_data_included":False,
                 "loader":{"workers":config.workers,"prefetch":config.prefetch,"train":train_source.provenance(),"validation":{k:v.provenance() for k,v in validation_sources.items()}}}
     atomic_json(dest/"manifest.json",provenance)
     params=list(model.parameters())
-    rng=np.random.default_rng(SEED);best=float("inf");anchor=float("inf");stall=0;history=[];began=time.monotonic();max_epochs=100;patience=8
+    rng=np.random.default_rng(SEED);best=float("inf");anchor=float("inf");stall=0;history=[];began=time.monotonic();patience=8
     for epoch in range(1,max_epochs+1):
         if stall>=patience:break
         model.train();order_pk=rng.permutation(len(pk["target"]));order_pi=rng.permutation(len(pi["target_ab"])) if pi else None
@@ -543,7 +553,7 @@ def train_scale(root, mode, objective):
             if not bool(finite):raise FloatingPointError("nonfinite training step")  # one synchronisation per step
             opt.step();losses.add(loss.detach())
         loader=prefetcher.telemetry.summary()
-        metrics=_validation(torch,model,validation_sources,config);score=metrics["selection_mse"]
+        metrics=_validation(torch,model,validation_sources,config,objective);score=metrics["selection_mse"]
         if score<best:best=score;torch.save(model.state_dict(),dest/"best.pending.pt");os.replace(dest/"best.pending.pt",dest/"best.pt")
         if score<anchor-.001:anchor=score;stall=0
         else:stall+=1
@@ -677,7 +687,8 @@ def main():
     elif action == "prepare": prepare_shard(root, sys.argv[2], int(sys.argv[3]), int(sys.argv[4]))
     elif action == "pack": pack_features(root)
     elif action == "feature-smoke": feature_smoke(root)
-    elif action == "train": train_scale(root, sys.argv[2], sys.argv[3])
+    elif action == "train":
+        train_scale(root, sys.argv[2], sys.argv[3], *(int(v) for v in sys.argv[4:6]))
     else: raise ValueError(action)
 
 
