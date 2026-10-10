@@ -291,10 +291,13 @@ and pKAI's own PINDER predictions); pKAI is the reference to beat on pKPDB.
 
 ## TorchScript release export
 
-`pkatrain.pkai_joint_scale export RUN_DIR [DESTINATION.pt]` exports a full, 15 Å / 250-slot `best.pt` checkpoint
+`pkatrain.pkai_joint_scale export RUN_DIR [DESTINATION.pt]` exports a full or backbone, 15 Å / 250-slot `best.pt` checkpoint
 with the released pKAI forward output shape. Select `PKAI_ENCODING=atom16` or `atom16aa20`; `PKAI_FRACTION=100`
 and `PKAI_FRACTION=1` both select the full-data pool. The default filenames are `pKAI-joint_model.pt` and
 `pKAI-joint-aa20_model.pt` beside the checkpoint.
+Backbone checkpoints add `-backbone` to the model name and are checked against the frozen backbone validation
+features, rather than full-atom inputs. Inference must use the training protocol: N/O neighbours of other residues
+within 15 Å of the query C-alpha, with 250 slots and the same eight site-identity channels.
 
 Run through `scripts/slurm/jaxka_pkai_scale.sbatch` (deployed to `$S/_submission/jaxka_pkai_scale.sbatch` on Isambard).
 `PKAI_REPO` can select an isolated checkout; the wrapper uses its source rather than the environment's editable
