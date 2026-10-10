@@ -108,8 +108,8 @@ source datasets only.
     fraction)`. PINDER records also carry per-complex `w_burial`/`w_interface` means, and `normalization(manifest,
     fraction)` is the factorial's definition (mean complex-level weight over that fraction's training complexes).
 - **`PinderSource`**: `gqt_paired_pinder._load_one` per record (AB and partner-free branches).
-- **`PkpdbSource`**: the `SiteBatchLoader` format, with `eligible` = `train_mask` (or `eval_mask`). The 0.04-0.05% of
-  queries without a site token (`query_site` -1, never eligible) point at site 0.
+- **`PkpdbSource`**: the `SiteBatchLoader` format, with `eligible` = `train_mask` (or `eval_mask`). Queries without a site token
+  (`query_site` -1, never eligible; counted per record as `untokenised_sites`) point at site 0.
 - Both pad to the bucket's fixed batch size, with unsupervised copies and `valid` False.
 - Unit tests: synthetic store, manifest, subset selection, normalisation, padding and masks (4 pass).
 
