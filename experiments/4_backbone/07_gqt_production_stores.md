@@ -61,7 +61,7 @@ checks its arrays' sha256 against the build record before the store is installed
 
 Both `verification.json` files pass. The build shards were removed after packing. Each store is about 30 files.
 
-## Squashfs for the packed stores: not used
+## Squashfs for the packed stores: too slow for random reads
 
 The stores compress well with zstd (about 2.9x; measured on PINDER: `edge` 2.8x, `site_edge` 3.2x, masks and indices
 8-44x). The PINDER image was 123 GB (from 299 GB), built in about 3 min with 72 processes, and byte-identical to the
@@ -78,6 +78,6 @@ far too slow for training:
 
 Sequential reads are fine; random access is not. Each structure touches 28 field files at random offsets, `edge.npy`
 alone has about 1.8M compressed blocks, and the per-seek block lookup (about 0.1 s) does not scale with threads.
-Decision: the training stores stay uncompressed on Lustre (about 30 files each, so the file limit is not an issue;
+Recommendation (awaiting the user's call): the training stores stay uncompressed on Lustre (about 30 files each, so the file limit is not an issue;
 825 GB of the 5 TB space). Squashfs stays for the source datasets, which are read once per prep run. The earlier
 "about 4,900 structures/s" image figure was wrong: that benchmark did not read the data.
