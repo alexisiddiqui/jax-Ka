@@ -54,7 +54,7 @@ def expand(slots, encoding="atom16"):
     rows = np.arange(n)[:, None]; base = np.arange(250) * slot
     if "atom" in slots: x[rows, base + slots["atom"]] = slots["value"]
     if "aa" in slots: x[rows, base + _aa_offset(encoding) + slots["aa"]] = slots["value"]
-    x[np.arange(n), 250 * slot + slots["site"]] = 1.0
+    x[np.arange(n), 250 * slot + slots["site"].astype(np.int64)] = 1.0
     return x
 
 
