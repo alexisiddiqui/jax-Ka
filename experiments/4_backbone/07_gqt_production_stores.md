@@ -468,3 +468,35 @@ Main effects (mean over seeds and the other factor; 95% complex-bootstrap CI ove
   afterwards, and the old 400-complex validation set.
 - Weighting x norm interaction on selection: -0.0017.
 - Neither change is adopted from this evidence: the default (shared norm, unweighted paired loss) is kept.
+
+### Experiment 48's loss weighting on GQT, two seeds, 10% pool (2026-10-10)
+
+`--loss-reduction`: `structure` (default; each loss a per-structure site mean, then a mean over structures,
+unweighted), `site` (each loss a mean over the batch's supervised sites, unweighted) and `pkai` (experiment 48,
+`pkai_joint_scale._weighted_mse`: sum(w err^2) / sum(w) over the batch's sites, `w_burial` on the pKPDB and PINDER
+AB/free state losses, `w_interface` on the paired loss; pKPDB sites without a burial weight get weight 0). Batch 16,
+seeds 17 and 29, shared norm; runs `gqt-production-v2/runs/pilot-10pct[-site|-pkaiw][-s29]`. Validation unweighted.
+
+| Arm | Seed | Epoch | Selection | State MAE | Interface paired MAE | Interface paired MSE | pKPDB val MAE | pKPDB val MSE | Benchmark MAE |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| default | 17 | 17 | 0.7375 | 0.4730 | 0.2644 | 0.2525 | 0.5572 | 0.7328 | 0.5728 |
+| default | 29 | 17 | 0.7355 | 0.4694 | 0.2660 | 0.2558 | 0.5598 | 0.7568 | 0.5790 |
+| site | 17 | 19 | 0.7335 | 0.4658 | 0.2677 | 0.2562 | 0.5535 | 0.7130 | 0.5695 |
+| site | 29 | 18 | 0.7406 | 0.4728 | 0.2678 | 0.2533 | 0.5583 | 0.7242 | 0.5784 |
+| pkai | 17 | 17 | 0.7404 | 0.4746 | 0.2658 | 0.2582 | 0.5575 | 0.7327 | 0.5738 |
+| pkai | 29 | 18 | 0.7459 | 0.4768 | 0.2692 | 0.2496 | 0.5669 | 0.7524 | 0.5893 |
+
+Differences of seed means (95% bootstrap over the 800 PINDER and 800 pKPDB validation structures):
+
+| Contrast | Selection | State MAE | Interface paired MAE | pKPDB val MAE | pKPDB val MSE |
+|---|---|---|---|---|---|
+| pkai - default | +0.0067 (+0.0025, +0.0110) | +0.0044 (+0.0024, +0.0064) | +0.0022 (-0.0011, +0.0055) | +0.0037 (+0.0011, +0.0063) | -0.0022 (-0.0107, +0.0062) |
+| site - default | +0.0006 (-0.0034, +0.0042) | -0.0019 (-0.0041, +0.0001) | +0.0025 (-0.0004, +0.0054) | -0.0026 (-0.0053, +0.0003) | -0.0262 (-0.0346, -0.0176) |
+| pkai - site | +0.0061 (+0.0021, +0.0104) | +0.0064 (+0.0045, +0.0084) | -0.0003 (-0.0033, +0.0031) | +0.0063 (+0.0036, +0.0088) | +0.0239 (+0.0157, +0.0324) |
+
+- Experiment 48's weighting makes GQT slightly worse on every unweighted validation metric (both seeds), mostly state
+  and pKPDB error; the interface-weighted Siamese term does not improve interface paired error.
+- Site-level averaging alone matches the default on selection and lowers pKPDB validation MSE by 3.5%. The weights
+  undo that.
+- Seed spread in selection: 0.002 (default), 0.007 (site), 0.006 (pkai); intervals cover validation sampling only.
+- Default kept; `site` is a candidate if pKPDB MSE matters.
