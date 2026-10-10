@@ -22,6 +22,9 @@ Usage (compute node):
   python -m pkabench.dataset_transfer verify OUT/<dataset>-bundle.json ROOT
   python -m pkabench.dataset_transfer squash OUT/<dataset>-bundle.json ROOT [--mksquashfs PATH] [--replace]
   scripts/sqfs_run.sh python -m pkabench.dataset_transfer verify OUT/<dataset>-bundle.json ROOT
+  python -m pkabench.dataset_transfer squash-dir PREFIX NAME            (a verified directory -> images/NAME.sqfs)
+  scripts/sqfs_run.sh python -m pkabench.dataset_transfer verify-dir /tmp/$USER-sqfs/NAME
+  python -m pkabench.dataset_transfer link-dir PREFIX NAME              (PREFIX -> the mount point)
   python -m pkabench.dataset_transfer stage SOURCE_STORE --local /tmp/$USER-stores
 """
 from __future__ import annotations
@@ -395,9 +398,9 @@ def _image_present(images, prefix, key):
     return record.get("key") == key and record.get("size") == image.stat().st_size
 
 
-def _link(root, prefix, replace):
+def _link(root, prefix, replace, name=None):
     """root/prefix -> <mount_root>/<name> (dangling outside sqfs_run.sh, so a missing mount fails loudly)."""
-    link = Path(root) / prefix; target = f"{mount_root()}/{Path(prefix).name}"
+    link = Path(root) / prefix; target = f"{mount_root()}/{name or Path(prefix).name}"
     if link.is_symlink() and os.readlink(link) == target: return
     if link.exists() or link.is_symlink():
         if link.is_dir() and not link.is_symlink():
@@ -492,6 +495,50 @@ def _squash_pass(manifest, bundle, root, images, todo, loose_todo, keys, mksquas
     return out
 
 
+# ---------------------------------------------------------------- squashfs image of a verified directory (e.g. a packed store)
+def squash_dir(root, prefix, name, *, mksquashfs="mksquashfs", processors=4):
+    """Build root/images/<name>.sqfs (zstd) from the directory root/<prefix>, which must hold a passing
+    verification.json with per-file sha256 ("files"). Keyed by that verification.json, so re-runs are no-ops.
+    The directory is left in place: check the image through the mount (verify-dir under sqfs_run.sh), then link-dir."""
+    root = Path(root); source = root / prefix; images = root / "images"; images.mkdir(parents=True, exist_ok=True)
+    verification = json.loads((source / "verification.json").read_text())
+    if not verification.get("passed") or not verification.get("files"): raise IOError(f"{source} has no passing per-file verification")
+    key = hashlib.sha256((source / "verification.json").read_bytes()).hexdigest()
+    image = images / f"{name}.sqfs"; marker = images / f"{name}.sqfs.json"
+    with locked(images / f".{name}.lock"):
+        if image.is_file() and marker.is_file() and json.loads(marker.read_text()).get("key") == key: return "present"
+        pending = images / f".{name}.sqfs.pending-{socket.gethostname()}-{os.getpid()}"
+        try:
+            subprocess.run([mksquashfs, str(source), str(pending), "-noappend", "-no-xattrs", "-all-root", "-comp", "zstd",
+                            "-processors", str(processors), "-mem", os.environ.get("PKABENCH_MKSQUASHFS_MEM", "8G"),
+                            "-quiet", "-no-progress"], check=True)
+        except BaseException:
+            if pending.exists(): pending.unlink()
+            raise
+        record = {"key": key, "prefix": prefix, "files": len(verification["files"]) + 1, "size": pending.stat().st_size,
+                  "source_bytes": sum(p.stat().st_size for p in source.iterdir() if p.is_file()), "sha256": sha256_file(pending),
+                  "mount": f"{mount_root()}/{name}", "created": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        os.replace(pending, image); _atomic_json(marker, record)
+    return "built"
+
+
+def verify_dir(path, workers=4):
+    """Re-hash every file listed in path/verification.json (run on the mounted image)."""
+    path = Path(path); files = json.loads((path / "verification.json").read_text())["files"]
+    tasks = [(str(path), rel, (path / rel).stat().st_size if (path / rel).is_file() else -1, digest) for rel, digest in files.items()]
+    with concurrent.futures.ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("spawn")) as pool:
+        bad = [(rel, why) for rel, why in pool.map(_check, tasks) if why]
+    return {"files": len(tasks), "bad": bad, "passed": not bad}
+
+
+def link_dir(root, prefix, name):
+    """Replace root/<prefix> by a symlink to the mount point of images/<name>.sqfs (after verify-dir passed)."""
+    root = Path(root); marker = root / "images" / f"{name}.sqfs.json"
+    record = json.loads(marker.read_text())
+    if record["prefix"] != prefix: raise IOError(f"{marker} was built from {record['prefix']}, not {prefix}")
+    _link(root, prefix, True, name)
+
+
 # ---------------------------------------------------------------- compact pKAI validation package
 def build_pkai_validation(root):
     """Validation rows of the frozen 5k pKAI pilot (the set experiment 48 scores), copied into a compact package with
@@ -529,6 +576,10 @@ def main(argv=None):
     p = sub.add_parser("verify"); p.add_argument("manifest"); p.add_argument("root"); p.add_argument("--parts")
     p = sub.add_parser("squash"); p.add_argument("manifest"); p.add_argument("root")
     p.add_argument("--mksquashfs", default=os.environ.get("PKABENCH_MKSQUASHFS", "mksquashfs")); p.add_argument("--replace", action="store_true")
+    p = sub.add_parser("squash-dir"); p.add_argument("prefix"); p.add_argument("name")
+    p.add_argument("--mksquashfs", default=os.environ.get("PKABENCH_MKSQUASHFS", "mksquashfs"))
+    p = sub.add_parser("verify-dir"); p.add_argument("path")
+    p = sub.add_parser("link-dir"); p.add_argument("prefix"); p.add_argument("name")
     p = sub.add_parser("stage"); p.add_argument("source"); p.add_argument("--local", required=True)
     sub.add_parser("build-validation")
     args = parser.parse_args(argv)
@@ -543,6 +594,12 @@ def main(argv=None):
         if not report["passed"]: raise SystemExit(1)
     elif args.action == "squash":
         print(json.dumps(squash(args.manifest, args.root, mksquashfs=args.mksquashfs, processors=workers, replace=args.replace)))
+    elif args.action == "squash-dir":
+        print(squash_dir(runtime, args.prefix, args.name, mksquashfs=args.mksquashfs, processors=workers))
+    elif args.action == "verify-dir":
+        report = verify_dir(args.path, workers); print(json.dumps({**report, "bad": report["bad"][:20]}))
+        if not report["passed"]: raise SystemExit(1)
+    elif args.action == "link-dir": link_dir(runtime, args.prefix, args.name); print("linked")
     elif args.action == "stage": print(stage(args.source, args.local))
     elif args.action == "build-validation": print(build_pkai_validation(runtime))
 
