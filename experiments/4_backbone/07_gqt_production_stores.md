@@ -192,3 +192,33 @@ objective with the 67,725-parameter backbone oGQT; first run on the 10% pool.
 
 Smoke test (2 epochs x 5 batches, 10% manifests): finite losses; validation improved (selection 1.217 -> 1.172);
 loader wait fraction about 0; validation takes 1.5 s once compiled. The 10% pilot is `runs/pilot-10pct` (job 7215696).
+
+### 10% pilot (`runs/pilot-10pct`, job 7215696, one GH200)
+
+3,422 PINDER and 5,878 pKPDB training structures; 214 joint updates per epoch.
+- **Time:** about 27.5 s of training per epoch (102 s for epoch 1, including compilation) plus 1.6 s of validation;
+  11.5 min in total for 20 epochs.
+- **Loader:** wait fraction 1-4%.
+- **Selection:** epoch 17 (patience never triggered).
+
+| Epoch | Train loss | pKPDB train loss | PINDER state MAE | Interface paired MAE | Benchmark group-macro MAE | Selection |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 1.731 | 0.825 | 0.569 | 0.348 | 0.657 | 0.917 |
+| 5 | 1.081 | 0.545 | 0.487 | 0.310 | 0.582 | 0.797 |
+| 10 | 0.932 | 0.471 | 0.458 | 0.295 | 0.568 | 0.753 |
+| 13 | 0.850 | 0.425 | 0.473 | 0.290 | 0.570 | 0.762 |
+| **17** | 0.750 | 0.377 | **0.453** | **0.295** | **0.559** | **0.747** |
+| 20 | 0.708 | 0.353 | 0.454 | 0.298 | 0.560 | 0.752 |
+
+Selected epoch 17:
+- **PINDER validation:** 11,758 sites; state MAE 0.453; paired MAE 0.147; interface paired MAE 0.295 (5,271 sites).
+- **Benchmark validation:** 7,986 sites, 142 complexes, 76 component groups; group-macro MAE 0.559, RMSE 0.789,
+  Spearman 0.753, sign accuracy 0.937.
+
+The benchmark column comes from `rescore` (`runs/pilot-10pct/rescore.json`). The run's own history scored it with
+`component_id` missing from the benchmark manifest, which collapsed the group-macro MAE into one group. Manifests now
+carry `component_id`. Selection uses PINDER only and is unchanged.
+
+For orientation only, since the cohorts and label revisions differ: experiment 45's pretrained joint arms (5k PINDER
+cohort, pKPDB-pretrained parent) reached PINDER state MAE 0.464-0.473, interface paired MAE 0.295-0.300 and benchmark
+pKPDB MAE 0.548-0.565. The scratch 10% production pilot is in the same range.
