@@ -22,10 +22,11 @@ selection.json, predictions-{pinder,benchmark}-epoch-NNN.csv.
 
 Batch-size sweep (2026-10-10): --batch B trains with a constant B structures per batch in every bucket and the
 learning rate scaled by sqrt(B / 8) (the same rule); validation always runs at 16 per batch (per-structure predictions,
-so the batch size only changes padding). The default 16 reproduces the pilot's protocol. Batches above MICRO (128, the largest batch measured to
-fit in every bucket; batch 256 in the 1,536-residue bucket needs a single 45 GiB allocation and fails) are split into chunks
-of MICRO structures on the host; both objectives are means over the batch's valid structures, so the full-batch value
-and gradient are the chunk values and gradients weighted by (valid structures in chunk / valid in batch). Chunks that
+so the batch size only changes padding). The default 16 reproduces the pilot's protocol. Batches above MICRO (64) are
+split into chunks of MICRO structures on the host (batch 256 in the 1,536-residue bucket needs a single 45 GiB
+allocation; chunks of 128 also failed at batch 256, a 21 GiB allocation with prefetched batches resident on the device);
+both objectives are means over the batch's valid structures, so the full-batch value and gradient are the chunk values
+and gradients weighted by (valid structures in chunk / valid in batch). Chunks that
 are pure padding are skipped. One optimizer step per batch, as before.
 
   python -m pkatrain.production_train train RUN [--fraction 0.1] [--batch 16] [--smoke]
@@ -55,7 +56,7 @@ ARCHITECTURE = {"width": 44, "ff": 88}
 def lr_scale(batch): return math.sqrt(batch / 8)
 
 
-MICRO = 128
+MICRO = 64
 
 
 def run_dir(root, run): return Path(root) / "training/gqt-production-v1/runs" / run
