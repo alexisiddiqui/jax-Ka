@@ -12,16 +12,19 @@ Both add the site graph of site_graph_data.build_site_graph.
 
 Layout under <runtime>/training/gqt-production-v1/<dataset>/:
   ids.json                      the deterministic structure list (pool order, then validation)
-  shards/<t>-of-<T>/            written by `build` tasks (task t takes ids[t::T]): <field>.bin + receipt.json;
-                                re-runs skip finished shards
-  store-v1/                     `pack`: one flat .npy per field + index.npz (dims, offsets) + records.json +
-                                metadata.json + verification.json (sha256 per file); ProductionStore reads it
+  shards/<t>-of-<T>/            written by `build` tasks (task t takes ids[t::T]): records.bin (one zstd record per
+                                structure) + receipt.json; re-runs skip finished shards
+  store-v2/                     `pack`: records.bin (zstd records, ids.json order) + index.npz (dims, byte offsets) +
+                                records.json + metadata.json + verification.json (every record decompressed and checked
+                                against its build digest; sha256 per file). ProductionStore(path).raw(id) reads one.
+  store-v1/                     superseded uncompressed layout (one flat .npy per field); `compress` converts it
   compare.json                  `compare`: rebuilt arrays vs reference graphs from the source cluster
 
 Run under scripts/sqfs_run.sh (the sources are squashfs images).
   python -m pkatrain.production_graphs ids {pkpdb,pinder}
   python -m pkatrain.production_graphs build {pkpdb,pinder} TASK TASKS
   python -m pkatrain.production_graphs pack {pkpdb,pinder}
+  python -m pkatrain.production_graphs compress {pkpdb,pinder}      (store-v1 -> store-v2)
   python -m pkatrain.production_graphs compare {pkpdb,pinder} REFERENCE_DIR
 """
 from __future__ import annotations
@@ -218,37 +221,61 @@ def build_one(root, dataset, cid, split):
             "s": arrays["site_type"].shape[0], "sk": arrays["site_neighbors"].shape[1]}
     for name in FIELDS[dataset]:
         if arrays[name].shape != shape(name, *(dims[d] for d in DIMS)): raise AssertionError((cid, name, arrays[name].shape))
-    digest_ = hashlib.sha256()
-    for name in FIELDS[dataset]: digest_.update(name.encode()); digest_.update(np.ascontiguousarray(arrays[name]).tobytes())
     return {name: arrays[name] for name in FIELDS[dataset]}, {"id": cid, "split": split, **{d: int(v) for d, v in dims.items()},
-                                                              "arrays_sha256": digest_.hexdigest(), **extra}
+                                                              "arrays_sha256": arrays_digest(arrays, FIELDS[dataset]), **extra}
+
+
+# ---------------------------------------------------------------- compressed records
+# A record is every field's raw bytes, concatenated in FIELDS order, as one zstd frame (level ZSTD_LEVEL). Records
+# are individually addressable (offset, length) in one records.bin per store. Measured on 4,000 PINDER structures
+# (Isambard, 2026-10-10): 3.2x smaller than the raw arrays and 416 structures/s at 8 threads, against 138/s for the
+# uncompressed per-field mmap store (and 172/s for one file per structure in a squashfs image).
+ZSTD_LEVEL = 3
+
+
+def encode(arrays, fields):
+    import zstandard
+    return zstandard.ZstdCompressor(level=ZSTD_LEVEL).compress(b"".join(np.ascontiguousarray(arrays[f]).tobytes() for f in fields))
+
+
+def decode(blob, fields, dtypes, dims):
+    import zstandard
+    raw = zstandard.ZstdDecompressor().decompress(blob); out = {}; position = 0
+    for f in fields:
+        dtype = np.dtype(dtypes[f]); size = int(np.prod(shape(f, *dims)))
+        out[f] = np.frombuffer(raw, dtype, count=size, offset=position).reshape(shape(f, *dims)); position += size * dtype.itemsize
+    if position != len(raw): raise ValueError("record length does not match its dims")
+    return out
+
+
+def arrays_digest(arrays, fields):
+    h = hashlib.sha256()
+    for f in fields: h.update(f.encode()); h.update(np.ascontiguousarray(arrays[f]).tobytes())
+    return h.hexdigest()
 
 
 # ---------------------------------------------------------------- shards
 def build_shard(root, dataset, task, tasks):
-    """Task t of T builds ids[t::T] one structure at a time, appending each field's raw bytes to
-    shards/<name>/<field>.bin (bounded memory); the shard directory appears only when complete."""
+    """Task t of T builds ids[t::T] one structure at a time and appends each as a compressed record to
+    shards/<name>/records.bin (bounded memory, no uncompressed intermediate); the directory appears when complete."""
     root = Path(root); out = output(root, dataset); shards = out / "shards"; shards.mkdir(parents=True, exist_ok=True)
     listing = read(out / "ids.json")["ids"]; mine = listing[task::tasks]; name = f"{task:04d}-of-{tasks:04d}"
     folder = shards / name
     if (folder / "receipt.json").exists(): return read(folder / "receipt.json")
     pending = shards / f".{name}.pending-{os.getpid()}"; pending.mkdir()
-    began = time.time(); records = []; skipped = []; failures = []; dtypes = {}
-    handles = {f: open(pending / f"{f}.bin", "wb") for f in FIELDS[dataset]}
-    try:
+    began = time.time(); records = []; skipped = []; failures = []; dtypes = {}; fields = FIELDS[dataset]; position = 0
+    with open(pending / "records.bin", "wb") as handle:
         for number, (cid, split) in enumerate(mine, 1):
             try:
                 arrays, record = build_one(root, dataset, cid, split)
             except Exception as exc:
                 failures.append({"id": cid, "split": split, "error": repr(exc)}); continue
             if arrays is None: skipped.append(record); continue
-            for f, value in arrays.items():
-                if dtypes.setdefault(f, value.dtype.str) != value.dtype.str: raise AssertionError((cid, f, value.dtype))
-                handles[f].write(np.ascontiguousarray(value).tobytes())
-            records.append(record)
+            for f in fields:
+                if dtypes.setdefault(f, arrays[f].dtype.str) != arrays[f].dtype.str: raise AssertionError((cid, f, arrays[f].dtype))
+            blob = encode(arrays, fields); handle.write(blob)
+            records.append({**record, "blob": [position, len(blob)]}); position += len(blob)
             if number % 25 == 0: print(json.dumps({"dataset": dataset, "task": task, "done": number, "of": len(mine)}), flush=True)
-    finally:
-        for handle in handles.values(): handle.close()
     receipt = {"dataset": dataset, "task": task, "tasks": tasks, "assigned": len(mine), "records": records, "skipped": skipped,
                "failures": failures, "dtypes": dtypes, "seconds": round(time.time() - began, 1)}
     atomic_json(pending / "receipt.json", receipt)
@@ -260,59 +287,86 @@ def build_shard(root, dataset, task, tasks):
 
 
 # ---------------------------------------------------------------- packed store
-def pack(root, dataset):
-    root = Path(root); out = output(root, dataset); destination = out / "store-v1"
-    if (destination / "verification.json").exists(): return read(destination / "verification.json")
-    listing = [tuple(x) for x in read(out / "ids.json")["ids"]]; fields = FIELDS[dataset]
+def _write_store(out, dataset, records, dtypes, blobs, skipped, workers):
+    """records in final order; blobs yields each record's compressed bytes in that order. Writes store-v2 into a
+    pending directory, verifies every record (decompress + arrays_sha256) in parallel, then installs it."""
+    from concurrent.futures import ThreadPoolExecutor
+    fields = FIELDS[dataset]; destination = out / "store-v2"
+    pending = out / f".store-v2.pending-{os.getpid()}"; pending.mkdir()
+    offsets = np.zeros(len(records) + 1, np.int64)
+    with open(pending / "records.bin", "wb") as handle:
+        for i, blob in enumerate(blobs):
+            handle.write(blob); offsets[i + 1] = offsets[i] + len(blob)
+            if (i + 1) % 5000 == 0: print(json.dumps({"written": i + 1, "of": len(records)}), flush=True)
+    if len(offsets) - 1 != len(records) or offsets[-1] != (pending / "records.bin").stat().st_size: raise AssertionError("record count")
+    np.savez(pending / "index.npz", ids=np.asarray([r["id"] for r in records]),
+             dims=np.asarray([[r[d] for d in DIMS] for r in records], np.int32), offsets=offsets)
+    atomic_json(pending / "records.json", [{k: v for k, v in r.items() if k != "blob"} for r in records])
+    atomic_json(pending / "metadata.json", {"version": VERSION, "format": "zstd-records-v1", "zstd_level": ZSTD_LEVEL,
+        "dataset": dataset, "fields": list(fields), "dtypes": dtypes, "dims": list(DIMS), "structures": len(records),
+        "skipped": sorted(skipped.values(), key=lambda r: r["id"]), "ids_sha256": digest(out / "ids.json"),
+        "sites": int(sum(r["q"] for r in records)), "raw_bytes": int(sum(sum(int(np.prod(shape(f, *(r[d] for d in DIMS)))) * np.dtype(dtypes[f]).itemsize
+                                                                            for f in fields) for r in records)),
+        "compressed_bytes": int(offsets[-1])})
+    store = ProductionStore(pending, verify=False)
+    def check(record):
+        return None if arrays_digest(store.raw(record["id"]), fields) == record["arrays_sha256"] else record["id"]
+    with ThreadPoolExecutor(workers) as pool: bad = [cid for cid in pool.map(check, records) if cid]
+    store.close()
+    if bad: raise AssertionError(f"{len(bad)} records differ after packing, e.g. {bad[:5]}")
+    files = {p.name: digest(p) for p in sorted(pending.iterdir())}
+    atomic_json(pending / "verification.json", {"passed": True, "records_checked": len(records), "files": files,
+                "bytes": sum(p.stat().st_size for p in pending.iterdir())})
+    os.replace(pending, destination)
+    return read(destination / "verification.json")
+
+
+def pack(root, dataset, workers=8):
+    """Concatenate the shards' compressed records (ids.json order) into store-v2/records.bin."""
+    root = Path(root); out = output(root, dataset)
+    if (out / "store-v2" / "verification.json").exists(): return read(out / "store-v2" / "verification.json")
+    listing = [tuple(x) for x in read(out / "ids.json")["ids"]]
     receipts = [read(p) for p in sorted((out / "shards").glob("*/receipt.json"))]
     tasks = {r["tasks"] for r in receipts}
     if len(tasks) != 1 or len(receipts) != next(iter(tasks)): raise AssertionError(f"incomplete shards: {len(receipts)} of {tasks}")
-    by_id = {r["id"]: r for receipt in receipts for r in receipt["records"]}
+    by_id = {}; folder_of = {}
+    for receipt in receipts:
+        for r in receipt["records"]: by_id[r["id"]] = r; folder_of[r["id"]] = out / "shards" / f"{receipt['task']:04d}-of-{receipt['tasks']:04d}"
     skipped = {r["id"]: r for receipt in receipts for r in receipt["skipped"]}
     if set(by_id) | set(skipped) != {cid for cid, _ in listing}: raise AssertionError("shards do not cover ids.json")
     records = [by_id[cid] for cid, _ in listing if cid in by_id]
     dtypes = next(r["dtypes"] for r in receipts if r["records"])
     if any(r["dtypes"] != dtypes for r in receipts if r["records"]): raise AssertionError("shard dtypes differ")
-    def size(record, f): return int(np.prod(shape(f, *(record[d] for d in DIMS))))
-    sizes = np.asarray([[size(r, f) for f in fields] for r in records], np.int64)
-    offsets = np.zeros((len(records) + 1, len(fields)), np.int64); offsets[1:] = np.cumsum(sizes, axis=0)
-    position = {r["id"]: i for i, r in enumerate(records)}
-    pending = out / f".store-v1.pending-{os.getpid()}"; pending.mkdir()
-    arrays = {f: np.lib.format.open_memmap(pending / f"{f}.npy", mode="w+", dtype=np.dtype(dtypes[f]), shape=(int(offsets[-1, j]),))
-              for j, f in enumerate(fields)}
-    for receipt in receipts:
-        folder = out / "shards" / f"{receipt['task']:04d}-of-{receipt['tasks']:04d}"
-        for j, f in enumerate(fields):
-            data = np.memmap(folder / f"{f}.bin", dtype=np.dtype(dtypes[f]), mode="r") if receipt["records"] else np.zeros(0)
-            cursor = 0
-            for record in receipt["records"]:
-                i = position[record["id"]]; n = int(sizes[i, j])
-                arrays[f][offsets[i, j]:offsets[i, j] + n] = data[cursor:cursor + n]; cursor += n
-            if cursor != len(data): raise AssertionError((folder.name, f, "trailing data"))
-            del data
-        print(json.dumps({"packed_shard": folder.name}), flush=True)
-    for value in arrays.values(): value.flush()
-    arrays.clear()
-    np.savez(pending / "index.npz", ids=np.asarray([r["id"] for r in records]),
-             dims=np.asarray([[r[d] for d in DIMS] for r in records], np.int32), offsets=offsets)
-    atomic_json(pending / "records.json", records)
-    atomic_json(pending / "metadata.json", {"version": VERSION, "dataset": dataset, "fields": list(fields), "dtypes": dtypes,
-        "dims": list(DIMS), "structures": len(records), "skipped": sorted(skipped.values(), key=lambda r: r["id"]),
-        "ids_sha256": digest(out / "ids.json"), "sites": int(sum(r["q"] for r in records))})
-    store = ProductionStore(pending, verify=False)  # re-read every record and check its arrays digest
-    for record in records:
-        h = hashlib.sha256()
-        for f, value in store.raw(record["id"]).items(): h.update(f.encode()); h.update(np.ascontiguousarray(value).tobytes())
-        if h.hexdigest() != record["arrays_sha256"]: raise AssertionError((record["id"], "packed arrays differ"))
-    store.close()
-    files = {p.name: digest(p) for p in sorted(pending.iterdir())}
-    atomic_json(pending / "verification.json", {"passed": True, "files": files, "bytes": sum(p.stat().st_size for p in pending.iterdir())})
-    os.replace(pending, destination)
-    return read(destination / "verification.json")
+    handles = {}
+    def blobs():
+        for r in records:
+            folder = folder_of[r["id"]]
+            if folder not in handles: handles[folder] = os.open(folder / "records.bin", os.O_RDONLY)
+            yield os.pread(handles[folder], r["blob"][1], r["blob"][0])
+    try: return _write_store(out, dataset, records, dtypes, blobs(), skipped, workers)
+    finally:
+        for fd in handles.values(): os.close(fd)
+
+
+def compress_store(root, dataset, workers=8):
+    """Convert an uncompressed store-v1 (one flat .npy per field) into store-v2, record by record."""
+    from concurrent.futures import ThreadPoolExecutor
+    root = Path(root); out = output(root, dataset)
+    if (out / "store-v2" / "verification.json").exists(): return read(out / "store-v2" / "verification.json")
+    old = ProductionStore(out / "store-v1"); records = read(out / "store-v1" / "records.json"); fields = FIELDS[dataset]
+    skipped = {r["id"]: r for r in old.metadata["skipped"]}
+    def blob(record): return encode(old.raw(record["id"]), fields)
+    def blobs():
+        with ThreadPoolExecutor(workers) as pool:
+            for start in range(0, len(records), 4 * workers):  # bounded look-ahead keeps memory flat
+                yield from pool.map(blob, records[start:start + 4 * workers])
+    try: return _write_store(out, dataset, records, old.metadata["dtypes"], blobs(), skipped, workers)
+    finally: old.close()
 
 
 class ProductionStore:
-    """Read-only view of a packed store: raw(id) -> {field: array view} with the recorded shapes."""
+    """Read-only access to a packed store: raw(id) -> {field: array} with the recorded shapes. store-v2 (zstd records):
+    one pread + decompress per structure, safe from many threads; store-v1 (flat per-field .npy): mmap views."""
 
     def __init__(self, path, verify=True):
         self.path = Path(path); self.metadata = read(self.path / "metadata.json")
@@ -320,14 +374,20 @@ class ProductionStore:
         with np.load(self.path / "index.npz") as index:
             self.ids = index["ids"].astype(str); self.dims = index["dims"]; self.offsets = index["offsets"]
         self.by_id = {cid: i for i, cid in enumerate(self.ids)}; self.fields = self.metadata["fields"]
-        self.arrays = {f: np.load(self.path / f"{f}.npy", mmap_mode="r") for f in self.fields}
+        self.compressed = self.metadata.get("format") == "zstd-records-v1"
+        if self.compressed: self.fd = os.open(self.path / "records.bin", os.O_RDONLY); self.arrays = {}
+        else: self.fd = None; self.arrays = {f: np.load(self.path / f"{f}.npy", mmap_mode="r") for f in self.fields}
 
     def raw(self, cid):
         i = self.by_id[cid]; dims = [int(x) for x in self.dims[i]]
+        if self.compressed:
+            start, stop = int(self.offsets[i]), int(self.offsets[i + 1])
+            return decode(os.pread(self.fd, stop - start, start), self.fields, self.metadata["dtypes"], dims)
         return {f: self.arrays[f][self.offsets[i, j]:self.offsets[i + 1, j]].reshape(shape(f, *dims)) for j, f in enumerate(self.fields)}
 
     def close(self):
         self.arrays.clear()
+        if self.fd is not None: os.close(self.fd); self.fd = None
 
 
 # ---------------------------------------------------------------- comparison with the source cluster's graphs
@@ -381,7 +441,10 @@ def main(argv=None):
     elif action == "build":
         receipt = build_shard(root, dataset, int(argv[2]), int(argv[3]))
         print(json.dumps({k: (len(v) if isinstance(v, list) else v) for k, v in receipt.items()}))
-    elif action == "pack": print(json.dumps({k: v for k, v in pack(root, dataset).items() if k != "files"}))
+    elif action == "pack":
+        print(json.dumps({k: v for k, v in pack(root, dataset, int(os.environ.get("SLURM_CPUS_PER_TASK", "8"))).items() if k != "files"}))
+    elif action == "compress":
+        print(json.dumps({k: v for k, v in compress_store(root, dataset, int(os.environ.get("SLURM_CPUS_PER_TASK", "8"))).items() if k != "files"}))
     elif action == "compare":
         report = compare(root, dataset, argv[2]); print(json.dumps({k: v for k, v in report.items() if k != "mismatches"}))
         if not report["passed"]: raise SystemExit(1)
