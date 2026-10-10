@@ -116,10 +116,14 @@ def _features(atoms, keys, encoding="atom16"):
         if encoding == "atom16":
             ordered = sorted(((float(distance[j]), 0 if context_name[j] == "N" else 9)
                               for j in ids))[:250]
+        elif encoding == "atom16aa20":
+            ordered = sorted(((float(distance[j]), 0 if context_name[j] == "N" else 9, aa20_index(context_residue[j]))
+                              for j in ids))[:250]
         else:
             ordered = sorted(((float(distance[j]), aa20_index(context_residue[j])) for j in ids))[:250]
-        for position, (value, atom_class) in enumerate(ordered):
+        for position, (value, atom_class, *residue) in enumerate(ordered):
             matrix[row, position * slot + atom_class] = 1.0 / value ** 2
+            if residue: matrix[row, position * slot + 16 + residue[0]] = 1.0 / value ** 2
         matrix[row, 250 * slot + RES_OHE.index(group)] = 1.0
         retained[row] = True
     return matrix, retained
