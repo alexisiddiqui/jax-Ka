@@ -17,7 +17,7 @@ All operations are idempotent and safe to re-run or run concurrently:
 Paths inside bundles are relative to PKABENCH_RUNTIME, so code that uses runtime-relative paths works after import.
 
 Usage (compute node):
-  python -m pkabench.dataset_transfer export {pinder,pkpdb,validation} OUT [--graphs] [--scope pool|all]
+  python -m pkabench.dataset_transfer export {pinder,pkpdb,validation} OUT [--graphs] [--scope pool|all|pool-v4-delta]
   python -m pkabench.dataset_transfer import OUT/<dataset>-bundle.json ROOT [--parts core,graphs]
   python -m pkabench.dataset_transfer verify OUT/<dataset>-bundle.json ROOT
   python -m pkabench.dataset_transfer squash OUT/<dataset>-bundle.json ROOT [--mksquashfs PATH] [--replace]
@@ -155,9 +155,36 @@ def _read_tsv(path):
     with open(path) as handle: return list(csv.DictReader(handle, delimiter="\t"))
 
 
+POOL_V4 = "training/pool-v4"
+
+
+def _v4_delta_ids(root, dataset):
+    """pool-v4 training and validation structures that bundle-v1 (pool-v3, plus the 400 PINDER validation complexes)
+    did not carry."""
+    v4 = {r["id"] for name in (f"{dataset}.tsv", f"{dataset}-val.tsv") for r in _read_tsv(root / POOL_V4 / name)}
+    if dataset == "pinder":
+        have = {r["id"] for r in _read_tsv(root / PINDER / "pool-v3.tsv")}
+        have |= {r["id"] for r in json.loads((root / PINDER_VALIDATION).read_text())["records"] if r["split"] == "val"}
+    else:
+        have = {r["id"] for r in _read_tsv(root / PKPDB / "pool-v3.tsv")}
+    return sorted(v4 - have)
+
+
 def dataset_files(root, dataset, scope="pool"):
-    """{part: [relative paths]} for one dataset, in deterministic order."""
+    """{part: [relative paths]} for one dataset, in deterministic order. scope "pool-v4-delta": only the entries (and
+    pKPDB source structures) pool-v4 adds to bundle-v1, for an overlay import (2026-10-10)."""
     root = Path(root); parts = {"core": [], "graphs": []}
+    if scope == "pool-v4-delta":
+        for cid in _v4_delta_ids(root, dataset):
+            if dataset == "pinder":
+                folder = root / PINDER / "entries" / cid
+                parts["core"] += [f"{PINDER}/entries/{cid}/{p.name}" for p in sorted(folder.iterdir()) if p.name not in PINDER_SKIP]
+            else:
+                parts["core"] += [f"{PKPDB}/entries/{cid}/{name}" for name in PKPDB_ENTRY]
+                parts["core"] += [f"{PKPDB_STRUCTURES}/{cid[1:3]}/{cid}.cif.gz", f"{PKPDB_STRUCTURES}/{cid[1:3]}/{cid}.json"]
+        missing = [rel for rel in parts["core"] if not (root / rel).is_file()]
+        if missing: raise FileNotFoundError(f"{len(missing)} missing files, e.g. {missing[:5]}")
+        return {"core": parts["core"]} if parts["core"] else {}
     if dataset == "pinder":
         ids = {r["id"] for r in _read_tsv(root / PINDER / "pool-v3.tsv")}
         ids |= {r["id"] for r in json.loads((root / PINDER_VALIDATION).read_text())["records"] if r["split"] == "val"}
@@ -602,7 +629,7 @@ def build_pkai_validation(root):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="pkabench.dataset_transfer"); sub = parser.add_subparsers(dest="action", required=True)
     p = sub.add_parser("export"); p.add_argument("dataset", choices=("pinder", "pkpdb", "validation")); p.add_argument("out")
-    p.add_argument("--graphs", action="store_true"); p.add_argument("--scope", choices=("pool", "all"), default="pool")
+    p.add_argument("--graphs", action="store_true"); p.add_argument("--scope", choices=("pool", "all", "pool-v4-delta"), default="pool")
     p = sub.add_parser("import"); p.add_argument("manifest"); p.add_argument("root"); p.add_argument("--parts")
     p = sub.add_parser("verify"); p.add_argument("manifest"); p.add_argument("root"); p.add_argument("--parts")
     p = sub.add_parser("squash"); p.add_argument("manifest"); p.add_argument("root")
