@@ -61,23 +61,39 @@ checks its arrays' sha256 against the build record before the store is installed
 
 Both `verification.json` files pass. The build shards were removed after packing. Each store is about 30 files.
 
-## Squashfs for the packed stores: too slow for random reads
+## Compressed stores (store-v2, zstd records)
 
-The stores compress well with zstd (about 2.9x; measured on PINDER: `edge` 2.8x, `site_edge` 3.2x, masks and indices
-8-44x). The PINDER image was 123 GB (from 299 GB), built in about 3 min with 72 processes, and byte-identical to the
-store (parallel 256 MB range comparison, 1,135 ranges). But random structure reads through `squashfuse_ll` 0.5.2 are
-far too slow for training:
+The first packed layout (`store-v1`: one flat `.npy` per field, uncompressed) was 825 GB. A squashfs image of it
+compressed well (PINDER 299 -> 123 GB) but was unusable for random access: about 10 structures/s at any thread count,
+because each structure is read from 28 field files at random offsets and `squashfuse_ll` 0.5.2 spends about 0.1 s per
+seek in a 1.8M-block file, without thread scaling. Sequential reads were fine (1.2-1.5 GB/s). (An earlier "4,900
+structures/s" image figure was wrong: that benchmark did not read the data.)
 
-| Read path (PINDER store, random structures, every field copied) | Threads | Structures/s | MB/s |
-|---|---:|---:|---:|
-| Plain store on Lustre (`np.load` mmap) | 8 | 112 | 952 |
-| Plain store on Lustre | 32 | 285 | 2,485 |
-| Squashfs image, mmap | 8 / 32 | 8 / 8 | 69 / 65 |
-| Squashfs image, `pread` of each field range | 8 / 32 | 11 / 10 | 94 / 77 |
-| Squashfs image, sequential 1 GB of `edge.npy` at 0 / 100 / 200 GB | 1 | | 1.2 / 1.5 / 1.5 GB/s |
+Three layouts were compared on 4,000 random PINDER structures (every field materialised; fresh structures per run):
 
-Sequential reads are fine; random access is not. Each structure touches 28 field files at random offsets, `edge.npy`
-alone has about 1.8M compressed blocks, and the per-seek block lookup (about 0.1 s) does not scale with threads.
-Recommendation (awaiting the user's call): the training stores stay uncompressed on Lustre (about 30 files each, so the file limit is not an issue;
-825 GB of the 5 TB space). Squashfs stays for the source datasets, which are read once per prep run. The earlier
-"about 4,900 structures/s" image figure was wrong: that benchmark did not read the data.
+| Layout | Size (raw 32.9 GB) | 8 threads | 32 threads | 72 threads |
+|---|---:|---:|---:|---:|
+| store-v1, uncompressed per-field mmap on Lustre | 32.9 GB | 138/s | 343/s | 555/s |
+| one uncompressed `.npz` per structure in a zstd squashfs image | 13.5 GB (2.4x) | 172/s | 351/s | 322/s |
+| **one zstd frame per structure + offset index (store-v2)** | **10.4 GB (3.2x)** | **416/s** | **395/s** | **365/s** |
+
+Decision (user: keep the stores compressed): `store-v2`.
+- `records.bin` holds one zstd frame (level 3) per structure, containing every field's raw bytes in FIELDS order.
+- `index.npz` holds ids, dims and byte offsets, so each structure is individually addressable.
+- `ProductionStore.raw(id)` does one `pread` plus a decompress, is safe from many threads, and needs no FUSE.
+- Build tasks write compressed records directly (`shards/<t>-of-<T>/records.bin`) and `pack` concatenates them, so
+  no uncompressed intermediate is ever written.
+- `pack` and `compress` (the v1 -> v2 conversion) decompress every record and check it against the build's
+  `arrays_sha256` before installing the store.
+- New dependency: `zstandard>=0.23` (train extra; 0.25.0 in the Isambard venv).
+
+Conversion of the full stores (job 7213750, 72 threads; store-v1 removed after verification):
+
+| Store | Structures | Raw | Compressed | Ratio | Time |
+|---|---:|---:|---:|---:|---:|
+| `pinder/store-v2` | 35,456 | 299.2 GB | 94.8 GB | 3.16x | 226 s |
+| `pkpdb/store-v2` | 62,874 | 525.8 GB | 179.4 GB | 2.93x | 460 s |
+
+Random reads from the full PINDER store-v2 (all fields decoded): 797/s at 8 threads, 856/s at 32 and 1,215/s at 72
+(6.5-9.8 GB/s of arrays), against 112/s and 285/s for store-v1 on the same node type. Squashfs remains in use for the
+source datasets only.
