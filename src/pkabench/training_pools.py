@@ -366,6 +366,9 @@ def build_v4(root, workers, size=None):
     val_groups = {d: {r['group'] for r in validation[d]} for d in validation}
     queries = {sequence_key(s): s for d in candidates for r in candidates[d][0] if r['group'] not in val_groups[d] for s in r['_sequences']}
     near = {queries[k] for k in screen(root, queries, {sequence_key(s): s for s in val_sequences}, workers)}
+    # attribution only: which validation set's chains each removal matches
+    by_source = {v: {s for r in validation[v] for s in r['_sequences']} for v in validation}
+    near_by = {v: {queries[k] for k in screen(root, queries, {sequence_key(s): s for s in by_source[v]}, workers)} | by_source[v] for v in by_source}
     manifest = dict(version=V4, seed=SEED, created_by='pkabench.training_pools build_v4',
                     rules=dict(validation='one structure per group (first eligible by pool-v4 rank; PINDER >= 1 labelled eval-mask interface site, pKPDB >= 1 clean site), groups stratified by (stratum, size bucket) '
                                           'with proportional largest-remainder shares, chosen by the pool-v4-validation rank',
@@ -380,6 +383,7 @@ def build_v4(root, workers, size=None):
     for d, (rows, info) in candidates.items():
         outside = [r for r in rows if r['group'] not in val_groups[d]]
         train = [r for r in outside if not any(s in near or s in val_sequences for s in r['_sequences'])]
+        kept = {r['id'] for r in train}
         strata = {}
         for r in sorted(train, key=lambda r: rank(r['id'], version=V4)): strata.setdefault(r['group'], r['stratum'])
         entry = min_fractions(strata, version=V4)
@@ -398,7 +402,9 @@ def build_v4(root, workers, size=None):
                             labelled_sites=sum(int(r['labelled_sites']) for r in validation[d]),
                             **({'labelled_interface_sites': sum(int(r['labelled_interface_sites']) for r in validation[d])} if d == 'pinder' else {}),
                             cells=cells[d]),
-            removed=dict(in_validation_groups=len(rows) - len(outside), chain_near_or_equal_validation=len(outside) - len(train)),
+            removed=dict(in_validation_groups=len(rows) - len(outside), chain_near_or_equal_validation=len(outside) - len(train),
+                         chain_matches_by_validation_set={', '.join(k): n for k, n in sorted(Counter(
+                             tuple(v for v in near_by if any(s in near_by[v] for s in r['_sequences'])) for r in outside if r['id'] not in kept).items())}),
             pool=dict(file=str(out/f'{d}.tsv'), sha256=digest(out/f'{d}.tsv')),
             pdb_ids_shared_with_benchmark_val_test=sorted({r['pdb_id'].lower() for r in train + validation[d]} & held),
             fractions={str(f): counts(subset(train, f)) for f in FRACTIONS})
