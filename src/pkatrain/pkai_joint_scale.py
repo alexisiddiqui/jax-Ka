@@ -31,7 +31,8 @@ MODES = ("backbone", "full")
 SIDECHAIN_GROUPS = frozenset(("ASP", "CYS", "TYR", "GLU", "HIS", "LYS"))
 GROUP_ALIAS = {"NTR": "NTERM", "CTR": "CTERM"}
 KEY_FIELDS = ("chain", "resnum", "icode", "group")
-FRACTION = 0.1
+# pool-v3 fraction (nested 0.1/0.5/0.75/1.0 subsets); PKAI_FRACTION selects another one, with its own output directory
+FRACTION = float(os.environ.get("PKAI_FRACTION", "0.1"))
 BATCH_SIZE = 256
 REFERENCE_BATCH = 64
 REFERENCE_LR = 1e-6
@@ -51,7 +52,8 @@ def read(path):
 
 
 def output(root):
-    return Path(root) / "training/pkai-joint-scale-v1"
+    suffix = "" if FRACTION == 0.1 else f"-f{round(FRACTION * 100)}"  # the registered 10% runs keep their path
+    return Path(root) / f"training/pkai-joint-scale-v1{suffix}"
 
 
 def _pool_rows(path, fraction=FRACTION):
@@ -80,7 +82,7 @@ def register(root):
     }
     atomic_json(out / "records.json", records)
     manifest = {
-        "version": "pkai-joint-scale-10pct-v1", "fraction": FRACTION,
+        "version": f"pkai-joint-scale-{round(FRACTION * 100)}pct-v1", "fraction": FRACTION,
         "modes": list(MODES), "objectives": list(OBJECTIVES), "seed": SEED,
         "batch_size": BATCH_SIZE, "reference_batch_size": REFERENCE_BATCH,
         "reference_learning_rate": REFERENCE_LR, "learning_rate": LEARNING_RATE,
