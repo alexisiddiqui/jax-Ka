@@ -222,3 +222,142 @@ carry `component_id`. Selection uses PINDER only and is unchanged.
 For orientation only, since the cohorts and label revisions differ: experiment 45's pretrained joint arms (5k PINDER
 cohort, pKPDB-pretrained parent) reached PINDER state MAE 0.464-0.473, interface paired MAE 0.295-0.300 and benchmark
 pKPDB MAE 0.548-0.565. The scratch 10% production pilot is in the same range.
+
+### Batch-size sweep on the 10% pool (2026-10-10)
+
+`production_train train RUN --fraction 0.1 --batch B` sets a constant B structures per batch in every bucket and
+scales the learning rate by sqrt(B / 8). Validation always runs at 16 per batch. All runs are `runs/pilot-10pct-b{B}`
+(B = 16 is `runs/pilot-10pct`), use seed 17 and the same 20-epoch schedule, each on one GH200.
+
+**Large batches use exact gradient accumulation.**
+- A single PINDER step at 256 in the 1,536-residue bucket needs a 45 GiB allocation and fails.
+- Chunks of 128 also failed at batch 256 (a 21 GiB allocation with prefetched chunks resident on the device), and
+  so did chunks of 64 while prefetched chunks were still put on the device.
+- So batches above 64 are split on the host into chunks within a residue budget of 64 x 1,536 = 98,304 slots (the
+  largest divisor of the batch that fits), and chunks move to the device only when their step is dispatched.
+  At batch 256 this means chunks of 256 up to the 384-residue bucket, 128 up to 768, and 64 above.
+- Both objectives are means over the valid structures, so weighting each chunk's value and gradient by its share of
+  valid structures gives the full-batch step. Checked on a GH200 for both datasets in two buckets: losses agree to 6
+  digits, and the gradient differs from the full-batch gradient by at most 1.8e-5 of its norm (float32 summation
+  order; a repeated full-batch step differs by about 1e-7).
+- Batch 128 ran unchunked (it fits in every bucket); batch 256 ran with chunks of 64 in every bucket.
+
+| Batch | Updates/epoch | Selected epoch | PINDER state MAE | Interface paired MAE | Selection | Benchmark MAE | Spearman | Final train loss |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 8 | 432 | 17 | 0.457 | 0.301 | 0.759 | 0.564 | 0.765 | 0.692 |
+| **16** | 219 | 17 | **0.453** | 0.295 | **0.747** | **0.559** | 0.772 | 0.708 |
+| 32 | 112 | 17 | 0.457 | **0.294** | 0.751 | 0.564 | 0.745 | 0.784 |
+| 64 | 59 | 17 | 0.462 | 0.294 | 0.756 | 0.569 | 0.745 | 0.828 |
+| 128 | 31 | 20 | 0.468 | 0.301 | 0.769 | 0.572 | 0.762 | 0.883 |
+| 256 | 18 | 18 | 0.476 | 0.307 | 0.783 | 0.578 | 0.758 | 0.936 |
+
+Benchmark MAE is the group-macro MAE over 76 component groups (benchmark-val, 142 complexes).
+
+- Batches 8-32 lie within 0.012 of each other on selection; 16 is marginally best on every validation metric except
+  interface paired MAE. Selection worsens steadily from 64 upward.
+- Batch 128 selected its last epoch and has a higher training loss, so with 31 updates per epoch it is short of steps,
+  not converged. Batch 256 (peak learning rate 5.7e-3) diverged in epoch 1 (train loss 22, PINDER state MAE 2.9) and
+  recovered by epoch 5.
+- These are single seeds on a 10% pool; differences below about 0.01 are within epoch-to-epoch noise.
+
+Time per run (one GH200, 32 CPUs, 8 loader workers per source, zero-fill padding):
+
+| Batch | Job wall time | Epoch 1 | Later epochs (median) | Training total | Loader wait |
+|---:|---:|---:|---:|---:|---:|
+| 8 | 11:44 | 101 s | 27.7 s | 627 s | 2.6% |
+| 16 | 11:29 | 102 s | 27.5 s | 624 s | 3.2% |
+| 32 | 11:06 | 97 s | 26.8 s | 606 s | 2.9% |
+| 64 | 11:40 | 102 s | 28.0 s | 636 s | 2.3% |
+| 128 | 12:25 | 116 s | 29.9 s | 683 s | 1.5% |
+| 256 | 13:29 | 75 s | 35.2 s | 749 s | 1.4% |
+
+Epoch time does not fall with batch size: the GPU is about 100% busy during training (nvidia-smi on the b256 job),
+and the per-structure GPU cost was the same from batch 8 to 64. Validation takes about 46 s per run (about 15 s in
+epoch 1, then 1.6 s per epoch).
+
+## Training-step profile and padding (2026-10-10)
+
+`scripts/profile_train_step.py` replays 60 real production steps (epoch-1 plan, 10% pool, batch 16, steps 40-99)
+after compiling every bucket shape, and captures only that window under nsys (`--cuda-graph-trace=node`).
+`scripts/profile_report.py` maps each kernel to its JAX primitive through the optimized HLO. Runner:
+`$S/_submission/jaxka_gqt_profile.sbatch NAME [BATCH]`; outputs in `<runtime>/training/gqt-production-v1/profile/`.
+
+**Before (zero-fill padding, `profile/b16`):** 0.135 s per step unprofiled; 6.49 s of kernel time in the window.
+
+| Kernel | Share of GPU time | Calls | Mean |
+|---|---:|---:|---:|
+| Triton indexed attention, backward | 76.5% | 360 | 13.8 ms |
+| XLA scatter-add (backward of the K/V gathers in `model.attend`, `model.py:53-54`, used by the site-token query attention) | 15.9% | 360 | 0.5-4.0 ms |
+| Triton indexed attention, forward | 2.7% | 360 | 0.49 ms |
+| All matmuls, reductions and elementwise ops | about 4% | | |
+
+The backward kernel took 28x its forward. Both backward scatters (Triton `tl.atomic_add` of dK/dV; XLA scatter-add)
+accumulate into the gathered rows, and the padding sent most gather indices to one row.
+
+**Padding census (`scripts/padding_census.py`, 64 training structures per bucket, 10% pool, both PINDER branches;
+`profile/padding-census.json`).** Share of each padded tensor that is real, per graph:
+
+| PINDER bucket | Capacity n / k / s / sk | Nodes | Edge slots | Mean real neighbours | Sites | Site-edge slots | Query gathers | Residue gather indices on row 0 | Site gather indices on row 0 |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 128 | 128 / 128 / 96 / 64 | 77% | 29% | 48 | 36% | 9% | 13% | 67% | 89% |
+| 256 | 256 / 224 / 160 / 96 | 77% | 22% | 63 | 43% | 9% | 11% | 77% | 90% |
+| 384 | 384 / 256 / 192 / 96 | 82% | 23% | 73 | 54% | 12% | 14% | 75% | 87% |
+| 512 | 512 / 288 / 256 / 96 | 88% | 25% | 82 | 52% | 12% | 14% | 74% | 87% |
+| 640 | 640 / 256 / 320 / 96 | 91% | 31% | 88 | 57% | 15% | 18% | 67% | 84% |
+| 768 | 768 / 288 / 320 / 96 | 92% | 31% | 98 | 66% | 19% | 21% | 67% | 81% |
+| 1024 | 1024 / 288 / 416 / 96 | 87% | 30% | 98 | 64% | 18% | 20% | 69% | 81% |
+| 1280 | 1280 / 256 / 576 / 96 | 88% | 36% | 106 | 60% | 19% | 23% | 62% | 80% |
+| 1536 | 1536 / 256 / 608 / 96 | 91% | 39% | 110 | 69% | 22% | 28% | 60% | 77% |
+
+- pKPDB is similar: nodes 78-91% real, edge slots 30-42%, sites 38-60%, site-edge slots 9-20%, and 58-71% of residue
+  gather indices on row 0.
+- Real edges that end on row 0 are only 0.02-0.2% of slots, so nearly every row-0 index is padding.
+- Batch fill is 97.7% (PINDER) and 99.6% (pKPDB) of batch slots.
+- Most edge padding is masked slots on real nodes (52-62% of slots): k is set by the most-connected residue of the
+  bucket, while the mean residue has about 40% of that. Padded nodes add 8-23%.
+- The Triton kernel also rounds the neighbour block to a power of two, so k = 288 runs as 512 slots.
+
+**Fix: spread the padding (`production_loading.spread_padding`, on by default in both sources).**
+- Masked neighbour slots, in the residue and site graphs, point at other rows instead of row 0. In mode "rotate" (the
+  default), masked slot j of row i points at row (i + j + 1) mod rows; mode "own" points it at row i.
+- Padded sites point at residue (index mod real residues) instead of residue 0.
+- Masked slots carry exactly zero attention weight and padded tokens zero upstream gradient, so the loss is unchanged
+  and gradients change only in float summation order. No model or kernel code changes (the registered experiments'
+  code hashes are untouched).
+
+`scripts/padding_spread_bench.py` (same batch-16 batches of real training ids, gradient step median of 10;
+`profile/padding-spread-bench-v2.json`):
+
+| Bucket | PINDER zero fill | PINDER spread | Speed-up | pKPDB zero fill | pKPDB spread | Speed-up |
+|---:|---:|---:|---:|---:|---:|---:|
+| 128 | 6.1 ms | 3.4 ms | 1.8x | 3.7 ms | 2.3 ms | 1.6x |
+| 256 | 31.6 ms | 13.0 ms | 2.4x | 15.7 ms | 7.2 ms | 2.2x |
+| 384 | 51.8 ms | 20.2 ms | 2.6x | 24.8 ms | 11.0 ms | 2.3x |
+| 512 | 82.5 ms | 29.8 ms | 2.8x | 33.0 ms | 14.1 ms | 2.3x |
+| 640 | 87.5 ms | 33.2 ms | 2.6x | 40.3 ms | 17.4 ms | 2.3x |
+| 768 | 105.9 ms | 43.5 ms | 2.4x | 55.3 ms | 22.6 ms | 2.4x |
+| 1024 | 141.4 ms | 57.3 ms | 2.5x | 78.3 ms | 30.7 ms | 2.6x |
+| 1280 | 142.8 ms | 65.1 ms | 2.2x | | | |
+| 1536 | 175.1 ms | 76.3 ms | 2.3x | | | |
+
+- Losses are bit-identical in every bucket. Gradients differ from the zero fill by 1e-7 to 2e-6 of their norm, the
+  same as a repeated zero-fill step (atomics are nondeterministic).
+- "own" and "rotate" give the same times within 1%.
+
+**After (spread padding):**
+
+| Window (60 steps) | Seconds per step (unprofiled) | Loader wait | Kernel time | Attention backward mean |
+|---|---:|---:|---:|---:|
+| Zero fill, 8 workers, prefetch 2 (`profile/b16`) | 0.135 | 6% | 6.49 s | 13.8 ms |
+| Spread "own", 8 workers, prefetch 2 (`profile/b16-spread`) | 0.097 | 28% | 2.61 s | 5.5 ms |
+| Spread "rotate", 15 workers, prefetch 4 (`profile/b16-rotate-w15`) | 0.073 | 10% | 2.63 s | 5.6 ms |
+
+- End to end the step is 1.85x faster (0.135 -> 0.073 s). With the GPU work cut by 2.5x, the loader became the limit
+  at 8 workers; 15 workers per source and prefetch depth 4 are now the training job's defaults
+  (`jaxka_gqt_train.sbatch`).
+- The XLA scatters fell from up to 4.0 ms to 0.13-0.44 ms.
+- The attention backward is still 77% of GPU time and 11x its forward. Every masked slot (60-70% of slots) still
+  issues a zero `atomic_add`; only a kernel change (masking the atomics with `edge_mask`) can skip them. Shorter
+  neighbour blocks (k = 288 runs as 512) would need a kernel that loops over neighbour blocks. Both mean changing
+  `pkanet/triton_attention.py`, which registered experiments hash, so neither is done here.
+- The batch-size sweep above ran with zero-fill padding; spread padding changes speed only.
