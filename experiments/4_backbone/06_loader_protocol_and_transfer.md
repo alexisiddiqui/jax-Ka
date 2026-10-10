@@ -126,3 +126,15 @@ timing yet.
   It is only worth adding as a fallback if FUSE becomes unavailable.
 - Unit tests (Isambard compute node, `.venv`): build, idempotent re-run, file-by-file comparison through `unsquashfs`,
   refusal of a directory in the way, and rejection of a corrupted shard. All 8 transfer tests pass.
+
+Results (Isambard job 7211842; 32 CPUs; both datasets built in parallel):
+
+| Image | Files | Content | Image size | Build | Verify (all files, through the mount) |
+|---|---:|---:|---:|---:|---:|
+| `pinder-pkai-v1.sqfs` | 390,222 | 11.5 GB | 7.9 GB | 143 s | 9 s (390,223 incl. the loose `cohort.json`) |
+| `pkpdb-full-v1.sqfs` | 377,253 | 20.4 GB | 1.1 GB | 145 s (both pKPDB images) | 12 s (503,001, both images) |
+| `pkpdb-v1.sqfs` | 125,748 | 9.3 GB | 9.0 GB (already-compressed `.cif.gz`) | | |
+
+All files passed. Project file count went from 627k (partial loose import) to 468k; the three images add 6 files.
+Runners: `$S/_submission/jaxka_dataset_squash.sbatch` (build and verify) and `jaxka_dataset_import.sbatch` (loose
+import, used for the 6-file validation bundle).
