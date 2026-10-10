@@ -10,6 +10,7 @@ import gzip
 import hashlib
 import json
 import os
+import shutil
 import tempfile
 import csv
 import math
@@ -440,14 +441,14 @@ def _write_shard(base, name, items, produce, total):
     atomic_json(pending / "receipt.json", receipt)
     blocking = [f for f in failures if not _excludable(f)]
     if blocking:
-        atomic_json(shards / f"{name}.failures.json", receipt)
+        atomic_json(shards / f"{name}.failures.json", receipt); shutil.rmtree(pending)
         raise RuntimeError(f"{len(blocking)} feature failures in shard {name} ({len(failures) - len(blocking)} excludable); see {name}.failures.json")
     os.replace(pending, folder)
     return receipt
 
 
 def _shard_names(base, pattern="*"):
-    receipts = [read(p) for p in sorted((base / "shards").glob(f"{pattern}/receipt.json"))]
+    receipts = [read(p) for p in sorted((base / "shards").glob(f"{pattern}/receipt.json")) if not p.parent.name.startswith(".")]
     return {r["name"] for x in receipts for r in x["records"]} | {_name(f["id"], f["split"]) for x in receipts for f in x["failures"]}
 
 
@@ -465,7 +466,7 @@ def import_run(root, run, dataset):
     """Import an earlier run's per-record feature files (features/<dataset>.tar from the archive job, else the loose
     features/<dataset>/ directory) as shards/import-<run>/, with the run's excludable failures (prepare-<dataset>-*.json).
     Every record must be in ids.json and is converted by compact(), whose exact round trip is checked."""
-    import tarfile
+    import io, tarfile
     root = Path(root); run = Path(run); base = feature_root(root, dataset)
     wanted = {_name(*x) for x in read(base / "ids.json")["ids"]}
     failures = [f for p in sorted(run.glob(f"prepare-{dataset}-*.json")) for f in read(p)["failures"]]
@@ -476,7 +477,7 @@ def import_run(root, run, dataset):
             with tarfile.open(tar, "r|") as stream:  # one sequential pass
                 for member in stream:
                     if member.isfile() and member.name.endswith(".npz"):
-                        with np.load(stream.extractfile(member)) as handle: yield Path(member.name).stem, {k: handle[k] for k in handle.files}
+                        with np.load(io.BytesIO(stream.extractfile(member).read())) as handle: yield Path(member.name).stem, {k: handle[k] for k in handle.files}
         else:
             for path in sorted((run / "features" / dataset).glob("*.npz")):
                 with np.load(path) as handle: yield path.stem, {k: handle[k] for k in handle.files}
@@ -502,7 +503,7 @@ def pack_store(root, dataset, workers=8):
     root = Path(root); base = feature_root(root, dataset); destination = base / "store"
     if (destination / "verification.json").exists(): return read(destination / "verification.json")
     listing = [_name(*x) for x in read(base / "ids.json")["ids"]]
-    receipts = [read(p) for p in sorted((base / "shards").glob("*/receipt.json"))]
+    receipts = [read(p) for p in sorted((base / "shards").glob("*/receipt.json")) if not p.parent.name.startswith(".")]
     found = {}; excluded = {}
     for receipt in receipts:
         if receipt["encoding"] != ENCODING: raise AssertionError((receipt["name"], "encoding"))

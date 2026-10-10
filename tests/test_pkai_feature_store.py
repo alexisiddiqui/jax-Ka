@@ -82,3 +82,26 @@ def test_shard_blocking_failure_is_not_installed(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError):
         js._write_shard(base, "0000-of-0001", [("a", "train", None)], produce, 1)
     assert not (base / "shards" / "0000-of-0001").exists() and (base / "shards" / "0000-of-0001.failures.json").exists()
+
+
+def test_import_run_archive(tmp_path, monkeypatch):
+    pytest.importorskip("zstandard")
+    import tarfile
+    from pkatrain import pkai_joint_scale as js
+    base = js.feature_root(tmp_path, "pkpdb"); base.mkdir(parents=True)
+    ids = [["x1", "train"], ["x2", "train"], ["x3", "train"]]
+    (base / "ids.json").write_text(json.dumps({"encoding": "atom16", "ids": ids}))
+    run = tmp_path / "run"; (run / "features" / "pkpdb").mkdir(parents=True)
+    dense = {}
+    for k, cid in enumerate(("x1", "x2")):
+        dense[cid] = {"full": _dense("atom16", 2 + k, k), "backbone": _dense("atom16", 2 + k, 9 + k),
+                      "target": np.zeros(2 + k, np.float32), "weight": np.ones(2 + k, np.float32)}
+        np.savez_compressed(run / "features" / "pkpdb" / f"train-{cid}.npz", **dense[cid])
+    (run / "prepare-pkpdb-000.json").write_text(json.dumps({"failures": [{"id": "x3", "split": "train", "error": "ValueError(('x3', 'no mapped pKPDB sites'))"}]}))
+    with tarfile.open(run / "features" / "pkpdb.tar", "w") as tar: tar.add(run / "features" / "pkpdb", "pkpdb")
+    import shutil; shutil.rmtree(run / "features" / "pkpdb")
+    js.import_run(tmp_path, run, "pkpdb")
+    js.pack_store(tmp_path, "pkpdb", workers=2)
+    store = js.FeatureStore(base / "store"); got = store.select(["train-x2"], ["full.value", "full.atom", "full.site"]); store.close()
+    assert np.array_equal(ps.expand({k.split(".")[1]: v for k, v in got.items()}, "atom16"), dense["x2"]["full"])
+    assert [f["id"] for f in json.loads((base / "store" / "metadata.json").read_text())["excluded"]] == ["x3"]
