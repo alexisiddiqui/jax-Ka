@@ -234,10 +234,40 @@ def train(root, run, fraction=0.1, smoke=False):
     return read(out / "selection.json")
 
 
+def rescore(root, run, epochs=None):
+    """Re-run validation of saved checkpoints with the current manifests (e.g. after the benchmark manifest gained
+    component_id for group-macro metrics); writes rescore.json, leaves history.jsonl and selection.json untouched."""
+    import jax
+    from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
+    from .gqt_multitask_replay import JointEngine
+    from .trainer import load_checkpoint
+    root = Path(root); out = run_dir(root, run); protocol = read(out / "protocol.json")
+    manifests = {d: read(output(root, d) / MANIFEST) for d in ("pinder", "pkpdb", "benchmark-val")}
+    config = LoaderConfig(); norms = protocol["pinder_weight_normalization"]
+    sources = {"pinder-val": PinderSource(_with_policy(manifests["pinder"]), config=config, norms=norms),
+               "benchmark": PkpdbSource(_with_policy(manifests["benchmark-val"]), config=config, mask="eval_mask")}
+    params = initialize_ogqt(jax.random.PRNGKey(SEED), **ARCHITECTURE); engine = JointEngine(params); state = engine.optimizer.init(params)
+    predict = jax.jit(jax.vmap(predict_shift, in_axes=(None, 0)))
+    folders = sorted((out / "checkpoints").glob("epoch-*")); rows = []
+    for folder in folders:
+        epoch = int(folder.name.split("-")[1])
+        if epochs and epoch not in epochs: continue
+        params, state, _ = load_checkpoint(folder, (params, state))
+        rows.append({"epoch": epoch, "validation": validate(engine, predict, params, sources, manifests, config)})
+        print(json.dumps({"epoch": epoch, "benchmark_mae": rows[-1]["validation"]["benchmark"]["overall"]["mae"],
+                          "benchmark_groups": rows[-1]["validation"]["benchmark"]["overall"].get("mae_groups"),
+                          "selection": rows[-1]["validation"]["selection"]}), flush=True)
+    for source in sources.values(): source.close()
+    atomic_json(out / "rescore.json", {"manifests": {d: digest(output(root, d) / MANIFEST) for d in manifests}, "epochs": rows})
+    return rows
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="pkatrain.production_train"); sub = parser.add_subparsers(dest="action", required=True)
     p = sub.add_parser("train"); p.add_argument("run"); p.add_argument("--fraction", type=float, default=0.1); p.add_argument("--smoke", action="store_true")
+    p = sub.add_parser("rescore"); p.add_argument("run")
     args = parser.parse_args(argv); root = Path(os.environ["PKABENCH_RUNTIME"])
+    if args.action == "rescore": rescore(root, args.run); return
     if args.action == "train":
         result = train(root, args.run, args.fraction, args.smoke)
         print(json.dumps({"selected_epoch": result["selected_epoch"], "selection": result["validation"]["selection"]}))

@@ -59,6 +59,7 @@ def build_manifest(root, dataset, policy=PRODUCTION, workers=8):
         with ThreadPoolExecutor(workers) as executor: means = dict(zip(ids, executor.map(weights, ids)))
     for row in read(store_path / "records.json"):
         record = {"id": row["id"], "split": row["split"], **{d: row[d] for d in DIMS}}
+        if "component_id" in row: record["component_id"] = row["component_id"]  # group-macro metrics group by component
         if row["split"] == "train":
             if row["id"] not in pool: raise AssertionError((row["id"], "training record not in pool-v3"))
             record["min_fraction"] = float(pool[row["id"]]["min_fraction"])
