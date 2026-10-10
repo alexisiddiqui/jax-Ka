@@ -17,12 +17,32 @@ def native():
     return torch,package/'pkai'
 
 
-def feature_matrix(protein):
+# Neighbour-slot encodings: "atom16" is native pKAI (16 functional-atom classes per slot, 4,008 inputs); "aa20" puts a
+# 20-amino-acid one-hot of the neighbour atom's residue in each slot instead (5,008 inputs; 2026-10-10). Both keep the
+# 250 nearest environment atoms by distance, the 1/d^2 value and the 8-class site one-hot.
+AA20 = ("ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
+        "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL")
+AA20_ALIASES = {"MSE": "MET", "SEP": "SER", "TPO": "THR", "PTR": "TYR", "HID": "HIS", "HIE": "HIS", "HIP": "HIS",
+                "HSD": "HIS", "HSE": "HIS", "HSP": "HIS", "CYX": "CYS", "ASH": "ASP", "GLH": "GLU", "LYN": "LYS"}
+SLOT_WIDTH = {"atom16": 16, "aa20": 20}
+
+
+def feature_width(encoding="atom16"):
+    return 250 * SLOT_WIDTH[encoding] + 8
+
+
+def aa20_index(resname):
+    name = AA20_ALIASES.get(str(resname).strip(), str(resname).strip())
+    if name not in AA20: raise ValueError(f"non-canonical residue in pKAI environment: {resname}")
+    return AA20.index(name)
+
+
+def feature_matrix(protein, encoding="atom16"):
     """Vectorized distances/OHE; use native atom classification and exact ordering."""
     from residue import AA_ATOMS, ATOM_OHE, RES_OHE
     atoms=list(protein.iter_atoms());coords=np.array([a.coords for a in atoms],dtype=np.float64)
     residues=list(protein.iter_residues(titrable_only=True))
-    matrix=np.zeros((len(residues),4008),np.float32)
+    slot=SLOT_WIDTH[encoding];matrix=np.zeros((len(residues),feature_width(encoding)),np.float32)
     for i,r in enumerate(residues):
         centers=np.array([a.coords for a in r.iter_atoms() if a.aname in AA_ATOMS[r.resname]])
         if len(centers):
@@ -32,10 +52,14 @@ def feature_matrix(protein):
             if np.any(distances[ids]==0): raise ValueError('Coincident pKAI environment/reference atoms')
             r.env_anames=[atoms[j].aname for j in ids]
             r.env_resnames=[atoms[j].residue.resname for j in ids]
-            r.encode_atoms()
-            order=sorted(zip(distances[ids],r.env_oheclasses))[:250]
-            for j,(distance,cls) in enumerate(order):matrix[i,j*16+ATOM_OHE.index(cls)]=1/(float(distance)**2)
-        matrix[i,4000+RES_OHE.index(r.resname)]=1.
+            if encoding=="atom16":
+                r.encode_atoms()
+                order=sorted(zip(distances[ids],r.env_oheclasses))[:250]
+                for j,(distance,cls) in enumerate(order):matrix[i,j*16+ATOM_OHE.index(cls)]=1/(float(distance)**2)
+            else:
+                order=sorted(zip(distances[ids],[aa20_index(name) for name in r.env_resnames]))[:250]
+                for j,(distance,cls) in enumerate(order):matrix[i,j*slot+cls]=1/(float(distance)**2)
+        matrix[i,250*slot+RES_OHE.index(r.resname)]=1.
     assert np.isfinite(matrix).all()
     return residues,matrix
 
@@ -69,14 +93,14 @@ def features(dest):
         pdb_sha256=digest(dest/'input.pdb'),native_hashes={n:digest(package/n) for n in ('protein.py','residue.py','atom.py')}))
 
 
-def model_class(torch, hidden=(800, 400, 200)):
+def model_class(torch, hidden=(800, 400, 200), inputs=4008):
     hidden=tuple(int(value) for value in hidden)
     if len(hidden)!=3 or any(value<=0 for value in hidden):
         raise ValueError(f'Expected three positive hidden widths, got {hidden}')
     class PKAI(torch.nn.Module):
         def __init__(self):
             super().__init__()
-            widths=(4008,)+hidden+(1,)
+            widths=(int(inputs),)+hidden+(1,)
             self.layers=torch.nn.ModuleList([torch.nn.Linear(a,b) for a,b in zip(widths[:-1],widths[1:])])
             self.dropouts=torch.nn.ModuleList([torch.nn.Dropout(p) for p in (.5,.125,.03125)])
         def forward(self,x):
