@@ -260,6 +260,25 @@ Benchmark MAE is the group-macro MAE over 76 component groups (benchmark-val, 14
   recovered by epoch 5.
 - These are single seeds on a 10% pool; differences below about 0.01 are within epoch-to-epoch noise.
 
+Validation MSEs on the training losses' scales (`production_train.squared_errors`, added to `validate`; every
+checkpoint rescored with `rescore`, `runs/*/rescore.json`; per-epoch curves for all six runs in
+`<runtime>/training/gqt-production-v1/batch-sweep-curves.csv`). Selected epochs:
+
+| Batch | pKPDB val MSE (site) | PINDER state MSE | PINDER paired MSE | Interface paired MSE | Train pKPDB MSE | Train state MSE | Train paired MSE |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 8 | 0.838 | 0.515 | 0.148 | 0.325 | 0.383 | 0.317 | 0.048 |
+| **16** | **0.812** | **0.497** | **0.144** | **0.315** | 0.377 | 0.324 | 0.049 |
+| 32 | 0.834 | 0.514 | 0.146 | 0.322 | 0.415 | 0.348 | 0.051 |
+| 64 | 0.850 | 0.530 | 0.149 | 0.330 | 0.437 | 0.373 | 0.055 |
+| 128 | 0.836 | 0.528 | 0.146 | 0.322 | 0.442 | 0.383 | 0.059 |
+| 256 | 0.862 | 0.572 | 0.165 | 0.364 | 0.488 | 0.422 | 0.063 |
+
+- pKPDB val is the benchmark validation set (PypKa labels, scored as pKPDB shifts); the production pKPDB pool has no
+  held-out split. Its MSE is about twice the pKPDB training loss (labels from a different method), and PINDER state
+  validation MSE is about 1.5x its training loss.
+- Validation MSEs are site-level means; the training losses average per structure first.
+- Batch 16 is lowest on every validation MSE.
+
 Time per run (one GH200, 32 CPUs, 8 loader workers per source, zero-fill padding):
 
 | Batch | Job wall time | Epoch 1 | Later epochs (median) | Training total | Loader wait |
