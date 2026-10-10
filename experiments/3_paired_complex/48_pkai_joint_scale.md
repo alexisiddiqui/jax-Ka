@@ -243,3 +243,22 @@ All arms at 5.12e-4 cosine/40 (pKPDB val / PINDER state / paired; epochs (best))
 Every arm improves over 8e-6 constant; AA pKPDB-only gains most (0.381 → 0.311–0.319). The backbone arms peak within
 2–5 epochs (before the rate has decayed) and then overfit, so they would likely gain from a lower rate. AA joint:
 atom16aa20 is best on pKPDB (0.279), atom16 on PINDER (state 0.034).
+
+## 20 Å cutoff with 540 slots (2026-10-10)
+
+At 15 Å the 250 slots almost never fill (stored features: median ~100 all-atom / ~85 backbone; <0.4% of sites at 250).
+Recounted on a pKPDB sample (315 structures, ~33k sites), candidates per site rise from a median of 118 (p99 256) at
+15 Å to 240 (p99 538) at 20 Å for all-atom, and 95 (182) to 184 (376) for backbone, so 20 Å with 250 slots would
+truncate 46% of all-atom sites. 540 slots hold the 20 Å p99 (inputs 8,648 / 10,808 / 19,448; 7.3M / 9.0M / 15.9M
+parameters). `PKAI_CUTOFF=20 PKAI_SLOTS=540` (stores, runs and validation package tagged `-r20s540`); 100%, 5.12e-4
+cosine/40, the same arms. pKPDB val / PINDER state / paired, with the 15 Å / 250 result in brackets:
+
+| Arm | atom16 | aa20 | atom16aa20 |
+|---|---:|---:|---:|
+| BB pkpdb | 1.044 (1.045) | 0.964 (0.972) | 0.923 (0.931) |
+| BB joint | 1.042 / 0.806 / 0.204 (1.043 / 0.815) | 0.956 / 0.676 / 0.183 (0.966 / 0.667) | **0.911 / 0.653 / 0.180** (0.921 / 0.653) |
+| AA pkpdb | 0.321 (0.319) | 0.535 (0.500) | 0.318 (0.311) |
+| AA joint | 0.291 / 0.036 / 0.017 (0.287 / 0.034) | 0.497 / 0.202 / 0.050 (0.498 / 0.202) | 0.281 / 0.043 / 0.019 (**0.279** / 0.042) |
+
+The longer range gives backbone a small gain (~0.01 pKPDB) and all-atom nothing or a small loss: with all atoms, the
+15 Å environment already carries the information, and the extra 2× input width adds parameters without new signal.
