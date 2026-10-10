@@ -50,3 +50,23 @@ throughput rises from 81 to 117 steps/s (resident) or 88 (streaming); see
 [06_loader_protocol_and_transfer.md](../4_backbone/06_loader_protocol_and_transfer.md). Each history row now includes
 `loader_wait_fraction`. pKPDB validation reads the compact package `pretraining/pkpdb-val-pkai-v1` (the same pilot
 validation rows, checked against `rows.json`) when it exists.
+
+## Move to Isambard-AI and feature-preparation fixes (2026-10-10)
+
+- Runs on Isambard-AI (GH200, one GPU and 72 cores per job), in a separate uv venv (`pkai` optional group: torch
+  2.11.0+cu128, CUDA 12.8 aarch64 wheels). The native pKAI package is copied unchanged (model sha256 0f808c24...);
+  `architecture_gate` passes. Structures are read from the squashfs dataset images through `scripts/sqfs_run.sh`.
+- The original smoke (5k-pilot arrays) is not repeated; `feature-smoke` and `register` passed. Registered 10% arms:
+  5,878 pKPDB structures (157,674 declared sites), 3,422 PINDER complexes (176,871), 400 PINDER validation complexes.
+- First preparation (72 processes per dataset, about 20-30 s each) found two bugs in the pKPDB path:
+  - **Chain selection:** `defects.json` lists chains by `label_asym_id`, but `_pkpdb_atoms` filtered the
+    author-field structure on them. 166 structures whose author and label chain IDs differ kept no atoms ("0 models",
+    e.g. 5ma7 label A = author E), and where letters overlap the wrong chain could be kept. Chains are now selected on
+    the label IDs in the CIF rows before the structure is built. All pKPDB features were recomputed.
+  - **No candidate sites:** `np.asarray([])` is float, so `kf & kb & ...` raised a TypeError for structures with no
+    side-chain training sites (19). The mask is now built as bool, so these report "no mapped pKPDB sites".
+- After the fixes, 171 of the 192 failed structures prepare. Records that cannot give features are excluded and listed
+  under `excluded` in `packed/verification.json`; any other error still blocks packing:
+  - pKPDB: 19 with no usable side-chain sites, 6qsz (too large for the PDB format the pKAI parser reads), and 2xgc
+    (coincident atoms);
+  - PINDER: 8 training complexes with no paired sites. The 400 validation complexes are unaffected.
