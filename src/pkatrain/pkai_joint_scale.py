@@ -348,7 +348,8 @@ def _pinder_feature_record(root, cid, split):
     arrays.update(target_ab=np.asarray([r["target_ab"] for r in rows], np.float32)-base,
                   target_free=np.asarray([r["target_free"] for r in rows], np.float32)-base,
                   w_burial=np.asarray([r["w_burial"] for r in rows], np.float32),
-                  w_interface=np.asarray([r["w_interface"] for r in rows], np.float32))
+                  w_interface=np.asarray([r["w_interface"] for r in rows], np.float32),
+                  interface=np.asarray([bool(r.get("interface")) for r in rows], bool))  # not stored; see build_interface
     if not retained.any(): raise ValueError((cid, "no sites mapped in both representations"))
     return {key: value[retained] for key, value in arrays.items()}
 
@@ -681,13 +682,57 @@ def _pkpdb_validation_arrays(root, mode):
     return {"x": np.load(feature_path, mmap_mode="r")[ids], "y": np.asarray([rows[i]["pka"] - rows[i]["model_pka"] for i in ids], np.float32)}
 
 
+def interface_path(root): return Path(root) / "training" / STORE_VERSION / "pinder-val-interface.npz"
+
+
+def build_interface(root, workers=8):
+    """Per-row interface flags (sites.json 'interface') of the PINDER validation records, in each record's row order:
+    the same rows as the stores (paired, side-chain, mapped in both representations and states; this does not depend on
+    the encoding or geometry), with w_interface and targets kept to check the alignment against a store at load."""
+    from concurrent.futures import ProcessPoolExecutor
+    root = Path(root); cids = sorted(row["id"] for row in read(cohort(root))["records"] if row["split"] == "val")
+    with ProcessPoolExecutor(workers) as pool: done = list(pool.map(_interface_one, [(str(root), cid) for cid in cids]))
+    names = []; parts = []; failed = []
+    for cid, arrays in done:
+        if arrays is None: failed.append(cid); continue
+        names.append(_name(cid, "val")); parts.append(arrays)
+    offsets = np.concatenate(([0], np.cumsum([len(a["interface"]) for a in parts])))
+    path = interface_path(root); pending = path.with_suffix(f".pending-{os.getpid()}.npz")
+    np.savez(pending, names=np.asarray(names), offsets=offsets, **{k: np.concatenate([a[k] for a in parts]) for k in ("interface", "w_interface", "target_ab", "target_free")})
+    os.replace(pending, path)
+    print(json.dumps({"records": len(names), "failed": failed, "sites": int(offsets[-1]), "interface_sites": int(sum(a["interface"].sum() for a in parts))}), flush=True)
+
+
+def _interface_one(task):
+    root, cid = task
+    try:
+        record = _pinder_feature_record(Path(root), cid, "val")
+    except Exception as exc:
+        if not _excludable({"error": repr(exc)}): raise
+        return cid, None
+    return cid, {k: record[k] for k in ("interface", "w_interface", "target_ab", "target_free")}
+
+
+def _interface_rows(root, names, arrays):
+    """Interface flags for the selected PINDER validation rows (names in order), checked row by row against the
+    store's w_interface and targets."""
+    side = np.load(interface_path(root)); position = {str(n): i for i, n in enumerate(side["names"])}; offsets = side["offsets"]
+    rows = np.concatenate([np.arange(offsets[position[n]], offsets[position[n] + 1]) for n in names])
+    for field in ("w_interface", "target_ab", "target_free"):
+        if not np.array_equal(side[field][rows], arrays[field]): raise AssertionError(("interface flags misaligned", field))
+    return side["interface"][rows]
+
+
 def _validation_sources(torch, root, mode, objective, config, selection):
     from .loading_torch import PackedSiteSource
     sources = {"pk": PackedSiteSource(_pkpdb_validation_arrays(root, mode), config=config)}
     if objective in ("joint", "pkpdb"):  # PINDER validation is reported for pKPDB-only arms too (not used for their selection)
-        pi = _source_arrays(load_group(root, selection, "pinder-val", (f"{mode}_ab", f"{mode}_free"), ("target_ab", "target_free")),
-                            {f"{mode}_ab": "xa", f"{mode}_free": "xf", "target_ab": "ya", "target_free": "yf"})
+        raw = load_group(root, selection, "pinder-val", (f"{mode}_ab", f"{mode}_free"), ("target_ab", "target_free", "w_interface"))
+        flag = _interface_rows(root, selection["pinder-val"]["names"], raw).astype(np.float32)
+        pi = _source_arrays(raw, {f"{mode}_ab": "xa", f"{mode}_free": "xf", "target_ab": "ya", "target_free": "yf", "w_interface": "wi"})
+        pi["if"] = flag
         sources["pi"] = PackedSiteSource(pi, config=config)
+        sources["pi"].weights = {"wi": float(raw["w_interface"].mean()), "if": float(flag.mean())}  # per-row means (normalisers)
     return sources
 
 
@@ -700,9 +745,15 @@ def _validation(torch, model, sources, config, objective="joint"):
         pi = sources["pi"]
         terms = {"a": lambda b, o: (o[0] - b["ya"]).square(), "f": lambda b, o: (o[1] - b["yf"]).square(),
                  "pair": lambda b, o: ((o[0] - o[1]) - (b["ya"] - b["yf"])).square()}
+        if hasattr(pi, "weights"):  # interface paired metrics (2026-10-10): w_interface-weighted (the training paired loss) and interface sites only
+            terms.update(pair_w=lambda b, o: b["wi"] * ((o[0] - o[1]) - (b["ya"] - b["yf"])).square(),
+                         pair_if=lambda b, o: b["if"] * ((o[0] - o[1]) - (b["ya"] - b["yf"])).square())
         mse = _squared_sums(torch, model, pi, pi.length, terms, config, lambda b: (model(dense(torch, b, "xa")), model(dense(torch, b, "xf"))))
         result.update(pinder_state_mse=(mse["a"] + mse["f"]) / 2, pinder_paired_mse=mse["pair"])
-    selected = ["pkpdb_mse"] if objective == "pkpdb" else list(result)
+        if hasattr(pi, "weights"):
+            result.update(pinder_paired_weighted_mse=mse["pair_w"] / pi.weights["wi"], pinder_paired_interface_mse=mse["pair_if"] / pi.weights["if"])
+    # selection keeps the registered metrics (the interface metrics are reported only)
+    selected = ["pkpdb_mse"] if objective == "pkpdb" else [k for k in ("pkpdb_mse", "pinder_state_mse", "pinder_paired_mse") if k in result]
     result["selection_mse"] = sum(result[k] for k in selected) / len(selected)
     return result
 
@@ -793,6 +844,34 @@ def train_scale(root, mode, objective, batch_size=None, max_epochs=100, learning
     train_source.close()
     for source in validation_sources.values(): source.close()
     atomic_json(dest/"final.json",{"complete":True,"epochs":len(history),"best_selection_mse":best,"history_sha256":digest(dest/"history.json"),"peak_allocated_bytes":torch.cuda.max_memory_allocated(),"peak_reserved_bytes":torch.cuda.max_memory_reserved(),"test_data_included":False})
+
+
+def rescore(root, runs):
+    """Re-run the default validation (with the interface paired metrics) on saved best.pt checkpoints of this
+    encoding/geometry: runs are seed directories (runs/<arm>/seed-17), or "reference" for the released pKAI model
+    (atom16, 15 A, all-atom features). Writes validation-v2.json beside each checkpoint (reference:
+    training/pkai-features-v2/reference-pkai-validation.json)."""
+    from .loading import LoaderConfig
+    torch, package = native(); require_compute(threads=2, gpu_benchmark=True, allow_comp1400=True); torch.set_num_threads(2)
+    root = Path(root); config = LoaderConfig(); store = FeatureStore(feature_root(root, "pinder") / "store")
+    selection = {"pinder-val": {"dataset": "pinder", "names": [n for n in store.names if n.startswith("val-")]}}; store.close()
+    for run in runs:
+        if run == "reference":
+            if ENCODING != "atom16" or GEOMETRY: raise ValueError("the released model takes atom16 15 A features")
+            mode = "full"; released = torch.jit.load(str(package / "models/pKAI_model.pt"), map_location="cuda").eval()
+            class Released(torch.nn.Module):
+                def __init__(self): super().__init__(); self.inner = released
+                def forward(self, x): return self.inner(x).reshape(-1)
+            forward = Released(); dest = feature_root(root, "pinder").parent / "reference-pkai-validation.json"
+        else:
+            run = Path(run); manifest = read(run / "manifest.json"); mode = manifest["mode"]
+            net = model_class(torch, inputs=WIDTH)().cuda(); net.load_state_dict(torch.load(run / "best.pt", map_location="cuda")); net.eval()
+            forward = net; dest = run / "validation-v2.json"
+        sources = _validation_sources(torch, root, mode, "joint", config, selection)
+        metrics = _validation(torch, forward, sources, config, "pkpdb" if run != "reference" and manifest["objective"] == "pkpdb" else "joint")
+        for source in sources.values(): source.close()
+        atomic_json(dest, {"run": str(run), "mode": mode, "encoding": ENCODING, "geometry": GEOMETRY or "r15s250", **metrics})
+        print(json.dumps({"run": str(run), **{k: round(v, 4) for k, v in metrics.items()}}), flush=True)
 
 
 def _pkpdb_batch(root, mode, size=64):
@@ -1007,6 +1086,8 @@ def main():
     elif action == "import": import_run(root, sys.argv[2], sys.argv[3])
     elif action == "pack-store": pack_store(root, sys.argv[2], int(os.environ.get("SLURM_CPUS_PER_TASK", "8")))
     elif action == "compare-packed": compare_packed(root)
+    elif action == "build-interface": build_interface(root, int(os.environ.get("SLURM_CPUS_PER_TASK", "8")))
+    elif action == "rescore": rescore(root, sys.argv[2:])
     elif action == "feature-smoke": feature_smoke(root)
     elif action == "build-validation":
         build_validation(root, sys.argv[2] if len(sys.argv) > 2 else ENCODING, int(os.environ.get("SLURM_CPUS_PER_TASK", "1")))
