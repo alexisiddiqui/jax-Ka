@@ -59,6 +59,84 @@ ARCHITECTURE = {"width": 44, "ff": 88}
 def lr_scale(batch): return math.sqrt(batch / 8)
 
 
+def predict_shift_separate(params, graph):
+    """oGQT shift with separate query/context LayerNorm affine parameters in the site-token query attention
+    (pkanet.site_query_norm's path, shift head only): the residue context uses params["query_context_norm"]."""
+    import jax.numpy as jnp
+    from pkanet.model import attend, encode_indexed, linear
+    from pkanet.site_model import attend_sites_indexed
+    residue = encode_indexed(params, graph); sr = graph["site_residue"]; mask = graph["site_mask"][:, None]
+    tokens = (residue[sr] + params["groups"][graph["site_type"]]) * mask
+    tokens = attend(params["query"], tokens, residue, graph["neighbors"][sr], graph["edge"][sr], graph["edge_mask"][sr],
+                    graph["switch"][sr], context_norm=params["query_context_norm"]) * mask
+    tokens = attend_sites_indexed(params["site"], tokens, graph)
+    return (8 * jnp.tanh(linear(params["head"], tokens)[:, 0]))[graph["query_site"]]
+
+
+class VariantEngine:
+    """gqt_multitask_replay.JointEngine with the model function and the paired weighting as options (same optimizer,
+    objectives and apply); used for --query-norm separate. The default configuration keeps JointEngine itself."""
+
+    def __init__(self, params, predict, paired_weight="none"):
+        import jax
+        import jax.numpy as jnp
+        import optax
+        from pkanet.model import PKPDB_PK_MOD
+        from .gqt_regularization import decay_mask
+        self.optimizer = optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(1.0, weight_decay=1e-4, mask=decay_mask(params)))
+        reference = jnp.asarray(PKPDB_PK_MOD, jnp.float32); weighted = paired_weight == "interface"
+
+        def paired_predictions(p, graphs):
+            batch, branches = graphs["nodes"].shape[:2]
+            flat = jax.tree.map(lambda value: value.reshape((batch * branches,) + value.shape[2:]), graphs)
+            return jax.vmap(predict, in_axes=(None, 0))(p, flat).reshape(batch, branches, -1)
+
+        def paired_objective(p, graphs, targets, mask, wb, wi, valid):
+            predicted = paired_predictions(p, graphs)
+            expected = targets - reference[graphs["query_group"][:, 0]][:, None, :]
+            state_error = jnp.square(predicted - expected) * mask[:, None, :]
+            pair_error = jnp.square((predicted[:, 0] - predicted[:, 1]) - (expected[:, 0] - expected[:, 1])) * mask
+            if weighted: pair_error = pair_error * wi
+            state_loss = jnp.sum(state_error, axis=(1, 2)) / jnp.maximum(2 * jnp.sum(mask, axis=1), 1)
+            pair_loss = jnp.sum(pair_error, axis=1) / jnp.maximum(jnp.sum(mask, axis=1), 1)
+            denominator = jnp.maximum(jnp.sum(valid), 1)
+            state_loss = jnp.sum(jnp.where(valid, state_loss, 0.0)) / denominator
+            pair_loss = jnp.sum(jnp.where(valid, pair_loss, 0.0)) / denominator
+            return state_loss + pair_loss, (state_loss, pair_loss)
+
+        def pkpdb_objective(p, graphs, targets, eligible, valid):
+            expected = targets - reference[graphs["query_group"]]
+            predicted = jax.vmap(predict, in_axes=(None, 0))(p, graphs)
+            per_structure = jnp.sum(jnp.square(predicted - expected) * eligible, axis=1) / jnp.maximum(jnp.sum(eligible, axis=1), 1)
+            return jnp.sum(jnp.where(valid, per_structure, 0.0)) / jnp.maximum(jnp.sum(valid), 1)
+
+        def apply(p, state, pair_gradient, pk_gradient, rate):
+            gradient = jax.tree.map(lambda a, b: a + b, pair_gradient, pk_gradient)
+            finite = jnp.all(jnp.stack([jnp.all(jnp.isfinite(value)) for value in jax.tree.leaves(gradient)]))
+            updates, state = self.optimizer.update(gradient, state, p)
+            return optax.apply_updates(p, jax.tree.map(lambda value: value * rate, updates)), state, finite
+
+        self.predictions = jax.jit(paired_predictions)
+        self.paired_value_grad = jax.jit(jax.value_and_grad(paired_objective, has_aux=True))
+        self.pkpdb_value_grad = jax.jit(jax.value_and_grad(pkpdb_objective))
+        self.apply = jax.jit(apply)
+
+
+def make_model(seed, query_norm="shared", paired_weight="none"):
+    """(params, engine, predict): scratch oGQT and its engine; separate query norm starts as a copy of query norm1."""
+    import jax
+    import jax.numpy as jnp
+    from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
+    from .gqt_multitask_replay import JointEngine
+    params = initialize_ogqt(jax.random.PRNGKey(seed), **ARCHITECTURE)
+    if query_norm == "separate":
+        params = {**params, "query_context_norm": jnp.array(params["query"]["norm1"])}
+        return params, VariantEngine(params, predict_shift_separate, paired_weight), jax.jit(jax.vmap(predict_shift_separate, in_axes=(None, 0)))
+    engine = JointEngine(params)
+    if paired_weight == "interface": engine = interface_weighted(engine)
+    return params, engine, jax.jit(jax.vmap(predict_shift, in_axes=(None, 0)))
+
+
 def interface_weighted(engine):
     """--paired-weight interface (2026-10-10): the paired (AB - free) squared error times the normalised w_interface,
     experiment 41's 'interface' arm formula (gqt_paired_pinder.PairedEngine); state loss, pKPDB loss and optimizer as
@@ -117,14 +195,14 @@ def _with_policy(manifest, batch=BATCH):
     return {**manifest, "bucket_policy": _policy(manifest, batch).to_json()}
 
 
-def epoch_plans(manifests, fraction, epoch, batch=BATCH):
+def epoch_plans(manifests, fraction, epoch, batch=BATCH, seed=SEED):
     """(PINDER plans, pKPDB plans) for one epoch, deterministic in (SEED, epoch); the pKPDB stream continues across epochs."""
     pinder, pkpdb = manifests["pinder"], manifests["pkpdb"]
-    pair = _policy(pinder, batch).plans(select(pinder, "train", fraction), np.random.default_rng((SEED, epoch, 1)))
+    pair = _policy(pinder, batch).plans(select(pinder, "train", fraction), np.random.default_rng((seed, epoch, 1)))
     per_epoch = len(pair); start = (epoch - 1) * per_epoch; stream = []; cycle = 0
     pk_records = select(pkpdb, "train", fraction)
     while len(stream) < start + per_epoch:
-        stream.extend(_policy(pkpdb, batch).plans(pk_records, np.random.default_rng((SEED, cycle, 2)))); cycle += 1
+        stream.extend(_policy(pkpdb, batch).plans(pk_records, np.random.default_rng((seed, cycle, 2)))); cycle += 1
     return pair, stream[start:start + per_epoch]
 
 
@@ -276,7 +354,7 @@ def validate(engine, predict, params, sources, manifests, config, out=None, epoc
             "selection": pinder["state_mae"] + pinder["interface_paired_mae"]}
 
 
-def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none"):
+def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none", seed=SEED, query_norm="shared"):
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
@@ -287,8 +365,8 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     jax.config.update("jax_compilation_cache_dir", str(out.parent / "compilation-cache"))
     manifests = {d: read(output(root, d) / MANIFEST) for d in ("pinder", "pkpdb", "benchmark-val")}
     norms = normalization(manifests["pinder"], fraction); scale = lr_scale(batch)
-    protocol = {"version": "gqt-production-joint-v1", "run": run, "fraction": fraction, "seed": SEED, "batch": batch,
-        "architecture": ARCHITECTURE, "initialization": "scratch (pkanet.ogqt.initialize, PRNGKey(17))",
+    protocol = {"version": "gqt-production-joint-v1", "run": run, "fraction": fraction, "seed": seed, "batch": batch,
+        "architecture": ARCHITECTURE, "initialization": f"scratch (pkanet.ogqt.initialize, PRNGKey({seed}))",
         "objective": "gqt_multitask_replay.JointEngine: pKPDB state-shift MSE (train_mask) + PINDER AB/free state-shift MSE + binding-shift MSE; equal coefficients; no site weights",
         "optimizer": "AdamW weight decay 1e-4, global clip 1 after gradient summation",
         "schedule": f"gqt_crop_radius.learning_rate x {scale:.4f} (1e-3 hold to epoch 10, cosine to 1e-5 by epoch {EPOCHS}); patience {PATIENCE}, min delta {MIN_DELTA}",
@@ -300,6 +378,8 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
                    **({"pkpdb_val": len(select(manifests["pkpdb"], "val"))} if select(manifests["pkpdb"], "val") else {})},
         **({"micro_residues": MICRO_RESIDUES, "accumulation": "exact: per-bucket chunks (largest divisor of the batch within the residue budget), values/gradients weighted by valid structures"} if chunked(batch) else {}),
         **({"paired_weight": "w_interface (experiment 41 interface arm formula)"} if paired_weight == "interface" else {}),
+        **({"query_norm": "separate query/context LayerNorm affine in the site-token query attention (query_context_norm, initialised as query norm1)"}
+           if query_norm == "separate" else {}),
         "pinder_weight_normalization": norms, "smoke": smoke, "test_data_included": False,
         "manifests": {d: digest(output(root, d) / MANIFEST) for d in manifests}, "code": code_hashes()}
     if (out / "protocol.json").exists():
@@ -313,9 +393,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
                "pinder-val": PinderSource(_with_policy(manifests["pinder"]), config=config, norms=norms),
                "benchmark": PkpdbSource(_with_policy(manifests["benchmark-val"]), config=config, mask="eval_mask"),
                **({"pkpdb-val": PkpdbSource(_with_policy(manifests["pkpdb"]), config=config, mask="train_mask")} if select(manifests["pkpdb"], "val") else {})}
-    params = initialize_ogqt(jax.random.PRNGKey(SEED), **ARCHITECTURE); engine = JointEngine(params); state = engine.optimizer.init(params)
-    if paired_weight == "interface": engine = interface_weighted(engine)
-    predict = jax.jit(jax.vmap(predict_shift, in_axes=(None, 0)))
+    params, engine, predict = make_model(seed, query_norm, paired_weight); state = engine.optimizer.init(params)
     history = [json.loads(l) for l in (out / "history.jsonl").read_text().splitlines()] if (out / "history.jsonl").exists() else []
     if history:
         last = history[-1]["epoch"]; params, state, _ = load_checkpoint(out / "checkpoints" / f"epoch-{last:03d}", (params, state))
@@ -325,7 +403,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     epochs = 2 if smoke else EPOCHS
     for epoch in range(len(history) + 1, epochs + 1):
         if stale >= PATIENCE: break
-        pair, pk = epoch_plans(manifests, fraction, epoch, batch)
+        pair, pk = epoch_plans(manifests, fraction, epoch, batch, seed)
         if smoke: pair, pk = pair[:5], pk[:5]
         specs = list(zip(pair, pk)); deferred = DeferredScalars(every=50); began = time.time()
         prefetcher = Prefetcher(sources["train"], specs, config, to_device if not chunked(batch) else host_chunks)
@@ -382,8 +460,9 @@ def rescore(root, run, epochs=None):
     sources = {"pinder-val": PinderSource(_with_policy(manifests["pinder"]), config=config, norms=norms),
                "benchmark": PkpdbSource(_with_policy(manifests["benchmark-val"]), config=config, mask="eval_mask"),
                **({"pkpdb-val": PkpdbSource(_with_policy(manifests["pkpdb"]), config=config, mask="train_mask")} if select(manifests["pkpdb"], "val") else {})}
-    params = initialize_ogqt(jax.random.PRNGKey(SEED), **ARCHITECTURE); engine = JointEngine(params); state = engine.optimizer.init(params)
-    predict = jax.jit(jax.vmap(predict_shift, in_axes=(None, 0)))
+    params, engine, predict = make_model(protocol.get("seed", SEED), "separate" if "query_norm" in protocol else "shared",
+                                         "interface" if "paired_weight" in protocol else "none")
+    state = engine.optimizer.init(params)
     folders = sorted((out / "checkpoints").glob("epoch-*")); rows = []
     for folder in folders:
         epoch = int(folder.name.split("-")[1])
@@ -402,13 +481,14 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="pkatrain.production_train"); sub = parser.add_subparsers(dest="action", required=True)
     p = sub.add_parser("train"); p.add_argument("run"); p.add_argument("--fraction", type=float, default=0.1); p.add_argument("--batch", type=int, default=BATCH)
     p.add_argument("--smoke", action="store_true"); p.add_argument("--paired-weight", choices=("none", "interface"), default="none")
+    p.add_argument("--seed", type=int, default=SEED); p.add_argument("--query-norm", choices=("shared", "separate"), default="shared")
     p = sub.add_parser("rescore"); p.add_argument("runs", nargs="+")
     args = parser.parse_args(argv); root = Path(os.environ["PKABENCH_RUNTIME"])
     if args.action == "rescore":
         for run in args.runs: rescore(root, run)
         return
     if args.action == "train":
-        result = train(root, args.run, args.fraction, args.smoke, args.batch, args.paired_weight)
+        result = train(root, args.run, args.fraction, args.smoke, args.batch, args.paired_weight, args.seed, args.query_norm)
         print(json.dumps({"selected_epoch": result["selected_epoch"], "selection": result["validation"]["selection"]}))
 
 
