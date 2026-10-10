@@ -210,3 +210,17 @@ store (jobs 7230716–7230724, 1.5–9 min each). Best epoch's pKPDB val MSE / P
 At 100% atom16aa20 is best or level everywhere: AA joint pKPDB 0.296 (atom16 0.305, released pKAI 0.324); BB joint
 0.941 vs 1.066. No arm reached the cap: the joint AA arms stopped at epoch 81 with the best epoch the last one (gains
 below the 0.001 stopping delta), so they were still improving slowly.
+
+## Learning-rate sweep, 100% atom16aa20 full/joint (2026-10-10)
+
+The paper (Reis et al., pKAI) trained with Adam at batch 256, LR 1e-6, weight decay 1e-4, 16-bit, early stopping
+(Δ 1e-3, 5 steps). Our sqrt rule anchors 1e-6 at batch 64, not 256, so 8e-6 at batch 4096 is already 2× the paper's
+setting under the same rule. Explicit rates (train arg 6, runs `-lr<rate>`), batch 4096, same stopping:
+
+| LR | Epochs (best) | pKPDB val | PINDER state | paired | train MSE |
+|---|---:|---:|---:|---:|---:|
+| 8e-6 | 81 (81) | 0.296 | 0.050 | 0.020 | 0.122 |
+| 3.2e-5 | 42 (42) | 0.286 | 0.046 | 0.019 | 0.107 |
+| 1.28e-4 | 26 (22) | **0.285** | **0.044** | **0.017** | 0.104 |
+
+Higher rates are better on every metric and converge faster; 1.28e-4 is the first to stop on a plateau (best epoch 22).
