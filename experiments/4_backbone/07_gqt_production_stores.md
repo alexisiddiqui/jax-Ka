@@ -97,3 +97,33 @@ Conversion of the full stores (job 7213750, 72 threads; store-v1 removed after v
 Random reads from the full PINDER store-v2 (all fields decoded): 797/s at 8 threads, 856/s at 32 and 1,215/s at 72
 (6.5-9.8 GB/s of arrays), against 112/s and 285/s for store-v1 on the same node type. Squashfs remains in use for the
 source datasets only.
+
+## Production loader (`pkatrain.production_loading`)
+
+- **Manifests** (`<dataset>/manifest-v1.json`, built under `sqfs_run.sh` because they read pool-v3.tsv):
+  - bucket policy `PRODUCTION`: bounds 128-1536, batch sizes 24/12/8/6/4/4/3/2/2 from the 3,072-residue budget,
+    still provisional until the GH200 memory check;
+  - capacities (n, k, q, s, sk, rounded to 32) taken over all records, so every pool fraction compiles the same shapes;
+  - per record: split, dims and the pool-v3 `min_fraction`. Training subsets are `select(manifest, "train",
+    fraction)`. PINDER records also carry per-complex `w_burial`/`w_interface` means, and `normalization(manifest,
+    fraction)` is the factorial's definition (mean complex-level weight over that fraction's training complexes).
+- **`PinderSource`**: `gqt_paired_pinder._load_one` per record (AB and partner-free branches).
+- **`PkpdbSource`**: the `SiteBatchLoader` format, with `eligible` = `train_mask` (or `eval_mask`). The 0.04-0.05% of
+  queries without a site token (`query_site` -1, never eligible) point at site 0.
+- Both pad to the bucket's fixed batch size, with unsupervised copies and `valid` False.
+- Unit tests: synthetic store, manifest, subset selection, normalisation, padding and masks (4 pass).
+
+Check on the real stores (job 7214034; 20 batches compared with the store records, then 300 batches through
+`Prefetcher`, prefetch 4):
+
+| Dataset | Training structures (100%) | Batches / epoch | Content | 8 workers | 32 workers |
+|---|---:|---:|---|---:|---:|
+| PINDER | 35,056 (+400 validation) | 6,619 | pass | 104 batches/s (544 structures/s) | 108 (564) |
+| pKPDB | 62,874 | 10,929 | pass | 94 batches/s (552 structures/s) | 164 (964) |
+
+Training sizes per bucket (100%): PINDER 128: 2,499; 256: 6,993; 384: 6,846; 512: 5,350; 640: 4,314; 768: 3,383;
+1024: 3,475; 1280: 1,489; 1536: 707. pKPDB 128: 3,546; 256: 11,232; 384: 15,625; 512: 10,668; 640: 7,905;
+768: 5,981; 1024: 7,915; 1280: 2.
+
+Open: the pKPDB store has no validation records (the pool is training-only). The pKPDB validation set (the 142
+benchmark structures) is not on Isambard and needs a store built with the same rules.
