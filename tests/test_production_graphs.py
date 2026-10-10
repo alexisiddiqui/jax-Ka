@@ -37,3 +37,33 @@ def test_build_pack_read_roundtrip(tmp_path, monkeypatch, dataset):
         assert all(np.array_equal(expected[f], got[f]) and expected[f].dtype == got[f].dtype for f in pg.FIELDS[dataset])
     assert store.metadata["skipped"][0]["id"] == "skipme" and store.metadata["compressed_bytes"] < store.metadata["raw_bytes"]
     store.close()
+
+
+@pytest.mark.parametrize("dataset", pg.DATASETS)
+def test_production_loader_manifest_and_batches(tmp_path, monkeypatch, dataset):
+    pytest.importorskip("jax")
+    from pkatrain import production_loading as pl
+    monkeypatch.setattr(pg, "build_one", lambda root, d, cid, split: _fake(d, cid, split))
+    out = pg.output(tmp_path, dataset); out.mkdir(parents=True)
+    listing = [[f"id{i}", "train"] for i in range(9)] + [["v1", "val"]]
+    (out / "ids.json").write_text(json.dumps({"ids": listing}))
+    for task in range(2): pg.build_shard(tmp_path, dataset, task, 2)
+    pg.pack(tmp_path, dataset, workers=2)
+    pool = tmp_path / (pg.PKPDB if dataset == "pkpdb" else pg.PINDER) / "pool-v3.tsv"; pool.parent.mkdir(parents=True)
+    pool.write_text("id\tmin_fraction\n" + "".join(f"id{i}\t{(i + 1) / 10}\n" for i in range(9)))
+    manifest = pl.build_manifest(tmp_path, dataset, workers=2)
+    assert len(pl.select(manifest, "train", 0.5)) == 5 and len(pl.select(manifest, "train")) == 9 and len(pl.select(manifest, "val")) == 1
+    source = pl.PinderSource(manifest, fraction=0.5) if dataset == "pinder" else pl.PkpdbSource(manifest)
+    if dataset == "pinder":
+        expected = np.mean([np.mean(_fake(dataset, f"id{i}", "train")[0]["w_burial"]) for i in range(5)])
+        assert np.isclose(source.norms["burial"], expected)
+    ids = ["id0", "id3", "id5"]; batch = source.load(ids); valid = batch[-1]
+    assert valid.tolist() == [True] * 3 + [False] * (len(valid) - 3) and len(valid) == source.policy.batch_size("128")
+    for slot, cid in enumerate(ids):
+        raw, record = _fake(dataset, cid, "train"); n, q = record["n"], record["q"]
+        nodes = batch[0]["nodes"][slot][0] if dataset == "pinder" else batch[0]["nodes"][slot]
+        assert np.array_equal(nodes[:n], raw["nodes"]) and not nodes[n:].any()
+        if dataset == "pkpdb": assert np.array_equal(batch[1][slot][:q], raw["labels"]) and np.array_equal(batch[2][slot][:q], raw["train_mask"])
+        else: assert np.array_equal(batch[1][slot][:, :q], raw["targets"]) and batch[2][slot][:q].all() and not batch[2][slot][q:].any()
+    assert not batch[2][3:].any() and not batch[1][3:].any()  # padded slots carry no supervision
+    source.close()
