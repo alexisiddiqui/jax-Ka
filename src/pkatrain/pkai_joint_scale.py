@@ -24,7 +24,7 @@ from biotite.structure.io import pdbx
 
 from pkabench.runtime import atomic_json, digest, require_compute
 from pkabench.pkai_backbone_pinder_eval import _features as backbone_features
-from .pkai_scratch import architecture_gate, feature_matrix, feature_width, model_class, native
+from .pkai_scratch import CUTOFF, GEOMETRY, SLOTS, architecture_gate, feature_matrix, feature_width, model_class, native
 
 
 SEED = 17
@@ -60,6 +60,7 @@ def read(path):
 def output(root):
     suffix = "" if FRACTION == 0.1 else f"-f{round(FRACTION * 100)}"  # the registered 10% runs keep their path
     if ENCODING != "atom16": suffix += f"-{ENCODING}"
+    suffix += GEOMETRY  # non-native cutoff/slots (pkai_scratch)
     return Path(root) / f"training/pkai-joint-scale-v1{suffix}"
 
 
@@ -371,7 +372,7 @@ SCALARS = {"pkpdb": ("target", "weight"), "pinder": ("target_ab", "target_free",
 
 
 def feature_root(root, dataset):
-    return Path(root) / "training" / STORE_VERSION / ENCODING / dataset
+    return Path(root) / "training" / STORE_VERSION / f"{ENCODING}{GEOMETRY}" / dataset
 
 
 def _name(cid, split): return f"{split}-{cid}"
@@ -667,7 +668,7 @@ def _pkpdb_validation_arrays(root, mode):
     """Frozen 5k-pilot validation rows: the compact package (pkabench.dataset_transfer build-validation) when present,
     checked against the pilot row selection, else the pilot arrays themselves."""
     pilot = Path(root) / "pretraining/pkpdb-5k-comparison-v1/pkai-packed"; package = Path(root) / "pretraining/pkpdb-val-pkai-v1"
-    if ENCODING != "atom16":
+    if ENCODING != "atom16" or GEOMETRY:
         package = validation_package(root, ENCODING)
         return {"x": np.load(package / ("full.npy" if mode == "full" else "backbone.npy"), mmap_mode="r"), "y": np.load(package / "target.npy")}
     if package.exists():
@@ -909,7 +910,7 @@ def smoke(root):
 
 
 def validation_package(root, encoding):
-    return Path(root) / f"pretraining/pkpdb-val-pkai-{encoding}-v1"
+    return Path(root) / f"pretraining/pkpdb-val-pkai-{encoding}{GEOMETRY}-v1"
 
 
 def _validation_component(task):
@@ -940,20 +941,20 @@ def _validation_component(task):
     for key in wanted:
         index = lookup[key]; residue = residues[index]; origin = ca[(residue.chain, residue.resnumb)]
         distance = np.sqrt(((coords - origin) ** 2).sum(-1))
-        ids = np.flatnonzero(np.asarray([a.residue is not residue for a in atoms]) & (distance < 15.0))
+        ids = np.flatnonzero(np.asarray([a.residue is not residue for a in atoms]) & (distance < CUTOFF))
         if np.any(distance[ids] == 0): raise ValueError((record["complex_id"], key, "coincident backbone atom"))
         bb = np.zeros(feature_width(encoding), np.float32)
         if encoding in ("atom16", "atom16aa20"):
             residue.env_anames = [atoms[j].aname for j in ids]; residue.env_resnames = [atoms[j].residue.resname for j in ids]
             residue.env_oheclasses = []; residue.encode_atoms()
             aa = [aa20_index(atoms[j].residue.resname) for j in ids] if encoding == "atom16aa20" else [None] * len(ids)
-            ordered = [(d, ATOM_OHE.index(c), a) for d, c, a in sorted(zip(distance[ids], residue.env_oheclasses, aa), key=lambda v: (v[0], v[1]))[:250]]
+            ordered = [(d, ATOM_OHE.index(c), a) for d, c, a in sorted(zip(distance[ids], residue.env_oheclasses, aa), key=lambda v: (v[0], v[1]))[:SLOTS]]
         else:
-            ordered = [(d, a, None) for d, a in sorted(zip(distance[ids], [aa20_index(atoms[j].residue.resname) for j in ids]))[:250]]
+            ordered = [(d, a, None) for d, a in sorted(zip(distance[ids], [aa20_index(atoms[j].residue.resname) for j in ids]))[:SLOTS]]
         for position, (value, cls, a) in enumerate(ordered):
             bb[position * slot + cls] = 1 / float(value) ** 2
             if a is not None: bb[position * slot + 16 + a] = 1 / float(value) ** 2
-        bb[250 * slot + RES_OHE.index(residue.resname)] = 1.0
+        bb[SLOTS * slot + RES_OHE.index(residue.resname)] = 1.0
         out[key] = (full[index], bb)
     return record["complex_id"], out
 
@@ -980,7 +981,7 @@ def build_validation(root, encoding, workers=1):
     np.save(pending / "full.npy", full); np.save(pending / "backbone.npy", bb)
     for name in ("target.npy", "source_rows.npy", "rows.json"): (pending / name).write_bytes((base / name).read_bytes())
     check = None
-    if encoding == "atom16":
+    if encoding == "atom16" and not GEOMETRY:
         check = {"full_identical": bool(np.array_equal(full, np.load(base / "full.npy"))),
                  "backbone_identical": bool(np.array_equal(bb, np.load(base / "backbone.npy")))}
         if not all(check.values()): raise AssertionError(("atom16 re-encoding differs from pkpdb-val-pkai-v1", check))

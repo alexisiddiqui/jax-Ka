@@ -96,7 +96,7 @@ def _features(atoms, keys, encoding="atom16"):
             raise AssertionError((key, "duplicate CA"))
         ca_lookup[key] = coord
 
-    from pkatrain.pkai_scratch import SLOT_WIDTH, aa20_index, feature_width
+    from pkatrain.pkai_scratch import CUTOFF, SLOTS, SLOT_WIDTH, aa20_index, feature_width
     slot = SLOT_WIDTH[encoding]  # "aa20": the slot holds the residue type of the backbone N/O atom (see pkai_scratch)
     matrix = np.zeros((len(keys), feature_width(encoding)), np.float32)
     retained = np.zeros(len(keys), bool)
@@ -108,23 +108,23 @@ def _features(atoms, keys, encoding="atom16"):
         distance = np.sqrt(np.sum((context_coord - ca_lookup[residue]) ** 2, axis=1))
         different = ((context_chain != residue[0]) | (context_resnum != residue[1]) |
                      (context_icode != residue[2]))
-        ids = np.flatnonzero(different & (distance < 15.0))
+        ids = np.flatnonzero(different & (distance < CUTOFF))
         if np.any(distance[ids] == 0):
             raise ValueError((key, "coincident backbone atom"))
         # Native pKAI sorts by (distance, encoded atom class).  In the strict
         # representation the only possible classes are N (0) and O (9).
         if encoding == "atom16":
             ordered = sorted(((float(distance[j]), 0 if context_name[j] == "N" else 9)
-                              for j in ids))[:250]
+                              for j in ids))[:SLOTS]
         elif encoding == "atom16aa20":
             ordered = sorted(((float(distance[j]), 0 if context_name[j] == "N" else 9, aa20_index(context_residue[j]))
-                              for j in ids))[:250]
+                              for j in ids))[:SLOTS]
         else:
-            ordered = sorted(((float(distance[j]), aa20_index(context_residue[j])) for j in ids))[:250]
+            ordered = sorted(((float(distance[j]), aa20_index(context_residue[j])) for j in ids))[:SLOTS]
         for position, (value, atom_class, *residue) in enumerate(ordered):
             matrix[row, position * slot + atom_class] = 1.0 / value ** 2
             if residue: matrix[row, position * slot + 16 + residue[0]] = 1.0 / value ** 2
-        matrix[row, 250 * slot + RES_OHE.index(group)] = 1.0
+        matrix[row, SLOTS * slot + RES_OHE.index(group)] = 1.0
         retained[row] = True
     return matrix, retained
 

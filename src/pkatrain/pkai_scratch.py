@@ -26,10 +26,15 @@ AA20 = ("ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
 AA20_ALIASES = {"MSE": "MET", "SEP": "SER", "TPO": "THR", "PTR": "TYR", "HID": "HIS", "HIE": "HIS", "HIP": "HIS",
                 "HSD": "HIS", "HSE": "HIS", "HSP": "HIS", "CYX": "CYS", "ASH": "ASP", "GLH": "GLU", "LYN": "LYS"}
 SLOT_WIDTH = {"atom16": 16, "aa20": 20, "atom16aa20": 36}
+# Environment geometry (2026-10-10): the cutoff (A) and the number of nearest-atom slots; native pKAI is 15 A / 250.
+# Other values (PKAI_CUTOFF, PKAI_SLOTS) change the input width and get their own stores, runs and validation package.
+CUTOFF = float(os.environ.get("PKAI_CUTOFF", "15"))
+SLOTS = int(os.environ.get("PKAI_SLOTS", "250"))
+GEOMETRY = "" if (CUTOFF, SLOTS) == (15.0, 250) else f"-r{CUTOFF:g}s{SLOTS}"
 
 
 def feature_width(encoding="atom16"):
-    return 250 * SLOT_WIDTH[encoding] + 8
+    return SLOTS * SLOT_WIDTH[encoding] + 8
 
 
 def aa20_index(resname):
@@ -51,20 +56,20 @@ def _aa_offset(encoding): return 16 if encoding == "atom16aa20" else 0
 
 def expand(slots, encoding="atom16"):
     slot = SLOT_WIDTH[encoding]; n = len(slots["site"]); x = np.zeros((n, feature_width(encoding)), np.float32)
-    rows = np.arange(n)[:, None]; base = np.arange(250) * slot
+    rows = np.arange(n)[:, None]; base = np.arange(SLOTS) * slot
     if "atom" in slots: x[rows, base + slots["atom"]] = slots["value"]
     if "aa" in slots: x[rows, base + _aa_offset(encoding) + slots["aa"]] = slots["value"]
-    x[np.arange(n), 250 * slot + slots["site"].astype(np.int64)] = 1.0
+    x[np.arange(n), SLOTS * slot + slots["site"].astype(np.int64)] = 1.0
     return x
 
 
 def compact(x, encoding="atom16"):
-    slot = SLOT_WIDTH[encoding]; blocks = x[:, :250 * slot].reshape(len(x), 250, slot)
+    slot = SLOT_WIDTH[encoding]; blocks = x[:, :SLOTS * slot].reshape(len(x), SLOTS, slot)
     parts = {} if encoding == "aa20" else {"atom": blocks[..., :16]}
     if encoding != "atom16": parts["aa"] = blocks[..., _aa_offset(encoding):]
     out = {"value": next(iter(parts.values())).max(-1)}
     for name, part in parts.items(): out[name] = part.argmax(-1).astype(np.uint8)
-    out["site"] = x[:, 250 * slot:].argmax(-1).astype(np.uint8)
+    out["site"] = x[:, SLOTS * slot:].argmax(-1).astype(np.uint8)
     out = {name: out[name] for name in compact_fields(encoding)}
     if not np.array_equal(expand(out, encoding), x): raise ValueError("dense pKAI features are not in compact slot form")
     return out
@@ -73,10 +78,10 @@ def compact(x, encoding="atom16"):
 def expand_torch(torch, slots, encoding="atom16"):
     value = slots["value"]; slot = SLOT_WIDTH[encoding]; device = value.device
     x = torch.zeros((value.shape[0], feature_width(encoding)), dtype=torch.float32, device=device)
-    base = torch.arange(250, device=device) * slot
+    base = torch.arange(SLOTS, device=device) * slot
     if "atom" in slots: x.scatter_(1, base + slots["atom"].long(), value)
     if "aa" in slots: x.scatter_(1, base + _aa_offset(encoding) + slots["aa"].long(), value)
-    x.scatter_(1, 250 * slot + slots["site"].long()[:, None], 1.0)
+    x.scatter_(1, SLOTS * slot + slots["site"].long()[:, None], 1.0)
     return x
 
 
@@ -90,24 +95,24 @@ def feature_matrix(protein, encoding="atom16"):
         centers=np.array([a.coords for a in r.iter_atoms() if a.aname in AA_ATOMS[r.resname]])
         if len(centers):
             distances=np.sqrt(((coords[:,None]-centers[None,:])**2).sum(-1).min(-1))
-            keep=np.array([a.residue is not r for a in atoms]) & (distances<15.)
+            keep=np.array([a.residue is not r for a in atoms]) & (distances<CUTOFF)
             ids=np.flatnonzero(keep)
             if np.any(distances[ids]==0): raise ValueError('Coincident pKAI environment/reference atoms')
             r.env_anames=[atoms[j].aname for j in ids]
             r.env_resnames=[atoms[j].residue.resname for j in ids]
             if encoding=="atom16":
                 r.encode_atoms()
-                order=sorted(zip(distances[ids],r.env_oheclasses))[:250]
+                order=sorted(zip(distances[ids],r.env_oheclasses))[:SLOTS]
                 for j,(distance,cls) in enumerate(order):matrix[i,j*16+ATOM_OHE.index(cls)]=1/(float(distance)**2)
             elif encoding=="atom16aa20":
                 r.encode_atoms()
-                order=sorted(zip(distances[ids],r.env_oheclasses,[aa20_index(name) for name in r.env_resnames]))[:250]
+                order=sorted(zip(distances[ids],r.env_oheclasses,[aa20_index(name) for name in r.env_resnames]))[:SLOTS]
                 for j,(distance,cls,aa) in enumerate(order):
                     matrix[i,j*slot+ATOM_OHE.index(cls)]=matrix[i,j*slot+16+aa]=1/(float(distance)**2)
             else:
-                order=sorted(zip(distances[ids],[aa20_index(name) for name in r.env_resnames]))[:250]
+                order=sorted(zip(distances[ids],[aa20_index(name) for name in r.env_resnames]))[:SLOTS]
                 for j,(distance,cls) in enumerate(order):matrix[i,j*slot+cls]=1/(float(distance)**2)
-        matrix[i,250*slot+RES_OHE.index(r.resname)]=1.
+        matrix[i,SLOTS*slot+RES_OHE.index(r.resname)]=1.
     assert np.isfinite(matrix).all()
     return residues,matrix
 
