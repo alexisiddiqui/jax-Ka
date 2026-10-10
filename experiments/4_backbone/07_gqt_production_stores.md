@@ -500,3 +500,39 @@ Differences of seed means (95% bootstrap over the 800 PINDER and 800 pKPDB valid
   undo that.
 - Seed spread in selection: 0.002 (default), 0.007 (site), 0.006 (pkai); intervals cover validation sampling only.
 - Default kept; `site` is a candidate if pKPDB MSE matters.
+
+### Stochastic site masking by weight percentile, two seeds, 10% pool (2026-10-10)
+
+User proposal: instead of weighting the losses, mask sites at random with the inverse of the weights.
+`--site-mask-pmin P` (`production_train.MaskedEngine`):
+- **Percentile:** each weight is mapped to its percentile u among the training pool's sites (mid-rank, so ties share a
+  value; tables in each run's `site-mask-tables.json`).
+- **Keep probability:** P + (1 - P) * u, redrawn every step. `w_burial` masks the state losses (PINDER AB and free
+  share a draw; pKPDB its own), `w_interface` masks the paired loss (an independent draw).
+- **Mean keep fraction:** (1 + P) / 2, whatever the weight's scale. Raw weights as probabilities would have kept 77%
+  for burial and about 21% for the Siamese loss: `w_burial` spans 0.40-1.0 (median 0.77), and 60% of `w_interface`
+  values sit at its 0.05 floor (1.0 within 4 A of the partner).
+- **Losses:** JointEngine's per-structure means over the kept sites; a structure with no kept site leaves that step's
+  mean. Validation is unmasked.
+
+With P = 0.2, sites at the `w_interface` floor (percentile 0.33) are kept 46% of the time and contact sites 97%.
+Runs `pilot-10pct-mask2[-s29]` (P = 0.2, 60% kept on average) and `pilot-10pct-mask5[-s29]` (P = 0.5, 75% kept).
+
+| Arm | Seed | Epoch | Selection | State MAE | Interface paired MAE | Interface paired MSE | pKPDB val MAE | pKPDB val MSE | Benchmark MAE |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| default | 17 | 17 | 0.7375 | 0.4730 | 0.2644 | 0.2525 | 0.5572 | 0.7328 | 0.5728 |
+| default | 29 | 17 | 0.7355 | 0.4694 | 0.2660 | 0.2558 | 0.5598 | 0.7568 | 0.5790 |
+| P = 0.2 | 17 | 17 | 0.7416 | 0.4767 | 0.2649 | 0.2546 | 0.5587 | 0.7339 | 0.5775 |
+| P = 0.2 | 29 | 17 | 0.7574 | 0.4810 | 0.2765 | 0.2627 | 0.5663 | 0.7567 | 0.5963 |
+| P = 0.5 | 17 | 18 | 0.7365 | 0.4724 | 0.2641 | 0.2507 | 0.5574 | 0.7188 | 0.5764 |
+| P = 0.5 | 29 | 17 | 0.7442 | 0.4754 | 0.2688 | 0.2641 | 0.5642 | 0.7600 | 0.5769 |
+
+| Contrast (seed means; 95% bootstrap) | Selection | State MAE | Interface paired MAE | pKPDB val MAE |
+|---|---|---|---|---|
+| P = 0.2 - default | +0.0131 (+0.0093, +0.0167) | +0.0076 | +0.0055 | +0.0040 |
+| P = 0.5 - default | +0.0039 (+0.0003, +0.0077) | +0.0027 | +0.0012 | +0.0023 |
+
+- Masking makes every validation metric worse, more so the more it masks. It gives no interface gain, and seed spread
+  grows (0.002 default, 0.008 at P = 0.5, 0.016 at P = 0.2).
+- On the 10% pool for 20 epochs, dropping sites mainly removes training signal. Whether masking helps as a
+  regulariser on larger pools or longer schedules is untested. Default kept.
