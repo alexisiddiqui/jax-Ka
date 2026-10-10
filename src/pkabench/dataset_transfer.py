@@ -10,12 +10,18 @@ All operations are idempotent and safe to re-run or run concurrently:
   per-shard sha256 in `<dataset>-bundle.json`; shards that already verify are skipped on re-run.
 - import: one streaming pass per shard (shards in parallel) hashes the shard and every file while extracting to a
   pending directory; files are installed only if all match the manifest; a per-shard marker under `<root>/.imports/` makes re-runs no-ops and interrupted imports resume.
+- squash (file-count-limited file systems, e.g. Isambard-AI scratch at 1,024,000 inodes): instead of importing, build
+  one squashfs image per large bundle directory (root/images/<name>.sqfs) in one streaming pass that checks every file
+  against the manifest, install the few remaining files loose, and make root/<directory> a symlink to the node-local
+  mount point. scripts/sqfs_run.sh mounts the images (squashfuse) in a private mount namespace for one command.
 Paths inside bundles are relative to PKABENCH_RUNTIME, so code that uses runtime-relative paths works after import.
 
 Usage (compute node):
   python -m pkabench.dataset_transfer export {pinder,pkpdb,validation} OUT [--graphs] [--scope pool|all]
   python -m pkabench.dataset_transfer import OUT/<dataset>-bundle.json ROOT [--parts core,graphs]
   python -m pkabench.dataset_transfer verify OUT/<dataset>-bundle.json ROOT
+  python -m pkabench.dataset_transfer squash OUT/<dataset>-bundle.json ROOT [--mksquashfs PATH] [--replace]
+  scripts/sqfs_run.sh python -m pkabench.dataset_transfer verify OUT/<dataset>-bundle.json ROOT
   python -m pkabench.dataset_transfer stage SOURCE_STORE --local /tmp/$USER-stores
 """
 from __future__ import annotations
@@ -358,6 +364,134 @@ def verify(manifest_path, root, workers=4, parts=None):
     return {"files": len(tasks), "bad": bad, "passed": not bad}
 
 
+# ---------------------------------------------------------------- squashfs images (inode-limited file systems)
+IMAGE_MIN_FILES = 1000
+
+
+def mount_root():
+    """Node-local mount point root; scripts/sqfs_run.sh mounts <root>/images/<name>.sqfs at <mount_root>/<name>."""
+    return os.environ.get("PKABENCH_SQFS_MOUNT") or f"/tmp/{os.environ.get('USER') or os.getuid()}-sqfs"
+
+
+def image_plan(manifest):
+    """{runtime-relative directory: [files]} for the directories that become images (two path components, at least
+    IMAGE_MIN_FILES files, e.g. pretraining/pinder-pkai-v1), and the remaining files under "" (installed loose)."""
+    groups = {}
+    for rel in manifest["files"]:
+        parts = rel.split("/"); groups.setdefault("/".join(parts[:2]) if len(parts) > 2 else "", []).append(rel)
+    loose = groups.pop("", [])
+    for prefix in [p for p, rels in groups.items() if len(rels) < IMAGE_MIN_FILES]: loose += groups.pop(prefix)
+    return groups, sorted(loose)
+
+
+def _image_key(manifest, rels):
+    return hashlib.sha256(json.dumps(sorted((rel, manifest["files"][rel]["sha256"]) for rel in rels)).encode()).hexdigest()
+
+
+def _image_present(images, prefix, key):
+    name = Path(prefix).name; image = images / f"{name}.sqfs"; marker = images / f"{name}.sqfs.json"
+    if not (image.is_file() and marker.is_file()): return False
+    record = json.loads(marker.read_text())
+    return record.get("key") == key and record.get("size") == image.stat().st_size
+
+
+def _link(root, prefix, replace):
+    """root/prefix -> <mount_root>/<name> (dangling outside sqfs_run.sh, so a missing mount fails loudly)."""
+    link = Path(root) / prefix; target = f"{mount_root()}/{Path(prefix).name}"
+    if link.is_symlink() and os.readlink(link) == target: return
+    if link.exists() or link.is_symlink():
+        if link.is_dir() and not link.is_symlink():
+            if not replace: raise IOError(f"{link} is a directory; pass --replace to retire it in favour of the image")
+            retired = link.parent / f".{link.name}.retired-{os.getpid()}"; os.replace(link, retired); shutil.rmtree(retired)
+        else: link.unlink()
+    link.parent.mkdir(parents=True, exist_ok=True); pending = link.parent / f".{link.name}.link-{os.getpid()}"
+    os.symlink(target, pending); os.replace(pending, link)
+
+
+def squash(manifest_path, root, *, mksquashfs="mksquashfs", processors=4, replace=False):
+    """Build one squashfs image per large directory of a bundle in a single streaming pass over its shards (every file
+    is checked against the manifest on the way), install the remaining files loose, and point root/<directory> at the
+    node-local mount point. Images go to root/images/<name>.sqfs with a .json marker; an image whose marker matches the
+    manifest is kept, so re-runs are no-ops."""
+    manifest_path = Path(manifest_path); bundle = manifest_path.parent; root = Path(root)
+    manifest = json.loads(manifest_path.read_text())
+    if manifest["format"] != FORMAT: raise ValueError(manifest["format"])
+    groups, loose = image_plan(manifest); images = root / "images"; images.mkdir(parents=True, exist_ok=True)
+    keys = {prefix: _image_key(manifest, rels) for prefix, rels in groups.items()}
+    blocked = [str(root / p) for p in groups if (root / p).is_dir() and not (root / p).is_symlink()]
+    if blocked and not replace: raise IOError(f"directories in the way of images (pass --replace to retire them): {blocked}")
+    result = {}
+    with locked(images / f".{manifest['dataset']}.lock"):
+        todo = [p for p in groups if not _image_present(images, p, keys[p])]
+        loose_todo = [rel for rel in loose if not ((root / rel).is_file() and (root / rel).stat().st_size == manifest["files"][rel]["size"]
+                                                   and sha256_file(root / rel) == manifest["files"][rel]["sha256"])]
+        result.update({Path(p).name: "present" for p in groups if p not in todo})
+        if todo or loose_todo:
+            result.update(_squash_pass(manifest, bundle, root, images, todo, set(loose_todo), keys, mksquashfs, processors))
+        for prefix in groups: _link(root, prefix, replace)
+    return result
+
+
+def _squash_pass(manifest, bundle, root, images, todo, loose_todo, keys, mksquashfs, processors):
+    files = manifest["files"]; host = socket.gethostname(); procs, tars, pendings = {}, {}, {}
+    loose_pending = images / f".loose-{manifest['dataset']}.pending-{host}-{os.getpid()}"
+    for prefix in todo:
+        name = Path(prefix).name; pendings[prefix] = images / f".{name}.sqfs.pending-{host}-{os.getpid()}"
+        procs[prefix] = subprocess.Popen([mksquashfs, "-", str(pendings[prefix]), "-tar", "-noappend", "-no-xattrs", "-all-root",
+                                          "-default-mode", "0755", "-comp", "zstd", "-processors", str(processors),
+                                          "-mem", os.environ.get("PKABENCH_MKSQUASHFS_MEM", "4G"),
+                                          "-quiet", "-no-progress"], stdin=subprocess.PIPE)
+        tars[prefix] = tarfile.open(fileobj=procs[prefix].stdin, mode="w|")
+    seen = set(); counts = {prefix: 0 for prefix in todo}
+    try:
+        for part, shards in manifest["parts"].items():
+            for shard in shards:
+                with open(bundle / shard["name"], "rb") as raw:
+                    reader = _HashingReader(raw)
+                    with tarfile.open(fileobj=io.BufferedReader(reader, CHUNK), mode="r|*") as tar:
+                        for member in tar:
+                            if not _member_ok(member, files) or member.name in seen or files[member.name]["shard"] != shard["name"]:
+                                raise IOError(f"unexpected member in shard {shard['name']}: {member.name}")
+                            data = tar.extractfile(member).read(); meta = files[member.name]
+                            if len(data) != meta["size"] or hashlib.sha256(data).hexdigest() != meta["sha256"]:
+                                raise IOError(f"file does not match manifest: {member.name}")
+                            seen.add(member.name); prefix = "/".join(member.name.split("/")[:2])
+                            if prefix in tars:
+                                info = tarfile.TarInfo(member.name[len(prefix) + 1:]); info.size = len(data)
+                                info.mtime = member.mtime; info.mode = 0o644
+                                tars[prefix].addfile(info, io.BytesIO(data)); counts[prefix] += 1
+                            elif member.name in loose_todo:
+                                target = loose_pending / member.name; target.parent.mkdir(parents=True, exist_ok=True)
+                                target.write_bytes(data)
+                    while reader.readinto(bytearray(CHUNK)): pass
+                if reader.hash.hexdigest() != shard["sha256"]: raise IOError(f"shard sha256 mismatch: {shard['name']}")
+        if seen != set(files): raise IOError(f"bundle is missing {len(set(files) - seen)} files")
+        for prefix in todo:
+            tars[prefix].close(); procs[prefix].stdin.close()
+            if procs[prefix].wait() != 0: raise IOError(f"mksquashfs failed for {prefix} (exit {procs[prefix].returncode})")
+    except BaseException:
+        for tar in tars.values():
+            with contextlib.suppress(Exception): tar.fileobj = io.BytesIO(); tar.close()
+        for proc in procs.values():
+            with contextlib.suppress(Exception): proc.stdin.close()
+            proc.kill(); proc.wait()
+        for path in list(pendings.values()) + [loose_pending]:
+            if path.is_dir(): shutil.rmtree(path, ignore_errors=True)
+            elif path.exists(): path.unlink()
+        raise
+    out = {}
+    for prefix in todo:
+        name = Path(prefix).name; image = images / f"{name}.sqfs"; pending = pendings[prefix]
+        record = {"key": keys[prefix], "prefix": prefix, "files": counts[prefix], "size": pending.stat().st_size,
+                  "sha256": sha256_file(pending), "dataset": manifest["dataset"], "bundle_git_commit": manifest.get("git_commit"),
+                  "mount": f"{mount_root()}/{name}", "created": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        os.replace(pending, image); _atomic_json(images / f"{name}.sqfs.json", record); out[name] = "built"
+    for rel in sorted(loose_todo):
+        dest = root / rel; dest.parent.mkdir(parents=True, exist_ok=True); os.replace(loose_pending / rel, dest); out[rel] = "installed"
+    if loose_pending.exists(): shutil.rmtree(loose_pending)
+    return out
+
+
 # ---------------------------------------------------------------- compact pKAI validation package
 def build_pkai_validation(root):
     """Validation rows of the frozen 5k pKAI pilot (the set experiment 48 scores), copied into a compact package with
@@ -393,6 +527,8 @@ def main(argv=None):
     p.add_argument("--graphs", action="store_true"); p.add_argument("--scope", choices=("pool", "all"), default="pool")
     p = sub.add_parser("import"); p.add_argument("manifest"); p.add_argument("root"); p.add_argument("--parts")
     p = sub.add_parser("verify"); p.add_argument("manifest"); p.add_argument("root"); p.add_argument("--parts")
+    p = sub.add_parser("squash"); p.add_argument("manifest"); p.add_argument("root")
+    p.add_argument("--mksquashfs", default=os.environ.get("PKABENCH_MKSQUASHFS", "mksquashfs")); p.add_argument("--replace", action="store_true")
     p = sub.add_parser("stage"); p.add_argument("source"); p.add_argument("--local", required=True)
     sub.add_parser("build-validation")
     args = parser.parse_args(argv)
@@ -405,6 +541,8 @@ def main(argv=None):
     elif args.action == "verify":
         report = verify(args.manifest, args.root, workers, parts); print(json.dumps({k: v for k, v in report.items() if k != "bad"} | {"bad": report["bad"][:20]}))
         if not report["passed"]: raise SystemExit(1)
+    elif args.action == "squash":
+        print(json.dumps(squash(args.manifest, args.root, mksquashfs=args.mksquashfs, processors=workers, replace=args.replace)))
     elif args.action == "stage": print(stage(args.source, args.local))
     elif args.action == "build-validation": print(build_pkai_validation(runtime))
 

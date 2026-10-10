@@ -90,3 +90,46 @@ def test_import_rejects_unexpected_members(tmp_path):
     manifest["parts"]["core"][0]["sha256"] = dt.sha256_file(out / shard); (out / "pkpdb-bundle.json").write_text(json.dumps(manifest))
     with pytest.raises(IOError): dt.import_bundle(out / "pkpdb-bundle.json", tmp_path / "dst")
     assert not (tmp_path / "escape.txt").exists()
+
+
+def _mksquashfs():
+    import os, shutil, subprocess
+    tool = os.environ.get("PKABENCH_MKSQUASHFS") or shutil.which("mksquashfs")
+    if not tool: return None
+    help_text = subprocess.run([tool, "-help-option", "tar"], capture_output=True, text=True).stdout
+    unsquashfs = os.path.join(os.path.dirname(tool), "unsquashfs")
+    return (tool, unsquashfs) if "-tar" in help_text and os.path.exists(unsquashfs) else None
+
+
+def test_squash_builds_images_installs_loose_files_and_is_idempotent(tmp_path, monkeypatch):
+    import os, subprocess
+    tools = _mksquashfs()
+    if tools is None: pytest.skip("mksquashfs with -tar (squashfs-tools >= 4.6) not available")
+    source = tmp_path / "src"; _fake_pkpdb(source); monkeypatch.setattr(dt, "SHARD_BYTES", 1500)
+    monkeypatch.setattr(dt, "IMAGE_MIN_FILES", 5); monkeypatch.setenv("PKABENCH_SQFS_MOUNT", str(tmp_path / "mnt"))
+    out = tmp_path / "bundle"; manifest = dt.export(source, "pkpdb", out, workers=1)
+    target = tmp_path / "dst"; (target / dt.PKPDB).mkdir(parents=True)  # an earlier loose import is refused without --replace
+    with pytest.raises(IOError): dt.squash(out / "pkpdb-bundle.json", target, mksquashfs=tools[0], processors=1)
+    first = dt.squash(out / "pkpdb-bundle.json", target, mksquashfs=tools[0], processors=1, replace=True)
+    assert first == {"pkpdb-full-v1": "built", "pkpdb-v1": "built"}
+    assert os.readlink(target / dt.PKPDB) == str(tmp_path / "mnt" / "pkpdb-full-v1")
+    assert dt.squash(out / "pkpdb-bundle.json", target, mksquashfs=tools[0]) == {"pkpdb-full-v1": "present", "pkpdb-v1": "present"}
+    for name, prefix in (("pkpdb-full-v1", dt.PKPDB), ("pkpdb-v1", "pretraining/pkpdb-v1")):
+        record = json.loads((target / "images" / f"{name}.sqfs.json").read_text())
+        assert record["sha256"] == dt.sha256_file(target / "images" / f"{name}.sqfs")
+        (tmp_path / "x").mkdir(exist_ok=True)
+        subprocess.run([tools[1], "-q", "-n", "-d", str(tmp_path / "x" / name), str(target / "images" / f"{name}.sqfs")], check=True)
+        rels = [rel for rel in manifest["files"] if rel.startswith(prefix + "/")]
+        assert record["files"] == len(rels)
+        for rel in rels: assert (tmp_path / "x" / name / rel[len(prefix) + 1:]).read_bytes() == (source / rel).read_bytes()
+    assert not list((target / "images").glob(".*pending*"))
+
+
+def test_squash_rejects_corrupted_shard(tmp_path, monkeypatch):
+    tools = _mksquashfs()
+    if tools is None: pytest.skip("mksquashfs with -tar (squashfs-tools >= 4.6) not available")
+    source = tmp_path / "src"; _fake_pkpdb(source); monkeypatch.setattr(dt, "IMAGE_MIN_FILES", 5)
+    out = tmp_path / "bundle"; dt.export(source, "pkpdb", out, workers=1)
+    shard = next(out.glob("pkpdb-core-*.tar.gz")); data = bytearray(shard.read_bytes()); data[-10] ^= 0xFF; shard.write_bytes(bytes(data))
+    with pytest.raises(Exception): dt.squash(out / "pkpdb-bundle.json", tmp_path / "dst", mksquashfs=tools[0], processors=1)
+    assert not list((tmp_path / "dst" / "images").glob("*.sqfs")) and not list((tmp_path / "dst" / "images").glob(".*pending*"))

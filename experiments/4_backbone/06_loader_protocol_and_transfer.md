@@ -94,3 +94,35 @@ shard. Random-access reads of gzip tars restart decompression on every seek. Imp
 shard, hashing the shard and every file while extracting, and runs shards in parallel. That version passes the unit
 tests, but the full-scale import test was stopped at the user's request before it finished, so it has no measured
 timing yet.
+
+## Transfer to Isambard-AI and squashfs images (2026-10-10)
+
+- `rsync` of `bundle-v1` (19.4 GB, 22 files plus validation) to `u6xq.aip2.isambard:$SCRATCH/_transfer/bundle-v1`:
+  6 min 55 s over 4 parallel streams (about 47 MB/s; one stream about 15 MB/s). Sizes match the source.
+- The validation bundle was imported and verified there (6 files).
+- Loose import does not fit. The scratch project allows 1,024,000 files (inodes) and was already at about 466k without
+  these data; PINDER (390k files) plus pKPDB (503k) exceed the limit. The pKPDB import failed with
+  `Disk quota exceeded`, and the PINDER import was cancelled and its partial files cleaned.
+- Replacement: `dataset_transfer squash` builds one squashfs image per large bundle directory in one streaming pass,
+  checking every file's size and sha256 against the manifest on the way:
+  - `pinder-pkai-v1` (390,222 files, 11.5 GB);
+  - `pkpdb-full-v1` (377,253 files, 20.4 GB);
+  - `pkpdb-v1` (125,748 source structures, 9.3 GB).
+
+  Images go to `<runtime>/images/<name>.sqfs` with a JSON marker (key, file count, sha256); the few remaining files are
+  installed loose; `<runtime>/pretraining/<name>` becomes a symlink to `/tmp/$USER-sqfs/<name>`.
+- `scripts/sqfs_run.sh <command>` mounts the images read-only with `squashfuse_ll` inside a private user and mount
+  namespace, then runs the command as the calling user.
+  - Isambard has no per-job `/tmp` or mount namespace, so a plain FUSE mount would be shared by every job on a node and
+    would die with whichever job started it. The private namespace avoids that.
+  - Tested on a GH200 node: the mount is private, the uid is unchanged, the GPU is visible, and writes to Lustre are
+    owned by the user.
+  - Outside the wrapper the dataset paths are dangling symlinks, so a missing mount fails at once. Image directories
+    are read-only, so prep outputs (e.g. per-entry `graph.npz`) must go elsewhere, preferably straight into the packed
+    stores, which also keeps the file count down.
+- Tools: `squashfs-tools` 4.7.5 from conda-forge in its own prefix (`$S/_install/squashfs-tools`; the uv venv stays the
+  main environment). `squashfuse_ll` and `/dev/fuse` are provided by the system.
+- No Python squashfs reader (`PySquashfsImage`) was added: the mount serves the existing path-based readers unchanged.
+  It is only worth adding as a fallback if FUSE becomes unavailable.
+- Unit tests (Isambard compute node, `.venv`): build, idempotent re-run, file-by-file comparison through `unsquashfs`,
+  refusal of a directory in the way, and rejection of a corrupted shard. All 8 transfer tests pass.
