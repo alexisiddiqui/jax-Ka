@@ -39,7 +39,7 @@ def test_build_pack_read_roundtrip(tmp_path, monkeypatch, dataset):
     store.close()
 
 
-@pytest.mark.parametrize("dataset", pg.DATASETS)
+@pytest.mark.parametrize("dataset", ("pkpdb", "pinder"))  # benchmark-val has no training pool
 def test_production_loader_manifest_and_batches(tmp_path, monkeypatch, dataset):
     pytest.importorskip("jax")
     from pkatrain import production_loading as pl
