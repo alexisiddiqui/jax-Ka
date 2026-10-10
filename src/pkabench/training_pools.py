@@ -351,13 +351,16 @@ def _write_tsv(path, rows):
     tmp.rename(path)
 
 
-def build_v4(root, workers):
-    out = root/V4_DIR; out.mkdir(parents=True, exist_ok=True)
+def build_v4(root, workers, size=None):
+    """size: validation groups per dataset (default VALIDATION_GROUPS, written to training/pool-v4); another size is a
+    what-if written to training/pool-v4-n<size>."""
+    groups = {d: size or n for d, n in VALIDATION_GROUPS.items()}
+    out = root/(V4_DIR if size is None else f'{V4_DIR}-n{size}'); out.mkdir(parents=True, exist_ok=True)
     candidates = {'pinder': pinder_candidates(root, workers), 'pkpdb': pkpdb_candidates(root, workers)}
     validation = {}; cells = {}
-    validation['pinder'], cells['pinder'] = choose_validation(candidates['pinder'][0], VALIDATION_GROUPS['pinder'],
+    validation['pinder'], cells['pinder'] = choose_validation(candidates['pinder'][0], groups['pinder'],
                                                                eligible=lambda r: int(r['eval_interface_sites']) > 0)
-    validation['pkpdb'], cells['pkpdb'] = choose_validation(candidates['pkpdb'][0], VALIDATION_GROUPS['pkpdb'],
+    validation['pkpdb'], cells['pkpdb'] = choose_validation(candidates['pkpdb'][0], groups['pkpdb'],
                                                              eligible=lambda r: int(r['labelled_sites']) > 0)
     val_sequences = {s for rows in validation.values() for r in rows for s in r['_sequences']}
     val_groups = {d: {r['group'] for r in validation[d]} for d in validation}
@@ -407,7 +410,7 @@ if __name__ == '__main__':
     workers = int(os.environ['SLURM_CPUS_PER_TASK'])
     require_compute(threads=workers, allow_comp1400=os.environ.get('PKABENCH_ALLOW_COMP1400') == '1')  # explicit per-run opt-in
     if sys.argv[1] == 'v4':
-        result = build_v4(Path(os.environ['PKABENCH_RUNTIME']), workers)
+        result = build_v4(Path(os.environ['PKABENCH_RUNTIME']), workers, int(sys.argv[2]) if len(sys.argv) > 2 else None)
         print(json.dumps({d: {k: v[k] for k in ('candidates', 'removed', 'fractions')} | {'validation': {k: x for k, x in v['validation'].items() if k != 'cells'}}
                           for d, v in result['datasets'].items()}, indent=1))
     else:
