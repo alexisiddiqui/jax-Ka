@@ -26,7 +26,10 @@ written with both training pools to training/pool-v4/.
 - Candidates are pool-v3's filters without the validation rules: PINDER accepted, not in exclusions v3, >= 1 labelled
   usable interface site; pKPDB every pilot.json record; both without a chain exactly identical to a held-out benchmark
   chain or a pKPDB reference sequence.
-- Validation: about 1,600 PINDER clusters and 1,600 pKPDB groups, one structure each (the group's first eligible
+- Validation (user decision, option B): 800 PINDER clusters and 800 pKPDB groups, one structure each; the pKPDB set
+  is drawn first and 400 of the PINDER clusters are drawn among complexes with a chain >= 70% / 80% to (or equal to)
+  a pKPDB validation chain, so the two sets share proteins and the screen removes less PINDER training data (PINDER
+  -20% instead of -27% at 800 without overlap, -42% at 1,600). Otherwise (the group's first eligible
   structure by the pool-v4 rank; PINDER needs >= 1 labelled eval-mask interface site, the sites validation scores;
   pKPDB >= 1 clean site). Groups are stratified by (stratum, size bucket of that structure,
   production bounds 128..1536); each cell gets its proportional share (largest remainder) and picks groups by a
@@ -259,7 +262,8 @@ def build(root, dataset, workers):
 # ---------------------------------------------------------------- pool-v4 (2026-10-10)
 V4 = 'pool-v4'
 V4_DIR = 'training/pool-v4'
-VALIDATION_GROUPS = {'pinder': 1600, 'pkpdb': 1600}
+VALIDATION_GROUPS = {'pinder': 800, 'pkpdb': 800}
+OVERLAP = (400, 'pkpdb')  # user decision 2026-10-10: option B
 SIZE_BOUNDS = (128, 256, 384, 512, 640, 768, 1024, 1280, 1536)
 
 
@@ -323,6 +327,19 @@ def pinder_candidates(root, workers):
     return rows, dict(accepted_not_excluded=len(tasks), with_labelled_interface_site=labelled, removed_exact_reference_chain=labelled - len(rows))
 
 
+def saved_chain_clusters(root, sequences, threads):
+    """chain_clusters, saved once to training/pool-v4/pkpdb-chain-clusters.tsv and reused: MMseqs2 clustering differs
+    between thread counts (16,532 vs 16,544 clusters), so every pool-v4 build reads the same assignment."""
+    path = root/V4_DIR/'pkpdb-chain-clusters.tsv'
+    if path.exists():
+        cluster = {r['sequence']: r['representative'] for r in csv.DictReader(open(path), delimiter='\t')}
+        if set(cluster) != set(sequences): raise AssertionError(f'{path} covers different sequences')
+        return cluster
+    cluster = chain_clusters(root, sequences, threads); path.parent.mkdir(parents=True, exist_ok=True)
+    _write_tsv(path, [dict(sequence=s, representative=r) for s, r in sorted(cluster.items())])
+    return cluster
+
+
 def pkpdb_candidates(root, workers):
     """Every pKPDB pilot record without an exact reference chain; rows carry chain sequences, groups and strata."""
     src = root/PKPDB
@@ -331,7 +348,7 @@ def pkpdb_candidates(root, workers):
     with concurrent.futures.ProcessPoolExecutor(workers) as pool:
         chains = dict(pool.map(_pkpdb_chains, [(str(src/'entries'/r['pdb_id']), r) for r in records], chunksize=64))
     unique = {s for seqs in chains.values() for s in seqs}
-    cluster = chain_clusters(root, unique, workers); held = reference_sequences(root); rows = []
+    cluster = saved_chain_clusters(root, unique, workers); held = reference_sequences(root); rows = []
     for r in records:
         seqs = chains[r['pdb_id']]
         if any(s in held for s in seqs): continue
@@ -351,13 +368,15 @@ def _write_tsv(path, rows):
     tmp.rename(path)
 
 
-def build_v4(root, workers, size=None, overlap=0, anchor=None):
+def build_v4(root, workers, size=None, overlap=None, anchor=None):
     """size: validation groups per dataset (default VALIDATION_GROUPS, written to training/pool-v4); another size is a
     what-if written to training/pool-v4-n<size>. overlap/anchor: the anchor dataset's validation set is drawn as usual,
     then `overlap` of the other dataset's validation groups are drawn among structures with a chain >= 70% / 80% to (or
     equal to) an anchor validation chain, and the rest as usual (training/pool-v4-n<size>-o<overlap>-<anchor>)."""
+    canonical = size is None and overlap is None
+    if canonical: overlap, anchor = OVERLAP
     groups = {d: size or n for d, n in VALIDATION_GROUPS.items()}
-    name = V4_DIR if size is None else f'{V4_DIR}-n{size}' + (f'-o{overlap}-{anchor}' if overlap else '')
+    name = V4_DIR if canonical else f'{V4_DIR}-n{size}' + (f'-o{overlap}-{anchor}' if overlap else '')
     out = root/name; out.mkdir(parents=True, exist_ok=True)
     candidates = {'pinder': pinder_candidates(root, workers), 'pkpdb': pkpdb_candidates(root, workers)}
     validation = {}; cells = {}
@@ -434,7 +453,7 @@ if __name__ == '__main__':
     require_compute(threads=workers, allow_comp1400=os.environ.get('PKABENCH_ALLOW_COMP1400') == '1')  # explicit per-run opt-in
     if sys.argv[1] == 'v4':
         result = build_v4(Path(os.environ['PKABENCH_RUNTIME']), workers, int(sys.argv[2]) if len(sys.argv) > 2 else None,
-                          int(sys.argv[3]) if len(sys.argv) > 3 else 0, sys.argv[4] if len(sys.argv) > 4 else None)
+                          int(sys.argv[3]) if len(sys.argv) > 3 else (0 if len(sys.argv) > 2 else None), sys.argv[4] if len(sys.argv) > 4 else None)
         print(json.dumps({d: {k: v[k] for k in ('candidates', 'removed', 'fractions')} | {'validation': {k: x for k, x in v['validation'].items() if k != 'cells'}}
                           for d, v in result['datasets'].items()}, indent=1))
     else:
