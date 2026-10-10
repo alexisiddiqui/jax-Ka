@@ -262,3 +262,25 @@ cosine/40, the same arms. pKPDB val / PINDER state / paired, with the 15 Å / 25
 
 The longer range gives backbone a small gain (~0.01 pKPDB) and all-atom nothing or a small loss: with all atoms, the
 15 Å environment already carries the information, and the extra 2× input width adds parameters without new signal.
+
+## Interface paired metrics (default validation from 2026-10-10)
+
+The training paired loss is w_interface-weighted, while the reported `pinder_paired_mse` was unweighted over all 11,455
+PINDER validation sites. Validation now also reports `pinder_paired_weighted_mse` (w_interface-weighted, as the training
+loss) and `pinder_paired_interface_mse` (sites with `interface` true in sites.json: 5,116 of 11,455). Flags come from
+`training/pkai-features-v2/pinder-val-interface.npz` (`build-interface`), checked row by row against the store's
+w_interface and targets. Checkpoint selection is unchanged (pKPDB, state, unweighted paired). All saved checkpoints were
+rescored (`rescore`, validation-v2.json beside each best.pt; their earlier metrics reproduce exactly).
+
+100%, 5.12e-4 cosine/40, 15 Å: paired all / weighted / interface-only
+
+| Arm | atom16 | aa20 | atom16aa20 |
+|---|---:|---:|---:|
+| BB pkpdb | 0.210 / 0.619 / 0.467 | 0.190 / 0.552 / 0.422 | 0.194 / 0.561 / 0.430 |
+| BB joint | 0.204 / 0.598 / 0.453 | 0.180 / **0.521 / 0.400** | 0.182 / 0.526 / 0.405 |
+| AA pkpdb | 0.027 / 0.067 / 0.059 | 0.067 / 0.180 / 0.146 | 0.033 / 0.081 / 0.071 |
+| AA joint | **0.016 / 0.039 / 0.034** | 0.045 / 0.123 / 0.099 | 0.017 / 0.041 / 0.037 |
+
+Released pKAI (reference; PINDER labels are its own predictions, so these are a floor): pKPDB 0.324, state 0.0070,
+paired 0.0012 / 0.0038 / 0.0028. Interface errors are 2–3× the all-site paired MSE, and the ranking is unchanged:
+AA joint atom16 is best at the interface; at 20 Å the interface metrics are level or slightly worse.
