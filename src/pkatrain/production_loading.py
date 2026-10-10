@@ -163,10 +163,34 @@ class PinderSource(_Source):
         return _stack(items, self.policy.batch_size(bucket), clear=(1, 2, 3, 4))
 
 
+class AuxPinderSource(PinderSource):
+    """PinderSource for the ordinal auxiliary heads (pkatrain.production_aux, 2026-10-11): same tuple, but slot 3 holds
+    the free-state RSA (NaN -> -1, masked) and slot 4 the partner-contact score (production_aux.ContactTable) in place of
+    the normalised w_burial / w_interface, which the auxiliary objectives do not use."""
+
+    def __init__(self, manifest, contacts, store_path=None, config=None, fraction=1.0, norms=None, spread=True):
+        super().__init__(manifest, store_path, config, fraction, norms, spread); self.contacts = contacts
+
+    def load(self, ids):
+        from .gqt_paired_pinder import _load_one
+        rows, bucket, capacity = self._bucket(ids); q = capacity[2]
+        def one(row):
+            raw = self.store.raw(row["id"]); graph, target, mask, _, _, metadata = _load_one(raw, row, capacity, self.norms)
+            score = self.contacts(row["id"])
+            if len(score) != len(raw["rsa_free"]): raise AssertionError((row["id"], "contact table does not match the store"))
+            rsa = _pad(np.nan_to_num(raw["rsa_free"].astype(np.float32), nan=-1.0), (q,))
+            return (spread_padding(graph) if self.spread else graph, target, mask, rsa, _pad(score.astype(np.float32), (q,)), metadata)
+        items = list(self.pool.map(one, rows))
+        return _stack(items, self.policy.batch_size(bucket), clear=(1, 2, 3, 4))
+
+    def provenance(self): return {**super().provenance(), "contacts_verification_sha256": self.contacts.verification_sha256}
+
+
 class PkpdbSource(_Source):
-    def __init__(self, manifest, store_path=None, config=None, mask="train_mask", spread=True, weights=False):
+    def __init__(self, manifest, store_path=None, config=None, mask="train_mask", spread=True, weights=False, aux=False):
+        """aux=True (production_aux): slot 3 holds the site RSA (NaN -> -1, masked) instead of w_burial."""
         if mask not in ("train_mask", "eval_mask"): raise ValueError(mask)
-        super().__init__(manifest, store_path, config, spread); self.mask = mask; self.weights = weights
+        super().__init__(manifest, store_path, config, spread); self.mask = mask; self.weights = weights or aux; self.aux = aux
 
     def _one(self, row, capacity):
         n, k, q, s, sk = capacity; raw = self.store.raw(row["id"])
@@ -177,6 +201,7 @@ class PkpdbSource(_Source):
         graph = {name: _pad(raw[name], shapes[name]) for name in RESIDUE_FIELDS + SITE_FIELDS}
         graph["query_site"] = np.maximum(graph["query_site"], 0)
         if self.spread: graph = spread_padding(graph)
+        if self.aux: return graph, _pad(raw["labels"], (q,)), _pad(raw[self.mask], (q,)), _pad(np.nan_to_num(raw["rsa"].astype(np.float32), nan=-1.0), (q,))
         if self.weights: return graph, _pad(raw["labels"], (q,)), _pad(raw[self.mask], (q,)), _pad(np.nan_to_num(raw["w_burial"].astype(np.float32), nan=0.0), (q,))
         return graph, _pad(raw["labels"], (q,)), _pad(raw[self.mask], (q,))
 

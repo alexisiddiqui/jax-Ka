@@ -49,7 +49,8 @@ import numpy as np
 from pkabench.runtime import atomic_json, digest
 from .loading import PRODUCTION_BOUNDS, BucketPolicy, DeferredScalars, LoaderConfig, Prefetcher
 from .production_graphs import VERSION, output, read
-from .production_loading import MANIFEST, PinderSource, PkpdbSource, normalization, select
+from .production_aux import BURIAL_RSA_CUTS, INTERFACE_THRESHOLDS, ContactTable
+from .production_loading import MANIFEST, AuxPinderSource, PinderSource, PkpdbSource, normalization, select
 
 SEED = 17
 BATCH = 16
@@ -280,6 +281,130 @@ class DropoutEngine:
         self.paired_value_grad = jax.jit(jax.value_and_grad(paired_objective, has_aux=True))
         self.pkpdb_value_grad = jax.jit(jax.value_and_grad(pkpdb_objective))
         self.apply = jax.jit(apply)
+
+
+def initialize_aux(params, seed):
+    """Ordinal auxiliary heads on the final site embedding (production_aux): aux_burial (3 logits) and aux_interface
+    (6 logits). Drawn from their own key, so the shared parameters equal the pKa-only model's for the same seed."""
+    import jax
+    import jax.numpy as jnp
+    from .production_aux import BURIAL_RSA_CUTS, INTERFACE_THRESHOLDS
+    width = ARCHITECTURE["width"]; kb, ki = jax.random.split(jax.random.fold_in(jax.random.PRNGKey(seed), 27183))
+    head = lambda key, out: {"w": jax.random.normal(key, (width, out), jnp.float32) / jnp.sqrt(float(width)), "b": jnp.zeros(out, jnp.float32)}
+    return {**params, "aux_burial": head(kb, len(BURIAL_RSA_CUTS)), "aux_interface": head(ki, len(INTERFACE_THRESHOLDS))}
+
+
+class AuxEngine:
+    """--aux-weight W (2026-10-11): JointEngine's pKa objectives plus W x ordinal BCE auxiliaries (production_aux):
+    burial (3 cumulative RSA targets) on the PINDER free branch and pKPDB train_mask sites; interface (6 cumulative
+    contact-score targets) on the PINDER bound branch. Each auxiliary is the mean BCE over its thresholds per site,
+    averaged per structure, then over structures with at least one target (JointEngine's reduction). Optional residual
+    dropout as DropoutEngine (one key per complex shared by AB and free). Batches from AuxPinderSource /
+    PkpdbSource(aux=True): slot 3 = RSA (< 0 masked), slot 4 = contact score."""
+
+    def __init__(self, params, weight, rate=0.0):
+        import jax
+        import jax.numpy as jnp
+        import optax
+        from pkanet.model import PKPDB_PK_MOD, linear
+        from pkanet.site_model import site_embeddings_indexed
+        from .gqt_regularization import decay_mask
+        from .production_aux import BURIAL_RSA_CUTS, INTERFACE_THRESHOLDS
+        self.optimizer = optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(1.0, weight_decay=1e-4, mask=decay_mask(params)))
+        reference = jnp.asarray(PKPDB_PK_MOD, jnp.float32); rate = float(rate); weight = float(weight)
+        cuts = jnp.asarray(BURIAL_RSA_CUTS, jnp.float32); thresholds = jnp.asarray(INTERFACE_THRESHOLDS, jnp.float32)
+
+        def predict_all(p, graph, key=None):
+            tokens, query_site = site_embeddings_indexed(p, graph, key=key, dropout_rate=rate if key is not None else 0.0)
+            return (8 * jnp.tanh(linear(p["head"], tokens)[:, 0]))[query_site], linear(p["aux_burial"], tokens)[query_site], \
+                linear(p["aux_interface"], tokens)[query_site]
+
+        def flatten(graphs):
+            batch, branches = graphs["nodes"].shape[:2]
+            return jax.tree.map(lambda value: value.reshape((batch * branches,) + value.shape[2:]), graphs), batch, branches
+
+        def paired_all(p, graphs, key=None):
+            flat, batch, branches = flatten(graphs)
+            if key is None: out = jax.vmap(predict_all, in_axes=(None, 0))(p, flat)
+            else: out = jax.vmap(lambda graph, k: predict_all(p, graph, k))(flat, jnp.repeat(jax.random.split(key, batch), branches, axis=0))
+            return jax.tree.map(lambda value: value.reshape((batch, branches) + value.shape[1:]), out)
+
+        def structure_mean(per_site, sites, valid):
+            n = jnp.sum(sites, axis=1); per = jnp.sum(per_site * sites, axis=1) / jnp.maximum(n, 1)
+            counted = valid & (n > 0); return jnp.sum(jnp.where(counted, per, 0.0)) / jnp.maximum(jnp.sum(counted), 1)
+
+        def bce(logits, labels): return jnp.mean(optax.sigmoid_binary_cross_entropy(logits, labels), axis=-1)
+
+        def burial_loss(logits, rsa, sites, valid):
+            labels = (rsa[..., None] < cuts).astype(jnp.float32); sites = sites * (rsa >= 0)
+            return structure_mean(bce(logits, labels), sites, valid)
+
+        def paired_objective(p, graphs, targets, mask, rsa, contacts, valid, key):
+            predicted, burial_logits, interface_logits = paired_all(p, graphs, key)
+            expected = targets - reference[graphs["query_group"][:, 0]][:, None, :]
+            state_error = jnp.square(predicted - expected) * mask[:, None, :]
+            pair_error = jnp.square((predicted[:, 0] - predicted[:, 1]) - (expected[:, 0] - expected[:, 1])) * mask
+            state_loss = jnp.sum(state_error, axis=(1, 2)) / jnp.maximum(2 * jnp.sum(mask, axis=1), 1)
+            pair_loss = jnp.sum(pair_error, axis=1) / jnp.maximum(jnp.sum(mask, axis=1), 1)
+            denominator = jnp.maximum(jnp.sum(valid), 1)
+            state_loss = jnp.sum(jnp.where(valid, state_loss, 0.0)) / denominator
+            pair_loss = jnp.sum(jnp.where(valid, pair_loss, 0.0)) / denominator
+            sites = mask.astype(jnp.float32)
+            burial = burial_loss(burial_logits[:, 1], rsa, sites, valid)
+            interface = structure_mean(bce(interface_logits[:, 0], (contacts[..., None] > thresholds).astype(jnp.float32)), sites, valid)
+            return state_loss + pair_loss + weight * (burial + interface), (state_loss, pair_loss)
+
+        def pkpdb_objective(p, graphs, targets, eligible, rsa, valid, key):
+            keys = jax.random.split(key, graphs["nodes"].shape[0])
+            predicted, burial_logits, _ = jax.vmap(lambda graph, k: predict_all(p, graph, k if rate else None))(graphs, keys)
+            expected = targets - reference[graphs["query_group"]]
+            per_structure = jnp.sum(jnp.square(predicted - expected) * eligible, axis=1) / jnp.maximum(jnp.sum(eligible, axis=1), 1)
+            primary = jnp.sum(jnp.where(valid, per_structure, 0.0)) / jnp.maximum(jnp.sum(valid), 1)
+            return primary + weight * burial_loss(burial_logits, rsa, eligible.astype(jnp.float32), valid)
+
+        def apply(p, state, pair_gradient, pk_gradient, rate_):
+            gradient = jax.tree.map(lambda a, b: a + b, pair_gradient, pk_gradient)
+            finite = jnp.all(jnp.stack([jnp.all(jnp.isfinite(value)) for value in jax.tree.leaves(gradient)]))
+            updates, state = self.optimizer.update(gradient, state, p)
+            return optax.apply_updates(p, jax.tree.map(lambda value: value * rate_, updates)), state, finite
+
+        self.predictions = jax.jit(lambda p, graphs: paired_all(p, graphs)[0])
+        self.paired_auxiliary = jax.jit(lambda p, graphs: paired_all(p, graphs)[1:])
+        self.site_auxiliary = jax.jit(jax.vmap(lambda p, graph: predict_all(p, graph)[1], in_axes=(None, 0)))
+        self.paired_value_grad = jax.jit(jax.value_and_grad(paired_objective, has_aux=True))
+        self.pkpdb_value_grad = jax.jit(jax.value_and_grad(pkpdb_objective))
+        self.apply = jax.jit(apply)
+
+
+def _auroc(score, label):
+    from scipy.stats import rankdata
+    label = np.asarray(label, bool); n1 = int(label.sum()); n0 = len(label) - n1
+    return float((rankdata(score)[label].sum() - n1 * (n1 + 1) / 2) / (n1 * n0)) if n1 and n0 else None
+
+
+def auxiliary_metrics(engine, params, pinder_source, pinder_records, pkpdb_source, pkpdb_records, config):
+    """Validation discrimination of the ordinal heads: per-threshold AUROC and mean BCE of interface (PINDER bound
+    branch) and burial (PINDER free branch; pKPDB val train_mask sites), pooled over sites."""
+    from .production_aux import BURIAL_RSA_CUTS, INTERFACE_THRESHOLDS
+    sig = lambda x: 1 / (1 + np.exp(-x)); collected = {"interface": ([], []), "pinder_burial": ([], []), "pkpdb_burial": ([], [])}
+    for ids, batch in Prefetcher(pinder_source, pinder_source.policy.plans(pinder_records, np.random.default_rng(0)), config):
+        graphs, _, mask, rsa, contacts, _, valid = batch
+        burial, interface = map(np.asarray, engine.paired_auxiliary(params, graphs)); keep = mask & valid[:, None]
+        collected["interface"][0].append(interface[:, 0][keep]); collected["interface"][1].append(contacts[keep][:, None] > np.asarray(INTERFACE_THRESHOLDS))
+        b = keep & (rsa >= 0); collected["pinder_burial"][0].append(burial[:, 1][b]); collected["pinder_burial"][1].append(rsa[b][:, None] < np.asarray(BURIAL_RSA_CUTS))
+    if pkpdb_source is not None:
+        for ids, batch in Prefetcher(pkpdb_source, pkpdb_source.policy.plans(pkpdb_records, np.random.default_rng(0)), config):
+            graphs, _, eligible, rsa, valid = batch; burial = np.asarray(engine.site_auxiliary(params, graphs))
+            b = eligible.astype(bool) & valid[:, None] & (rsa >= 0)
+            collected["pkpdb_burial"][0].append(burial[b]); collected["pkpdb_burial"][1].append(rsa[b][:, None] < np.asarray(BURIAL_RSA_CUTS))
+    out = {}
+    for name, (logits, labels) in collected.items():
+        if not logits: continue
+        logits = np.concatenate(logits); labels = np.concatenate(labels).astype(float); cuts = INTERFACE_THRESHOLDS if name == "interface" else BURIAL_RSA_CUTS
+        p = np.clip(sig(logits), 1e-7, 1 - 1e-7); bce = -(labels * np.log(p) + (1 - labels) * np.log(1 - p))
+        out[name] = {"sites": int(len(logits)), "mean_bce": float(bce.mean()),
+                     "thresholds": [{"cut": c, "positive_fraction": float(labels[:, j].mean()), "auroc": _auroc(logits[:, j], labels[:, j])} for j, c in enumerate(cuts)]}
+    return out
 
 
 def make_model(seed, query_norm="shared", paired_weight="none", reduction="structure"):
@@ -517,7 +642,7 @@ def validate(engine, predict, params, sources, manifests, config, out=None, epoc
 
 
 def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none", seed=SEED, query_norm="shared", reduction="structure",
-          mask_pmin=None, dropout=0.0):
+          mask_pmin=None, dropout=0.0, aux_weight=None):
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
@@ -550,6 +675,10 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
            if query_norm == "separate" else {}),
         **({"dropout": f"oGQT residual dropout {dropout} on attention and feed-forward outputs during training (DropoutEngine); "
                        "one key per complex shared by its AB and free branches"} if dropout else {}),
+        **({"auxiliary": f"AuxEngine: + {aux_weight} x (ordinal burial BCE, RSA cuts {list(BURIAL_RSA_CUTS)}, PINDER free branch and pKPDB "
+                         f"train_mask sites; ordinal interface BCE, contact-score thresholds {list(INTERFACE_THRESHOLDS)}, PINDER bound branch); "
+                         "heads aux_burial/aux_interface on the final site embedding (pkatrain.production_aux)",
+            "contacts_verification_sha256": ContactTable(root).verification_sha256} if aux_weight is not None else {}),
         "pinder_weight_normalization": norms, "smoke": smoke, "test_data_included": False,
         "manifests": {d: digest(output(root, d) / MANIFEST) for d in manifests}, "code": code_hashes()}
     if (out / "protocol.json").exists():
@@ -557,16 +686,24 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
         if {k: v for k, v in stored.items() if k != "code"} != json.loads(json.dumps({k: v for k, v in protocol.items() if k != "code"})):
             raise AssertionError(f"{out} was registered with a different protocol")
     else: atomic_json(out / "protocol.json", protocol)
-    config = LoaderConfig()
-    sources = {"train": JointSource(PinderSource(_with_policy(manifests["pinder"], batch), config=config, norms=norms),
-                                    PkpdbSource(_with_policy(manifests["pkpdb"], batch), config=config, weights=reduction != "structure" or mask_pmin is not None)),
+    config = LoaderConfig(); contacts = ContactTable(root) if aux_weight is not None else None
+    train_pinder = AuxPinderSource(_with_policy(manifests["pinder"], batch), contacts, config=config, norms=norms) if contacts else \
+        PinderSource(_with_policy(manifests["pinder"], batch), config=config, norms=norms)
+    sources = {"train": JointSource(train_pinder, PkpdbSource(_with_policy(manifests["pkpdb"], batch), config=config,
+                                    weights=reduction != "structure" or mask_pmin is not None, aux=contacts is not None)),
                "pinder-val": PinderSource(_with_policy(manifests["pinder"]), config=config, norms=norms),
                "benchmark": PkpdbSource(_with_policy(manifests["benchmark-val"]), config=config, mask="eval_mask"),
                **({"pkpdb-val": PkpdbSource(_with_policy(manifests["pkpdb"]), config=config, mask="train_mask")} if select(manifests["pkpdb"], "val") else {})}
     if (reduction != "structure" or mask_pmin is not None) and chunked(batch): raise ValueError("this loss is not chunk-additive; use batch <= 64")
     params, engine, predict = make_model(seed, query_norm, paired_weight, reduction); state = engine.optimizer.init(params)
     step_key = None
-    if dropout:
+    if aux_weight is not None:
+        if query_norm != "shared" or paired_weight != "none" or reduction != "structure" or mask_pmin is not None:
+            raise ValueError("auxiliary heads combine with the defaults and dropout only")
+        if chunked(batch): raise ValueError("the auxiliary objective runs the unchunked path; use batch <= 64")
+        params = initialize_aux(params, seed); engine = AuxEngine(params, aux_weight, dropout); state = engine.optimizer.init(params)
+        step_key = jax.random.PRNGKey(seed + 200003)
+    elif dropout:
         if query_norm != "shared" or paired_weight != "none" or reduction != "structure" or mask_pmin is not None:
             raise ValueError("dropout combines with the defaults only")
         if chunked(batch): raise ValueError("dropout runs the unchunked path; use batch <= 64")
@@ -628,6 +765,13 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     selected = best["epoch"]
     params, state, _ = load_checkpoint(out / "checkpoints" / f"epoch-{selected:03d}", (params, state))
     final = validate(engine, predict, params, sources, manifests, config, out=out, epoch=selected)
+    if contacts is not None:
+        aux_sources = (AuxPinderSource(_with_policy(manifests["pinder"]), contacts, config=config, norms=norms),
+                       PkpdbSource(_with_policy(manifests["pkpdb"]), config=config, mask="train_mask", aux=True) if "pkpdb-val" in sources else None)
+        final["auxiliary"] = auxiliary_metrics(engine, params, aux_sources[0], select(manifests["pinder"], "val"), aux_sources[1],
+                                               select(manifests["pkpdb"], "val"), config)
+        for source in aux_sources:
+            if source is not None: source.close()
     for source in sources.values(): source.close()
     atomic_json(out / "selection.json", {"selected_epoch": selected, "epochs_run": len(history), "validation": final,
                 "checkpoint_sha256": digest(out / "checkpoints" / f"epoch-{selected:03d}" / "state.npz"), "test_data_included": False})
@@ -642,6 +786,7 @@ def rescore(root, run, epochs=None):
     from .gqt_multitask_replay import JointEngine
     from .trainer import load_checkpoint
     root = Path(root); out = run_dir(root, run); protocol = read(out / "protocol.json")
+    if "auxiliary" in protocol: raise NotImplementedError("rescore does not rebuild auxiliary-head runs")
     manifests = {d: read(output(root, d) / MANIFEST) for d in ("pinder", "pkpdb", "benchmark-val")}
     config = LoaderConfig(); norms = protocol["pinder_weight_normalization"]
     sources = {"pinder-val": PinderSource(_with_policy(manifests["pinder"]), config=config, norms=norms),
@@ -672,6 +817,7 @@ def main(argv=None):
     p.add_argument("--seed", type=int, default=SEED); p.add_argument("--query-norm", choices=("shared", "separate"), default="shared")
     p.add_argument("--loss-reduction", choices=("structure", "site", "pkai"), default="structure")
     p.add_argument("--site-mask-pmin", type=float, default=None); p.add_argument("--dropout", type=float, default=0.0)
+    p.add_argument("--aux-weight", type=float, default=None)
     p = sub.add_parser("rescore"); p.add_argument("runs", nargs="+")
     args = parser.parse_args(argv); root = Path(os.environ["PKABENCH_RUNTIME"])
     if args.action == "rescore":
@@ -679,7 +825,7 @@ def main(argv=None):
         return
     if args.action == "train":
         result = train(root, args.run, args.fraction, args.smoke, args.batch, args.paired_weight, args.seed, args.query_norm, args.loss_reduction, args.site_mask_pmin,
-                       args.dropout)
+                       args.dropout, args.aux_weight)
         print(json.dumps({"selected_epoch": result["selected_epoch"], "selection": result["validation"]["selection"]}))
 
 
