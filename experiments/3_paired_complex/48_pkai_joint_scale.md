@@ -288,3 +288,18 @@ AA joint atom16 is best at the interface; at 20 Å the interface metrics are lev
 Released pKAI+ (`rescore reference-plus`, job 7238921; same package, same input pipeline, the experimental-pKa-tuned
 variant): pKPDB 0.802, state 0.530, paired 0.090 / 0.268 / 0.199. It is not a target for these labels (PypKa shifts
 and pKAI's own PINDER predictions); pKAI is the reference to beat on pKPDB.
+
+## TorchScript release export
+
+`pkatrain.pkai_joint_scale export RUN_DIR [DESTINATION.pt]` exports a full, 15 Å / 250-slot `best.pt` checkpoint
+with the released pKAI forward output shape. Select `PKAI_ENCODING=atom16` or `atom16aa20`; `PKAI_FRACTION=100`
+and `PKAI_FRACTION=1` both select the full-data pool. The default filenames are `pKAI-joint_model.pt` and
+`pKAI-joint-aa20_model.pt` beside the checkpoint.
+
+Run through `scripts/slurm/jaxka_pkai_scale.sbatch` (deployed to `$S/_submission/jaxka_pkai_scale.sbatch` on Isambard).
+`PKAI_REPO` can select an isolated checkout; the wrapper uses its source rather than the environment's editable
+installation. Each job requests one GPU. The export reruns `rescore`, writes `validation-v2.json`, reloads the
+serialized model, and checks all pKPDB validation predictions and MSE against the checkpoint with an absolute
+tolerance of `1e-6`. A failed check does not publish the pending model. The adjacent `.export-check.json` records
+the exact metrics, output shape, checkpoint/model hashes, file size, and export-code commit. Training manifests
+and datasets are read without modification.

@@ -34,6 +34,8 @@ GROUP_ALIAS = {"NTR": "NTERM", "CTR": "CTERM"}
 KEY_FIELDS = ("chain", "resnum", "icode", "group")
 # pool-v3 fraction (nested 0.1/0.5/0.75/1.0 subsets); PKAI_FRACTION selects another one, with its own output directory
 FRACTION = float(os.environ.get("PKAI_FRACTION", "0.1"))
+if FRACTION > 1: FRACTION /= 100  # also accept percentage selectors, e.g. PKAI_FRACTION=100
+if not 0 < FRACTION <= 1: raise ValueError("PKAI_FRACTION must be a fraction in (0, 1] or percentage in (1, 100]")
 # neighbour-slot encoding (pkai_scratch): native "atom16" (4,008 inputs) or "aa20" (5,008); PKAI_ENCODING=aa20 uses its
 # own output directory and pKPDB validation package
 ENCODING = os.environ.get("PKAI_ENCODING", "atom16")
@@ -875,6 +877,92 @@ def rescore(root, runs):
         print(json.dumps({"run": str(run), **{k: round(v, 4) for k, v in metrics.items()}}), flush=True)
 
 
+def export(root, run, destination=None):
+    """Export best.pt to the released pKAI tensor API; fail unless fresh rescore agrees within 1e-6.
+
+    Usage: export RUN_DIR [DESTINATION.pt]. Writes export-check.json beside the export. All Torch execution,
+    including tracing and parity checks, requires a one-GPU Slurm allocation.
+    """
+    from .loading import LoaderConfig
+    from .loading_torch import PackedSiteSource
+    require_compute(threads=2, gpu_benchmark=True, allow_comp1400=True)
+    torch, package = native(); torch.set_num_threads(2)
+    root, run = Path(root), Path(run)
+    manifest = read(run / "manifest.json")
+    if manifest.get("feature_encoding", "atom16") != ENCODING:
+        raise ValueError("PKAI_ENCODING differs from the checkpoint manifest")
+    if manifest["mode"] != "full" or (CUTOFF, SLOTS) != (15.0, 250):
+        raise ValueError("released pKAI exports require full, 15 A / 250-slot features")
+    if ENCODING not in ("atom16", "atom16aa20"):
+        raise ValueError("released pKAI supports atom16 and atom16aa20 exports")
+    name = "pKAI-joint" if ENCODING == "atom16" else "pKAI-joint-aa20"
+    destination = Path(destination) if destination else run / f"{name}_model.pt"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    # Generate the comparison using the actual rescore action, rather than rounded training-log metrics.
+    rescore(root, [str(run)])
+    baseline = read(run / "validation-v2.json")
+    net = model_class(torch, inputs=WIDTH)()
+    net.load_state_dict(torch.load(run / "best.pt", map_location="cpu", weights_only=True)); net.eval()
+    reference = torch.jit.load(str(package / "models/pKAI_model.pt"), map_location="cpu").eval()
+    with torch.no_grad():
+        reference_shape = tuple(reference(torch.zeros(2, 4008)).shape)
+    if reference_shape not in ((2,), (2, 1)):
+        raise ValueError(f"unsupported released forward output shape: {reference_shape}")
+
+    class ReleasedShape(torch.nn.Module):
+        def __init__(self): super().__init__(); self.inner = net
+        def forward(self, x):
+            prediction = self.inner(x)
+            return prediction.reshape(-1, 1) if reference_shape == (2, 1) else prediction.reshape(-1)
+
+    wrapped = ReleasedShape().eval()
+    with torch.no_grad():
+        traced = torch.jit.trace(wrapped, torch.zeros(2, WIDTH),
+                                 check_inputs=[(torch.zeros(1, WIDTH),), (torch.zeros(3, WIDTH),)])
+    fd, pending = tempfile.mkstemp(dir=destination.parent, prefix=".export-", suffix=".pt"); os.close(fd)
+    try:
+        torch.jit.save(traced, pending)
+        loaded = torch.jit.load(pending, map_location="cuda").eval(); eager = net.cuda().eval()
+        arrays = _pkpdb_validation_arrays(root, "full")
+        max_error = 0.0
+        with torch.no_grad():
+            for start in range(0, len(arrays["y"]), BATCH_SIZE):
+                x = torch.as_tensor(np.array(arrays["x"][start:start + BATCH_SIZE], copy=True), device="cuda")
+                actual, expected = loaded(x), eager(x)
+                shape = (len(x), 1) if reference_shape == (2, 1) else (len(x),)
+                if tuple(actual.shape) != shape: raise AssertionError((actual.shape, shape))
+                max_error = max(max_error, float((actual.reshape(-1) - expected).abs().max()))
+        if not math.isfinite(max_error) or max_error > 1e-6:
+            raise AssertionError(("TorchScript prediction parity", max_error))
+
+        class Flat(torch.nn.Module):
+            def __init__(self): super().__init__(); self.inner = loaded
+            def forward(self, x): return self.inner(x).reshape(-1)
+
+        config = LoaderConfig(); source = PackedSiteSource(arrays, config=config)
+        try:
+            metrics = _validation(torch, Flat().eval(), {"pk": source}, config, "pkpdb")
+        finally:
+            source.close()
+        error = abs(metrics["pkpdb_mse"] - baseline["pkpdb_mse"])
+        if not math.isfinite(error) or error > 1e-6:
+            raise AssertionError(("TorchScript rescore parity", baseline["pkpdb_mse"], metrics["pkpdb_mse"]))
+        os.replace(pending, destination)
+    finally:
+        Path(pending).unlink(missing_ok=True)
+    import subprocess
+    report = {"passed": True, "model_name": name, "run": str(run), "encoding": ENCODING,
+              "input_width": WIDTH, "forward_output_shape": ["batch"] + ([1] if reference_shape == (2, 1) else []),
+              "rescore_pkpdb_mse": baseline["pkpdb_mse"], "export_pkpdb_mse": metrics["pkpdb_mse"],
+              "mse_absolute_error": error, "prediction_max_absolute_error": max_error, "tolerance": 1e-6,
+              "validation_sites": len(arrays["y"]), "checkpoint_sha256": digest(run / "best.pt"),
+              "model_sha256": digest(destination), "file_size_bytes": destination.stat().st_size,
+              "training_code_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+              "torch_version": torch.__version__}
+    atomic_json(destination.with_suffix(".export-check.json"), report)
+    print(json.dumps(report, sort_keys=True), flush=True)
+
+
 def _pkpdb_batch(root, mode, size=64):
     packed = Path(root) / "pretraining/pkpdb-5k-comparison-v1/pkai-packed"
     rows = read(packed / "rows.json")
@@ -1089,6 +1177,7 @@ def main():
     elif action == "compare-packed": compare_packed(root)
     elif action == "build-interface": build_interface(root, int(os.environ.get("SLURM_CPUS_PER_TASK", "8")))
     elif action == "rescore": rescore(root, sys.argv[2:])
+    elif action == "export": export(root, sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else None)
     elif action == "feature-smoke": feature_smoke(root)
     elif action == "build-validation":
         build_validation(root, sys.argv[2] if len(sys.argv) > 2 else ENCODING, int(os.environ.get("SLURM_CPUS_PER_TASK", "1")))
