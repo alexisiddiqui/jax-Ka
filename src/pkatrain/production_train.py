@@ -22,11 +22,13 @@ selection.json, predictions-{pinder,benchmark}-epoch-NNN.csv.
 
 Batch-size sweep (2026-10-10): --batch B trains with a constant B structures per batch in every bucket and the
 learning rate scaled by sqrt(B / 8) (the same rule); validation always runs at 16 per batch (per-structure predictions,
-so the batch size only changes padding). The default 16 reproduces the pilot's protocol. Batches above MICRO (64) are
-split into chunks of MICRO structures on the host (batch 256 in the 1,536-residue bucket needs a single 45 GiB
-allocation; chunks of 128 also failed at batch 256, a 21 GiB allocation with prefetched batches resident on the device);
-both objectives are means over the batch's valid structures, so the full-batch value and gradient are the chunk values
-and gradients weighted by (valid structures in chunk / valid in batch). Chunks that
+so the batch size only changes padding). The default 16 reproduces the pilot's protocol. Batches above
+MICRO_RESIDUES / n (n = the bucket's padded residue count) are split on the host into chunks of the largest divisor of
+the batch within that budget (98,304 residue slots = 64 x 1,536, measured at 17.8 GB peak; batch 256 in the 1,536-residue
+bucket needs a single 45 GiB allocation, and 128-chunks failed with prefetched batches resident on the device), so small
+buckets run in large chunks and only the large buckets in chunks of 64. Both objectives are means over the batch's
+valid structures, so the full-batch value and gradient are the chunk values and gradients weighted by (valid
+structures in chunk / valid in batch); the chunk size changes only float summation order. Chunks that
 are pure padding are skipped. One optimizer step per batch, as before.
 
   python -m pkatrain.production_train train RUN [--fraction 0.1] [--batch 16] [--smoke]
@@ -44,7 +46,7 @@ from pathlib import Path
 import numpy as np
 
 from pkabench.runtime import atomic_json, digest
-from .loading import BucketPolicy, DeferredScalars, LoaderConfig, Prefetcher
+from .loading import PRODUCTION_BOUNDS, BucketPolicy, DeferredScalars, LoaderConfig, Prefetcher
 from .production_graphs import output, read
 from .production_loading import MANIFEST, PinderSource, PkpdbSource, normalization, select
 
@@ -56,7 +58,17 @@ ARCHITECTURE = {"width": 44, "ff": 88}
 def lr_scale(batch): return math.sqrt(batch / 8)
 
 
-MICRO = 64
+MICRO_RESIDUES = 64 * 1536
+
+
+def micro_size(batch, residues):
+    """Largest divisor of `batch` whose chunk stays within MICRO_RESIDUES residue slots (at least 1)."""
+    return max([d for d in range(1, batch + 1) if batch % d == 0 and d * residues <= MICRO_RESIDUES] or [1])
+
+
+def chunked(batch):
+    """Whether some bucket needs chunks: batches up to 64 run whole (the pilot's path), larger ones per-bucket chunks."""
+    return batch * max(PRODUCTION_BOUNDS) > MICRO_RESIDUES
 
 
 def run_dir(root, run): return Path(root) / "training/gqt-production-v1/runs" / run
@@ -108,16 +120,17 @@ def to_device(batch):
     return (*jax.device_put((graphs, targets, mask, wb, wi)), metadata, jax.device_put(valid)), jax.device_put(pk)
 
 
-def to_device_chunks(batch, micro=MICRO):
-    """Host batch -> ([(PINDER chunk, valid count)], [(pKPDB chunk, valid count)]) on device; padding-only chunks dropped."""
+def to_device_chunks(batch, micro=None):
+    """Host batch -> ([(PINDER chunk, valid count)], [(pKPDB chunk, valid count)]) on device; padding-only chunks dropped.
+    Chunk size per dataset: `micro` if given, else micro_size(batch, padded residues)."""
     import jax
     pair, pk = batch; graphs, targets, mask, wb, wi, _, valid = pair; pair = (graphs, targets, mask, wb, wi, valid)
 
     def chunks(arrays, valid):
-        out = []
-        for start in range(0, len(valid), micro):
-            count = int(valid[start:start + micro].sum())
-            if count: out.append((jax.device_put(jax.tree.map(lambda x: x[start:start + micro], arrays)), count))
+        size = micro or micro_size(len(valid), arrays[0]["nodes"].shape[-2]); out = []
+        for start in range(0, len(valid), size):
+            count = int(valid[start:start + size].sum())
+            if count: out.append((jax.device_put(jax.tree.map(lambda x: x[start:start + size], arrays)), count))
         return out
     return chunks(pair, valid), chunks(pk, pk[-1])
 
@@ -211,7 +224,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH):
         "selection": "min PINDER validation state MAE + interface paired MAE", "validation": ["PINDER 400 (pKAI)", "benchmark-val 142 (PypKa)"],
         "counts": {"pinder_train": len(select(manifests["pinder"], "train", fraction)), "pkpdb_train": len(select(manifests["pkpdb"], "train", fraction)),
                    "pinder_val": len(select(manifests["pinder"], "val")), "benchmark_val": len(select(manifests["benchmark-val"], "val"))},
-        **({"micro_batch": MICRO, "accumulation": "exact: chunk values/gradients weighted by valid structures"} if batch > MICRO else {}),
+        **({"micro_residues": MICRO_RESIDUES, "accumulation": "exact: per-bucket chunks (largest divisor of the batch within the residue budget), values/gradients weighted by valid structures"} if chunked(batch) else {}),
         "pinder_weight_normalization": norms, "smoke": smoke, "test_data_included": False,
         "manifests": {d: digest(output(root, d) / MANIFEST) for d in manifests}, "code": code_hashes()}
     if (out / "protocol.json").exists():
@@ -238,10 +251,10 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH):
         pair, pk = epoch_plans(manifests, fraction, epoch, batch)
         if smoke: pair, pk = pair[:5], pk[:5]
         specs = list(zip(pair, pk)); deferred = DeferredScalars(every=50); began = time.time()
-        prefetcher = Prefetcher(sources["train"], specs, config, to_device if batch <= MICRO else to_device_chunks)
+        prefetcher = Prefetcher(sources["train"], specs, config, to_device if not chunked(batch) else to_device_chunks)
         for number, (_, (pair_batch, pk_batch)) in enumerate(prefetcher, 1):
             rate = jnp.asarray(scale * learning_rate(epoch, number, len(specs)), jnp.float32)
-            if batch <= MICRO:
+            if not chunked(batch):
                 graphs, targets, mask, wb, wi, _, valid = pair_batch
                 (pair_total, (state_loss, pair_loss)), pair_gradient = engine.paired_value_grad(params, graphs, targets, mask, wb, wi, valid)
                 pk_loss, pk_gradient = engine.pkpdb_value_grad(params, *pk_batch)
