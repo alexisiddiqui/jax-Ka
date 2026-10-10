@@ -1,5 +1,5 @@
-"""Padding spread benchmark (2026-10-10): the same production batches loaded with the zero-fill padding (spread=False)
-and with production_loading.spread_padding (spread=True). Per dataset and bucket (batch 16, real training ids):
+"""Padding spread benchmark (2026-10-10): the same production batches with the zero-fill padding (spread=False) and
+with production_loading.spread_padding applied in mode "own" and "rotate". Per dataset and bucket (batch 16, real training ids):
 gradient-step time (median of 10 after compilation), loss equality, and the relative global-norm gradient
 difference, against a repeat of the zero-fill step (float nondeterminism of the atomics) as the noise floor.
 
@@ -18,7 +18,7 @@ import numpy as np
 from pkanet.ogqt import initialize as initialize_ogqt
 from pkatrain.gqt_multitask_replay import JointEngine
 from pkatrain.production_graphs import output, read
-from pkatrain.production_loading import MANIFEST, PinderSource, PkpdbSource, normalization, select
+from pkatrain.production_loading import MANIFEST, PinderSource, PkpdbSource, normalization, select, spread_padding
 from pkatrain.production_train import ARCHITECTURE, SEED, _with_policy
 
 
@@ -41,14 +41,15 @@ def main():
         manifest = _with_policy(manifests[dataset], args.batch)
         make = (lambda spread: PinderSource(manifest, norms=normalization(manifests["pinder"], 0.1), spread=spread)) if dataset == "pinder" \
             else (lambda spread: PkpdbSource(manifest, spread=spread))
-        sources = {False: make(False), True: make(True)}; policy = sources[False].policy
+        sources = {False: make(False)}; policy = sources[False].policy
         train = select(manifests[dataset], "train", 0.1)
         for bucket in manifests[dataset]["capacities"]:
             ids = [r["id"] for r in train if policy.bucket(r["n"]) == bucket][:args.batch]
             if not ids: continue
             result = {}
-            for spread in (False, True):
-                host = sources[spread].load(ids)
+            base = sources[False].load(ids)
+            for spread in (False, "own", "rotate"):
+                host = base if spread is False else (spread_padding({**base[0]}, spread), *base[1:])
                 if dataset == "pinder":
                     graphs, targets, mask, wb, wi, _, valid = host; device = jax.device_put((graphs, targets, mask, wb, wi, valid))
                     fn = lambda *a: engine.paired_value_grad(params, *a); (value, gradient), seconds = timed(fn, device); loss = value[0]
@@ -59,10 +60,11 @@ def main():
                 if not spread: repeat = flat(fn(*device)[1])
             norm = float(jnp.linalg.norm(result[False][1]))
             row = {"dataset": dataset, "bucket": bucket, "structures": len(ids),
-                   "zero_fill_seconds": result[False][2], "spread_seconds": result[True][2], "speedup": result[False][2] / result[True][2],
-                   "loss_zero_fill": result[False][0], "loss_spread": result[True][0], "loss_equal": result[False][0] == result[True][0],
-                   "grad_rel_diff": float(jnp.linalg.norm(result[False][1] - result[True][1])) / norm,
-                   "grad_rel_diff_repeat_zero_fill": float(jnp.linalg.norm(result[False][1] - repeat)) / norm}
+                   "zero_fill_seconds": result[False][2], "grad_rel_diff_repeat_zero_fill": float(jnp.linalg.norm(result[False][1] - repeat)) / norm}
+            for mode in ("own", "rotate"):
+                row.update({f"{mode}_seconds": result[mode][2], f"{mode}_speedup": result[False][2] / result[mode][2],
+                            f"{mode}_loss_equal": result[False][0] == result[mode][0],
+                            f"{mode}_grad_rel_diff": float(jnp.linalg.norm(result[False][1] - result[mode][1])) / norm})
             rows.append(row); print(json.dumps(row), flush=True)
         for source in sources.values(): source.close()
     Path(args.out).write_text(json.dumps({"batch": args.batch, "device": jax.devices()[0].device_kind, "rows": rows}, indent=1))

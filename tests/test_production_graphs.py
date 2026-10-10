@@ -80,7 +80,7 @@ def test_spread_padding_changes_only_masked_indices():
              "node_mask": np.stack([np.arange(n) < 4] * 2)}
     graph["site_edge_mask"][:, :3, 0] = True; graph["site_neighbors"][:, :3, 0] = [2, 0, 1]
     before = {key: value.copy() for key, value in graph.items()}
-    after = spread_padding(graph)
+    after = spread_padding(graph, mode="own")
     assert np.array_equal(after["neighbors"][edge_mask], before["neighbors"][edge_mask])
     own = np.broadcast_to(np.arange(n)[:, None], (2, n, k))
     assert np.array_equal(after["neighbors"][~edge_mask], own[~edge_mask])
@@ -89,3 +89,15 @@ def test_spread_padding_changes_only_masked_indices():
     assert np.array_equal(after["site_residue"][:, :3], before["site_residue"][:, :3])
     assert np.array_equal(after["site_residue"][:, 3:], [[3, 0], [3, 0]])     # 3 % 4, 4 % 4
     assert after["neighbors"].dtype == np.int32 and after["site_residue"].dtype == np.int32
+
+
+def test_spread_padding_rotate():
+    from pkatrain.production_loading import spread_padding
+    n, k = 5, 3; edge_mask = np.zeros((n, k), bool); edge_mask[0, 0] = True
+    graph = {"neighbors": np.zeros((n, k), np.int32), "edge_mask": edge_mask, "site_neighbors": np.zeros((2, 2), np.int32),
+             "site_edge_mask": np.zeros((2, 2), bool), "site_residue": np.zeros(2, np.int32), "site_mask": np.zeros(2, bool),
+             "node_mask": np.ones(n, bool)}
+    after = spread_padding(graph)
+    assert after["neighbors"][0, 0] == 0 and after["neighbors"][0, 1:].tolist() == [2, 3]
+    assert after["neighbors"][4].tolist() == [0, 1, 2]
+    assert all(len(set(row[~m])) == (~m).sum() for row, m in zip(after["neighbors"], edge_mask))
