@@ -505,7 +505,14 @@ def _epoch_specs(order_pk, order_pi):
     return specs
 
 
-def train_scale(root, mode, objective):
+def train_scale(root, mode, objective, batch_size=None, max_epochs=100):
+    """batch_size/max_epochs other than the registered 256/100 (batch-size sweep, 2026-10-10) use the sqrt learning-rate
+    rule and write to runs/<mode>-<objective>-b<batch>-e<epochs>/; the defaults keep the registered run paths."""
+    global BATCH_SIZE, LEARNING_RATE
+    tag = ""
+    if (batch_size or BATCH_SIZE) != BATCH_SIZE or max_epochs != 100:
+        BATCH_SIZE = int(batch_size or BATCH_SIZE); LEARNING_RATE = REFERENCE_LR * math.sqrt(BATCH_SIZE / REFERENCE_BATCH)
+        tag = f"-b{BATCH_SIZE}-e{max_epochs}"
     from .loading import DeferredScalars, LoaderConfig, Prefetcher
     from .loading_torch import CombinedSource, PackedSiteSource
     if mode not in MODES or objective not in OBJECTIVES: raise ValueError((mode,objective))
@@ -521,12 +528,12 @@ def train_scale(root, mode, objective):
         pi=_arrays(out/"packed/pinder-train",(f"{mode}_ab",f"{mode}_free","target_ab","target_free","w_burial","w_interface"))
         sources["pi"]=PackedSiteSource({"xa":pi[f"{mode}_ab"],"xf":pi[f"{mode}_free"],"ya":pi["target_ab"],"yf":pi["target_free"],"wb":pi["w_burial"],"wi":pi["w_interface"]},config=config)
     train_source=CombinedSource(sources); validation_sources=_validation_sources(torch,root,mode,objective,config)
-    dest=out/"runs"/f"{mode}-{objective}"/f"seed-{SEED}";dest.mkdir(parents=True,exist_ok=True)
-    provenance={"mode":mode,"objective":objective,"seed":SEED,"batch_size":BATCH_SIZE,"learning_rate":LEARNING_RATE,"lr_rule":"1e-6*sqrt(batch/64)","precision":"float32","cpus":2,"initialization":"scratch","packed_verification_sha256":digest(out/"packed/verification.json"),"manifest_sha256":digest(out/"manifest.json"),"test_data_included":False,
+    dest=out/"runs"/f"{mode}-{objective}{tag}"/f"seed-{SEED}";dest.mkdir(parents=True,exist_ok=True)
+    provenance={"mode":mode,"objective":objective,"seed":SEED,"batch_size":BATCH_SIZE,"max_epochs":max_epochs,"learning_rate":LEARNING_RATE,"lr_rule":"1e-6*sqrt(batch/64)","precision":"float32","cpus":2,"initialization":"scratch","packed_verification_sha256":digest(out/"packed/verification.json"),"manifest_sha256":digest(out/"manifest.json"),"test_data_included":False,
                 "loader":{"workers":config.workers,"prefetch":config.prefetch,"train":train_source.provenance(),"validation":{k:v.provenance() for k,v in validation_sources.items()}}}
     atomic_json(dest/"manifest.json",provenance)
     params=list(model.parameters())
-    rng=np.random.default_rng(SEED);best=float("inf");anchor=float("inf");stall=0;history=[];began=time.monotonic();max_epochs=100;patience=8
+    rng=np.random.default_rng(SEED);best=float("inf");anchor=float("inf");stall=0;history=[];began=time.monotonic();patience=8
     for epoch in range(1,max_epochs+1):
         if stall>=patience:break
         model.train();order_pk=rng.permutation(len(pk["target"]));order_pi=rng.permutation(len(pi["target_ab"])) if pi else None
@@ -677,7 +684,8 @@ def main():
     elif action == "prepare": prepare_shard(root, sys.argv[2], int(sys.argv[3]), int(sys.argv[4]))
     elif action == "pack": pack_features(root)
     elif action == "feature-smoke": feature_smoke(root)
-    elif action == "train": train_scale(root, sys.argv[2], sys.argv[3])
+    elif action == "train":
+        train_scale(root, sys.argv[2], sys.argv[3], *(int(v) for v in sys.argv[4:6]))
     else: raise ValueError(action)
 
 
