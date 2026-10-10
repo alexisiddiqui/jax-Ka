@@ -172,3 +172,23 @@ the 1x-2x batch scales (8-16) equivalent on validation. Estimated PINDER epoch t
 - constant 16 per batch: about 190 s;
 - constant 32 per batch: about 172 s.
 Results: `<runtime>/training/gqt-production-v1/calibration-sweep.json`.
+
+## Production joint training (`pkatrain.production_train`)
+
+User decisions (2026-10-10): constant batch of 16 in every bucket; scratch initialisation; the experiment 43 joint
+objective with the 67,725-parameter backbone oGQT; first run on the 10% pool.
+- **Engine:** `gqt_multitask_replay.JointEngine`, unchanged. Each update sums one PINDER gradient (AB/free state-shift
+  MSE + binding-shift MSE) and one pKPDB state-shift gradient (train_mask sites), then one AdamW step (weight decay
+  1e-4, clip 1). Equal coefficients, no site weights.
+- **Sampling:** one pass over the fraction's PINDER complexes per epoch, with one pKPDB batch per PINDER batch from a
+  continuing shuffled pKPDB stream. Plans are deterministic in (seed, epoch), so runs resume from their last checkpoint.
+- **Schedule:** `gqt_crop_radius.learning_rate` (hold 1e-3 through epoch 10, cosine to 1e-5 by epoch 20), scaled by
+  sqrt(16/8) per experiment 45's rule; patience 8.
+- **Validation every epoch:** PINDER 400 (state MAE, interface paired MAE) and benchmark-val 142 (group-macro MAE).
+- **Selection:** lowest PINDER state MAE + interface paired MAE.
+- **Outputs:** `training/gqt-production-v1/runs/<run>/` (protocol, history, checkpoints, selection, predictions of the
+  selected epoch).
+- **Runner:** `$S/_submission/jaxka_gqt_train.sbatch RUN FRACTION` (one GH200, 32 CPUs).
+
+Smoke test (2 epochs x 5 batches, 10% manifests): finite losses; validation improved (selection 1.217 -> 1.172);
+loader wait fraction about 0; validation takes 1.5 s once compiled. The 10% pilot is `runs/pilot-10pct` (job 7215696).
