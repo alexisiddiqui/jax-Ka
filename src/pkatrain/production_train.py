@@ -120,9 +120,10 @@ def to_device(batch):
     return (*jax.device_put((graphs, targets, mask, wb, wi)), metadata, jax.device_put(valid)), jax.device_put(pk)
 
 
-def to_device_chunks(batch, micro=None):
-    """Host batch -> ([(PINDER chunk, valid count)], [(pKPDB chunk, valid count)]) on device; padding-only chunks dropped.
-    Chunk size per dataset: `micro` if given, else micro_size(batch, padded residues)."""
+def host_chunks(batch, micro=None):
+    """Host batch -> ([(PINDER chunk, valid count)], [(pKPDB chunk, valid count)]); padding-only chunks dropped. Chunk
+    size per dataset: `micro` if given, else micro_size(batch, padded residues). Chunks stay on the host and transfer
+    when their step is dispatched: prefetched batches resident on the device ran a batch-256 run out of memory."""
     import jax
     pair, pk = batch; graphs, targets, mask, wb, wi, _, valid = pair; pair = (graphs, targets, mask, wb, wi, valid)
 
@@ -130,7 +131,7 @@ def to_device_chunks(batch, micro=None):
         size = micro or micro_size(len(valid), arrays[0]["nodes"].shape[-2]); out = []
         for start in range(0, len(valid), size):
             count = int(valid[start:start + size].sum())
-            if count: out.append((jax.device_put(jax.tree.map(lambda x: x[start:start + size], arrays)), count))
+            if count: out.append((jax.tree.map(lambda x: x[start:start + size], arrays), count))
         return out
     return chunks(pair, valid), chunks(pk, pk[-1])
 
@@ -251,7 +252,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH):
         pair, pk = epoch_plans(manifests, fraction, epoch, batch)
         if smoke: pair, pk = pair[:5], pk[:5]
         specs = list(zip(pair, pk)); deferred = DeferredScalars(every=50); began = time.time()
-        prefetcher = Prefetcher(sources["train"], specs, config, to_device if not chunked(batch) else to_device_chunks)
+        prefetcher = Prefetcher(sources["train"], specs, config, to_device if not chunked(batch) else host_chunks)
         for number, (_, (pair_batch, pk_batch)) in enumerate(prefetcher, 1):
             rate = jnp.asarray(scale * learning_rate(epoch, number, len(specs)), jnp.float32)
             if not chunked(batch):
