@@ -67,3 +67,25 @@ def test_production_loader_manifest_and_batches(tmp_path, monkeypatch, dataset):
         else: assert np.array_equal(batch[1][slot][:, :q], raw["targets"]) and batch[2][slot][:q].all() and not batch[2][slot][q:].any()
     assert not batch[2][3:].any() and not batch[1][3:].any()  # padded slots carry no supervision
     source.close()
+
+
+def test_spread_padding_changes_only_masked_indices():
+    from pkatrain.production_loading import spread_padding
+    rng = np.random.default_rng(0); n, k, s, sk = 6, 4, 5, 3
+    edge_mask = rng.random((2, n, k)) < 0.5; edge_mask[:, 4:] = False          # two padded nodes, both branches
+    site_mask = np.array([True, True, True, False, False])
+    graph = {"neighbors": np.where(edge_mask, rng.integers(0, 4, (2, n, k)), 0).astype(np.int32), "edge_mask": edge_mask,
+             "site_neighbors": np.zeros((2, s, sk), np.int32), "site_edge_mask": np.zeros((2, s, sk), bool),
+             "site_residue": np.stack([np.array([1, 2, 3, 0, 0], np.int32)] * 2), "site_mask": np.stack([site_mask] * 2),
+             "node_mask": np.stack([np.arange(n) < 4] * 2)}
+    graph["site_edge_mask"][:, :3, 0] = True; graph["site_neighbors"][:, :3, 0] = [2, 0, 1]
+    before = {key: value.copy() for key, value in graph.items()}
+    after = spread_padding(graph)
+    assert np.array_equal(after["neighbors"][edge_mask], before["neighbors"][edge_mask])
+    own = np.broadcast_to(np.arange(n)[:, None], (2, n, k))
+    assert np.array_equal(after["neighbors"][~edge_mask], own[~edge_mask])
+    assert np.array_equal(after["site_neighbors"][:, :3, 0], before["site_neighbors"][:, :3, 0])
+    assert (after["site_neighbors"][:, 3:] == np.arange(3, 5)[:, None]).all()
+    assert np.array_equal(after["site_residue"][:, :3], before["site_residue"][:, :3])
+    assert np.array_equal(after["site_residue"][:, 3:], [[3, 0], [3, 0]])     # 3 % 4, 4 % 4
+    assert after["neighbors"].dtype == np.int32 and after["site_residue"].dtype == np.int32

@@ -11,6 +11,12 @@ mask cleared and valid False, as SiteBatchLoader does), so each bucket compiles 
   graph_data.pad, site graph as site_graph_data.pad_site). The store keeps every mapped site, so `eligible` is the
   store's train_mask (training) or eval_mask (evaluation); sites without a site token (query_site -1, never
   eligible) point at site 0.
+- Padding spread (2026-10-10, spread=True, the default): the zero fill points every masked neighbour slot, every padded
+  node's slots and every padded site at row 0, so the backward scatters of the gathers (Triton atomic_add of dK/dV,
+  XLA scatter-add) all accumulate into one row: 60-77% of residue and 77-91% of site gather indices (padding census,
+  experiment note 07). spread_padding points masked neighbour slots at their own row and padded sites at distinct real
+  residues. Those slots carry zero attention weight and padded tokens zero upstream gradient, so the loss is unchanged
+  and gradients change only in float summation order.
 
 Manifests (<runtime>/training/gqt-production-v1/<dataset>/manifest-v1.json, `manifest` action, built once under
 scripts/sqfs_run.sh because it reads pool-v3.tsv from the dataset image):
@@ -90,6 +96,18 @@ def _pad(value, shape):
     out = np.zeros(shape, value.dtype); out[tuple(slice(0, size) for size in value.shape)] = value; return out
 
 
+def spread_padding(graph):
+    """Masked neighbour slots -> own row (residue and site graphs); padded sites -> residue (index mod real residues).
+    Works on one structure's graph, with or without a leading branch axis."""
+    for index, mask in (("neighbors", "edge_mask"), ("site_neighbors", "site_edge_mask")):
+        value = graph[index]; own = np.broadcast_to(np.arange(value.shape[-2])[:, None], value.shape)
+        graph[index] = np.where(graph[mask].astype(bool), value, own).astype(value.dtype)
+    residue = graph["site_residue"]; real = np.maximum(graph["node_mask"].astype(bool).sum(axis=-1, keepdims=True), 1)
+    spread = np.broadcast_to(np.arange(residue.shape[-1]), residue.shape) % real
+    graph["site_residue"] = np.where(graph["site_mask"].astype(bool), residue, spread).astype(residue.dtype)
+    return graph
+
+
 def _stack(items, batch_size, clear):
     """Stack per-structure tuples; pad to batch_size with copies of the last item whose `clear` positions are zeroed."""
     import jax
@@ -102,8 +120,8 @@ def _stack(items, batch_size, clear):
 
 
 class _Source:
-    def __init__(self, manifest, store_path=None, config: LoaderConfig | None = None):
-        self.manifest = manifest; self.config = config or LoaderConfig()
+    def __init__(self, manifest, store_path=None, config: LoaderConfig | None = None, spread=True):
+        self.manifest = manifest; self.config = config or LoaderConfig(); self.spread = spread
         self.policy = BucketPolicy.from_json(manifest["bucket_policy"])
         self.store = ProductionStore(store_path or os.environ.get(f"PKATRAIN_{manifest['dataset'].upper().replace('-', '_')}_STORE") or manifest["store"])
         if digest(self.store.path / "verification.json") != manifest["store_verification_sha256"]: raise AssertionError("store differs from manifest")
@@ -121,25 +139,28 @@ class _Source:
 
     def provenance(self):
         return {"source": self.__class__.__name__, "store": str(self.store.path),
-                "workers": self.config.workers, "buckets": self.policy.to_json()}
+                "workers": self.config.workers, "buckets": self.policy.to_json(), "spread_padding": self.spread}
 
 
 class PinderSource(_Source):
-    def __init__(self, manifest, store_path=None, config=None, fraction=1.0, norms=None):
-        super().__init__(manifest, store_path, config); self.norms = norms or normalization(manifest, fraction)
+    def __init__(self, manifest, store_path=None, config=None, fraction=1.0, norms=None, spread=True):
+        super().__init__(manifest, store_path, config, spread); self.norms = norms or normalization(manifest, fraction)
 
     def load(self, ids):
         from .gqt_paired_pinder import _load_one
         rows, bucket, capacity = self._bucket(ids)
-        items = list(self.pool.map(lambda row: _load_one(self.store.raw(row["id"]), row, capacity, self.norms), rows))
+        def one(row):
+            graph, *rest = _load_one(self.store.raw(row["id"]), row, capacity, self.norms)
+            return (spread_padding(graph) if self.spread else graph, *rest)
+        items = list(self.pool.map(one, rows))
         # clear: targets(1), mask(2), burial(3), interface(4); graphs/metadata stay as copies of a real structure
         return _stack(items, self.policy.batch_size(bucket), clear=(1, 2, 3, 4))
 
 
 class PkpdbSource(_Source):
-    def __init__(self, manifest, store_path=None, config=None, mask="train_mask"):
+    def __init__(self, manifest, store_path=None, config=None, mask="train_mask", spread=True):
         if mask not in ("train_mask", "eval_mask"): raise ValueError(mask)
-        super().__init__(manifest, store_path, config); self.mask = mask
+        super().__init__(manifest, store_path, config, spread); self.mask = mask
 
     def _one(self, row, capacity):
         n, k, q, s, sk = capacity; raw = self.store.raw(row["id"])
@@ -149,6 +170,7 @@ class PkpdbSource(_Source):
                   "site_switch": (s, sk), "query_site": (q,)}
         graph = {name: _pad(raw[name], shapes[name]) for name in RESIDUE_FIELDS + SITE_FIELDS}
         graph["query_site"] = np.maximum(graph["query_site"], 0)
+        if self.spread: graph = spread_padding(graph)
         return graph, _pad(raw["labels"], (q,)), _pad(raw[self.mask], (q,))
 
     def load(self, ids):
