@@ -18,13 +18,14 @@ def native():
 
 
 # Neighbour-slot encodings: "atom16" is native pKAI (16 functional-atom classes per slot, 4,008 inputs); "aa20" puts a
-# 20-amino-acid one-hot of the neighbour atom's residue in each slot instead (5,008 inputs; 2026-10-10). Both keep the
-# 250 nearest environment atoms by distance, the 1/d^2 value and the 8-class site one-hot.
+# 20-amino-acid one-hot of the neighbour atom's residue in each slot instead (5,008 inputs); "atom16aa20" keeps both,
+# the 16 atom classes then the 20 residue types (36 per slot, 9,008 inputs), in the native slot order (2026-10-10).
+# All keep the 250 nearest environment atoms by distance, the 1/d^2 value and the 8-class site one-hot.
 AA20 = ("ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
         "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL")
 AA20_ALIASES = {"MSE": "MET", "SEP": "SER", "TPO": "THR", "PTR": "TYR", "HID": "HIS", "HIE": "HIS", "HIP": "HIS",
                 "HSD": "HIS", "HSE": "HIS", "HSP": "HIS", "CYX": "CYS", "ASH": "ASP", "GLH": "GLU", "LYN": "LYS"}
-SLOT_WIDTH = {"atom16": 16, "aa20": 20}
+SLOT_WIDTH = {"atom16": 16, "aa20": 20, "atom16aa20": 36}
 
 
 def feature_width(encoding="atom16"):
@@ -56,6 +57,11 @@ def feature_matrix(protein, encoding="atom16"):
                 r.encode_atoms()
                 order=sorted(zip(distances[ids],r.env_oheclasses))[:250]
                 for j,(distance,cls) in enumerate(order):matrix[i,j*16+ATOM_OHE.index(cls)]=1/(float(distance)**2)
+            elif encoding=="atom16aa20":
+                r.encode_atoms()
+                order=sorted(zip(distances[ids],r.env_oheclasses,[aa20_index(name) for name in r.env_resnames]))[:250]
+                for j,(distance,cls,aa) in enumerate(order):
+                    matrix[i,j*slot+ATOM_OHE.index(cls)]=matrix[i,j*slot+16+aa]=1/(float(distance)**2)
             else:
                 order=sorted(zip(distances[ids],[aa20_index(name) for name in r.env_resnames]))[:250]
                 for j,(distance,cls) in enumerate(order):matrix[i,j*slot+cls]=1/(float(distance)**2)
