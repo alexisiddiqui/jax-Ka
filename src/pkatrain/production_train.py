@@ -193,15 +193,30 @@ def _write(path, rows):
         writer = csv.DictWriter(handle, fieldnames=list(rows[0])); writer.writeheader(); writer.writerows(rows)
 
 
+def squared_errors(pair_rows, bench_rows):
+    """Validation MSEs on the training losses' scales (2026-10-10): PINDER state (mean over AB/free of the squared error),
+    paired (squared error of the AB - free shift), interface paired; benchmark shift MSE per site and macro over
+    component groups. Site-level means; the training losses average per structure first."""
+    from collections import defaultdict
+    state = [((r["predicted_ab"] - r["teacher_ab"]) ** 2 + (r["predicted_free"] - r["teacher_free"]) ** 2) / 2 for r in pair_rows]
+    paired = [r["paired_error"] ** 2 for r in pair_rows]; interface = [r["paired_error"] ** 2 for r in pair_rows if r["interface"]]
+    groups = defaultdict(list)
+    for r in bench_rows: groups[r["component_id"]].append((r["predicted_shift"] - r["teacher_shift"]) ** 2)
+    return ({"state_mse": float(np.mean(state)), "paired_mse": float(np.mean(paired)), "interface_paired_mse": float(np.mean(interface))},
+            {"site_mse": float(np.mean([v for g in groups.values() for v in g])), "group_macro_mse": float(np.mean([np.mean(g) for g in groups.values()])),
+             "site_mae": float(np.mean([abs(r["predicted_shift"] - r["teacher_shift"]) for r in bench_rows]))})
+
+
 def validate(engine, predict, params, sources, manifests, config, out=None, epoch=None):
     from .gqt_paired_pinder import _metrics
     from .gqt_site_weighting import metrics_from_rows
     pair_rows = _pinder_rows(engine, params, sources["pinder-val"], select(manifests["pinder"], "val"), config)
     bench_rows = _benchmark_rows(predict, params, sources["benchmark"], select(manifests["benchmark-val"], "val"), config)
     pinder = _metrics(pair_rows); overall, bins, equal_bin = metrics_from_rows(bench_rows)
+    pinder_squared, bench_squared = squared_errors(pair_rows, bench_rows); pinder.update(pinder_squared)
     if out is not None:
         _write(out / f"predictions-pinder-epoch-{epoch:03d}.csv", pair_rows); _write(out / f"predictions-benchmark-epoch-{epoch:03d}.csv", bench_rows)
-    return {"pinder": pinder, "benchmark": {"overall": overall, "bins": bins, "equal_bin_mae": equal_bin},
+    return {"pinder": pinder, "benchmark": {"overall": overall, "bins": bins, "equal_bin_mae": equal_bin, **bench_squared},
             "selection": pinder["state_mae"] + pinder["interface_paired_mae"]}
 
 
@@ -324,9 +339,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="pkatrain.production_train"); sub = parser.add_subparsers(dest="action", required=True)
     p = sub.add_parser("train"); p.add_argument("run"); p.add_argument("--fraction", type=float, default=0.1); p.add_argument("--batch", type=int, default=BATCH)
     p.add_argument("--smoke", action="store_true")
-    p = sub.add_parser("rescore"); p.add_argument("run")
+    p = sub.add_parser("rescore"); p.add_argument("runs", nargs="+")
     args = parser.parse_args(argv); root = Path(os.environ["PKABENCH_RUNTIME"])
-    if args.action == "rescore": rescore(root, args.run); return
+    if args.action == "rescore":
+        for run in args.runs: rescore(root, run)
+        return
     if args.action == "train":
         result = train(root, args.run, args.fraction, args.smoke, args.batch)
         print(json.dumps({"selected_epoch": result["selected_epoch"], "selection": result["validation"]["selection"]}))
