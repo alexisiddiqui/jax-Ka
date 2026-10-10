@@ -109,4 +109,63 @@ float32 (`native-pkai-validation.json`).
 - All-atom features improve from 10% to 50% on every metric. Joint training beats pKPDB-only at both fractions (50%:
   pKPDB 0.314 vs 0.383; PINDER paired 0.022 vs 0.029), and the 50% joint model edges past the released pKAI on pKPDB.
 - Backbone features do not improve with more data (about 1.08-1.10 pKPDB MSE), and joint training changes little.
-- Training sites: pKPDB 154,539 (10%) and 872,450 (50%). 75% and 100% are running (jobs 7212900-7212915).
+- Training sites: pKPDB 154,539 (10%) and 872,450 (50%).
+
+### 75% and 100% (atom16)
+
+| Arm | 10% | 50% | 75% | 100% |
+|---|---:|---:|---:|---:|
+| All-atom, joint: pKPDB val MSE | 0.357 | 0.314 | 0.309 | 0.305 |
+| All-atom, joint: PINDER state / paired | 0.077 / 0.030 | 0.055 / 0.022 | 0.050 / 0.021 | 0.048 / 0.020 |
+| All-atom, pKPDB-only: pKPDB val MSE | 0.405 | 0.383 | 0.381 | 0.381 |
+| Backbone, joint: pKPDB val MSE | 1.077 | 1.088 | 1.077 | 1.066 |
+| Backbone, pKPDB-only: pKPDB val MSE | 1.075 | 1.104 | 1.078 | 1.075 |
+
+- The all-atom joint model improves at every fraction with shrinking gains (0.044, 0.005, 0.004); at 100% it beats the
+  released pKAI on pKPDB validation (0.305 vs 0.324). The pKPDB-only model plateaus from 50% (0.38).
+- Training sites at 75% / 100%: pKPDB 1,306,448 / 1,724,738; PINDER 1,337,559 / 1,793,175. Exclusions 230 + 61 /
+  315 + 70 records (all of the recorded kinds).
+- The 100% joint arms do not fit on the GPU (about 170 GB of packed features), so `PackedSiteSource` streams them from
+  Lustre: loader wait about 25% (flagged, criterion 5%), about 17 min per arm. Staging to node-local `/tmp` (334 GB
+  tmpfs) would remove the wait if 100% runs become routine.
+
+## Neighbour-slot encodings: 20 amino acids and combined (2026-10-10)
+
+Native pKAI fills each of its 250 neighbour slots (nearest N/O/S environment atoms within 15 A, by distance) with a
+16-class functional-atom one-hot holding 1/d^2, plus an 8-class site one-hot (4,008 inputs). Two alternatives
+(`pkai_scratch.feature_matrix(protein, encoding)`, `pkai_backbone_pinder_eval._features(..., encoding)`, exp 48
+`PKAI_ENCODING`; the defaults are unchanged):
+- `aa20`: a 20-amino-acid one-hot of the neighbour atom's residue instead of the atom class (5,008 inputs). Terminal
+  atoms take their residue's amino acid; common modified residues map to their parent (MSE->MET etc.); anything else
+  would be a recorded exclusion (none occurred).
+- `atom16aa20`: both, the 16 atom classes then the 20 residue types in each slot (9,008 inputs), in the native slot
+  order. Its atom-class half is bit-identical to `atom16` (checked on training records and the whole validation set).
+
+The first layer widens to the input size (training from scratch). The pKPDB validation rows were re-encoded from the
+5k-pilot `input.pdb` files (`build-validation <encoding>`, packages `pretraining/pkpdb-val-pkai-<encoding>-v1`); the
+same builder in `atom16` reproduces `pkpdb-val-pkai-v1` exactly. The data are otherwise identical (same records, sites
+and exclusions). Batch 4,096, LR 8e-6, cap 400.
+
+| Arm | Fraction | atom16 | aa20 | atom16aa20 |
+|---|---|---:|---:|---:|
+| Backbone, pKPDB-only: pKPDB val MSE | 10% / 50% | 1.075 / 1.104 | 1.017 / 0.999 | 0.996 / 0.968 |
+| Backbone, joint: pKPDB val MSE | 10% / 50% | 1.077 / 1.088 | 0.999 / 0.986 | 0.977 / 0.955 |
+| Backbone, joint: PINDER state MSE | 10% / 50% | 0.847 / 0.840 | 0.736 / 0.678 | 0.734 / 0.663 |
+| Backbone, joint: PINDER paired MSE | 10% / 50% | 0.205 / 0.205 | 0.192 / 0.183 | 0.193 / 0.183 |
+| All-atom, pKPDB-only: pKPDB val MSE | 10% / 50% | 0.405 / 0.383 | 0.592 / 0.543 | 0.418 / 0.389 |
+| All-atom, joint: pKPDB val MSE | 10% / 50% | 0.357 / 0.314 | 0.543 / 0.509 | 0.373 / 0.311 |
+| All-atom, joint: PINDER state MSE | 10% / 50% | 0.077 / 0.055 | 0.250 / 0.217 | 0.086 / 0.059 |
+| All-atom, joint: PINDER paired MSE | 10% / 50% | 0.030 / 0.022 | 0.063 / 0.053 | 0.033 / 0.023 |
+
+- Backbone: residue identity helps (the backbone slots only ever held N or O). Combined is best, about 12% below atom16
+  on pKPDB and 21% on PINDER state at 50%, and unlike atom16 it improves from 10% to 50%.
+- All-atom: residue identity alone loses the atom type (e.g. backbone O vs carboxylate O) and is much worse. Combined
+  is close to atom16: behind at 10%, level at 50% on pKPDB (0.311 vs 0.314) and slightly behind on PINDER. The residue
+  types add little once atom classes are present.
+- Joint beats pKPDB-only under every encoding.
+- The combined 50% joint arms stream their features (about 190 GB; loader wait about 55%, 15-21 min); peak GPU
+  allocation 32 GB.
+
+Isambard file limit: per-record feature files are archived into `features/<dataset>.tar` (+ `.tar.json`) after packing
+(`$S/_submission/jaxka_pkai_archive_features.sbatch`; about 338k files so far). Nested fractions can share one
+`features/` (the combined 10% run links to the 50% one), since `pack` now selects only the run's registered records.
