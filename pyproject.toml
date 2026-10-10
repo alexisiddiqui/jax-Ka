@@ -18,6 +18,8 @@ benchmark = ["pyarrow>=20,<21"]
 solver = ["optimistix>=0.0.10", "lineax>=0.0.7", "equinox>=0.11"]
 train = ["optimistix>=0.0.10", "lineax>=0.0.7", "equinox>=0.11", "optax>=0.2.5", "pyarrow>=20", "filelock>=3.16"]
 triton = ["jax-triton==0.3.0", "triton==3.3.0"]
+# native pKAI (experiment 48 and the pKAI evaluations); torch pins its own triton, so install into a separate venv
+pkai = ["torch>=2.7"]
 mps = [
   "jax==0.11.1; python_version >= '3.12'",
   "jaxlib==0.11.1; python_version >= '3.12'",
@@ -27,6 +29,17 @@ mps = [
 [project.scripts]
 jaxpropka = "jaxpropka.cli:main"
 pkabench = "pkabench.cli:main"
+
+[tool.uv]
+conflicts = [[{ extra = "pkai" }, { extra = "triton" }]]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu128", extra = "pkai" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
