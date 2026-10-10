@@ -892,12 +892,13 @@ def export(root, run, destination=None):
     if manifest.get("feature_encoding", "atom16") != ENCODING:
         raise ValueError("PKAI_ENCODING differs from the checkpoint manifest")
     mode = manifest["mode"]
-    if mode not in MODES or (CUTOFF, SLOTS) != (15.0, 250):
-        raise ValueError("released pKAI exports require full/backbone, 15 A / 250-slot features")
+    if mode not in MODES or (CUTOFF, SLOTS) not in ((15.0, 250), (20.0, 540)):
+        raise ValueError("released pKAI exports require full/backbone with 15 A / 250 or 20 A / 540 slots")
     if ENCODING not in ("atom16", "atom16aa20"):
         raise ValueError("released pKAI supports atom16 and atom16aa20 exports")
     name = "pKAI-joint" if ENCODING == "atom16" else "pKAI-joint-aa20"
     if mode == "backbone": name += "-backbone"
+    name += GEOMETRY
     destination = Path(destination) if destination else run / f"{name}_model.pt"
     destination.parent.mkdir(parents=True, exist_ok=True)
     # Generate the comparison using the actual rescore action, rather than rounded training-log metrics.
@@ -954,6 +955,7 @@ def export(root, run, destination=None):
         Path(pending).unlink(missing_ok=True)
     import subprocess
     report = {"passed": True, "model_name": name, "run": str(run), "encoding": ENCODING, "mode": mode,
+              "cutoff_angstrom": CUTOFF, "slots": SLOTS, "geometry": GEOMETRY or "r15s250",
               "input_width": WIDTH, "forward_output_shape": ["batch"] + ([1] if reference_shape == (2, 1) else []),
               "rescore_pkpdb_mse": baseline["pkpdb_mse"], "export_pkpdb_mse": metrics["pkpdb_mse"],
               "mse_absolute_error": error, "prediction_max_absolute_error": max_error, "tolerance": 1e-6,
