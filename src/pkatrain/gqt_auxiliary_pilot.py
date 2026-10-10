@@ -200,7 +200,7 @@ def _cosine(a, b):
 
 
 class AuxiliaryEngine:
-    def __init__(self, params, alpha, lambdas):
+    def __init__(self, params, alpha, lambdas, *, predict_fn=predict_multi):
         self.alpha = float(alpha); self.lambdas = dict(lambdas)
         self.optimizer = optax.chain(optax.clip_by_global_norm(1.0),
             optax.adamw(1.0, weight_decay=1e-4, mask=decay_mask(params)))
@@ -208,7 +208,7 @@ class AuxiliaryEngine:
         def predictions(p, graphs):
             batch, branches = graphs["nodes"].shape[:2]
             flat = jax.tree.map(lambda value: value.reshape((batch * branches,) + value.shape[2:]), graphs)
-            values = jax.vmap(predict_multi, in_axes=(None, 0))(p, flat)
+            values = jax.vmap(predict_fn, in_axes=(None, 0))(p, flat)
             return {name: value.reshape(batch, branches, -1) for name, value in values.items()}
 
         def losses(p, graphs, targets, mask, burial, interface, valid):
