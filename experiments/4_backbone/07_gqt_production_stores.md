@@ -569,3 +569,47 @@ draw their own. Objectives, optimizer and schedule as JointEngine; validation wi
   benchmark MAE also improves (0.557 to 0.535). The interface gain seen at 10% does not appear at 50%.
 - Cost: 50% epochs take 64 s default and 67-70 s with dropout. Train loss is higher with dropout, as expected.
 - Production default changed to dropout 0.1 is a decision for the 100% run; rate not tuned (0.1 only).
+
+### Auxiliary target audit: ordinal burial and additive interface contacts (2026-10-10)
+
+Data for replacing the exp 47 regression heads (MSE on normalised `w_burial` / `w_interface`) with ordinal BCE targets.
+`scripts/auxiliary_target_audit.py` on 3,000 random pool-v4 training structures per dataset (154,477 labelled PINDER
+sites, 83,052 pKPDB train_mask sites; Isambard job 7241362), summarised by `scripts/auxiliary_target_report.py`.
+Output: `audits/auxiliary-targets-v1/{sample,report}.json`.
+
+**Burial (free-state RSA).** Quartiles 0.22 / 0.39 / 0.54 (PINDER free), 0.20 / 0.37 / 0.53 (pKPDB); under 1% of
+sites have RSA > 1. Mean |pKa - PKPDB_PK_MOD| falls steeply with RSA:
+
+| RSA | PINDER share | PINDER mean abs shift | pKPDB share | pKPDB mean abs shift |
+|---|---:|---:|---:|---:|
+| < 0.05 | 7.7% | 2.77 | 8.6% | 3.15 |
+| 0.05-0.1 | 4.6% | 1.75 | 5.2% | 2.01 |
+| 0.1-0.2 | 10.2% | 1.22 | 11.1% | 1.44 |
+| 0.2-0.3 | 12.9% | 0.84 | 13.4% | 0.99 |
+| 0.3-0.4 | 15.9% | 0.60 | 16.1% | 0.72 |
+| 0.4-0.5 | 17.3% | 0.43 | 16.5% | 0.56 |
+| 0.5-0.6 | 14.7% | 0.34 | 13.4% | 0.42 |
+| 0.6-0.8 | 14.0% | 0.23 | 13.6% | 0.27 |
+| >= 0.8 | 2.7% | 0.20 | 2.1% | 0.23 |
+
+Spearman(1 - clip(RSA), abs shift) = 0.61 (PINDER), 0.63 (pKPDB).
+
+**Interface contacts.** Per labelled PINDER site, the residue-level minimum heavy-atom distance from the site residue
+to every partner-chain residue within 10 A of AB.cif.gz. The minimum reproduces `partner_distance_A` to 0.005 A (30 of
+41,174 sites stored at exactly 10.0 A fall outside by rounding). 26.6% of sites have a partner residue within 10 A.
+Scores sum f(d) over those partner residues; plateau(L) = min(1, exp(-(d - 4) / L)), the `w_interface` shape per residue.
+
+| Score | Share > 0 / 0.5 / 1 / 2 / 4 / 8 | Mean abs(AB - free) per band (<=0, 0-0.5, ..., >8) | Spearman, sites within 10 A | AUROC abs delta > 0.5 |
+|---|---|---|---:|---:|
+| plateau L = 1.5 | 26.6 / 14.4 / 11.2 / 7.5 / 3.3 / 0.34% | 0.005, 0.10, 0.21, 0.41, 0.67, 1.15, 1.85 | 0.636 | 0.965 |
+| **plateau L = 3** | 26.6 / 20.9 / 17.0 / 12.1 / 6.9 / 1.7% | 0.005, 0.07, 0.11, 0.18, 0.39, 0.77, 1.47 | 0.630 | 0.964 |
+| plateau L = 5 | 26.6 / 23.1 / 20.2 / 15.7 / 9.9 / 3.7% | 0.005, 0.07, 0.09, 0.13, 0.24, 0.54, 1.19 | 0.622 | 0.963 |
+| exp(-d / 3) | 26.6 / 12.6 / 7.7 / 2.5 / 0.15 / 0.0% | 0.005, 0.11, 0.35, 0.69, 1.31, 2.03, - | 0.634 | 0.965 |
+| exp(-d / 5) | 26.6 / 19.6 / 14.9 / 9.1 / 3.1 / 0.2% | 0.005, 0.08, 0.14, 0.27, 0.59, 1.21, 1.97 | 0.624 | 0.964 |
+| count <= 4.5 A | 9.6 / 9.6 / 5.6 / 3.3 / 0.8 / 0.02% | | 0.578 | 0.890 |
+| count <= 10 A | 26.6 / 26.6 / 22.6 / 19.9 / 15.5 / 9.0% | | 0.601 | 0.960 |
+
+Nearest partner distance alone ranks abs(AB - free) about as well (Spearman 0.851 over all sites, AUROC 0.966), so the
+decay length barely changes ranking; it decides how the 0-8 thresholds populate. With plateau L = 3 every threshold
+holds at least 1.7% of sites and the mean shift roughly doubles per band, matching the doubling thresholds; L = 1.5 and
+the pure exponentials leave the top thresholds nearly empty, and plain counts separate worse.
