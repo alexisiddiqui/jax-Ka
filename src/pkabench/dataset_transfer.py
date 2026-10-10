@@ -23,7 +23,7 @@ Usage (compute node):
   python -m pkabench.dataset_transfer squash OUT/<dataset>-bundle.json ROOT [--mksquashfs PATH] [--replace]
   scripts/sqfs_run.sh python -m pkabench.dataset_transfer verify OUT/<dataset>-bundle.json ROOT
   python -m pkabench.dataset_transfer squash-dir PREFIX NAME            (a verified directory -> images/NAME.sqfs)
-  scripts/sqfs_run.sh python -m pkabench.dataset_transfer verify-dir /tmp/$USER-sqfs/NAME
+  scripts/sqfs_run.sh python -m pkabench.dataset_transfer verify-dir /tmp/$USER-sqfs/NAME [--against ROOT/PREFIX]
   python -m pkabench.dataset_transfer link-dir PREFIX NAME              (PREFIX -> the mount point)
   python -m pkabench.dataset_transfer stage SOURCE_STORE --local /tmp/$USER-stores
 """
@@ -531,6 +531,37 @@ def verify_dir(path, workers=4):
     return {"files": len(tasks), "bad": bad, "passed": not bad}
 
 
+RANGE_BYTES = 256 << 20
+
+
+def _compare_range(task):
+    a, b, start, length = task
+    with open(a, "rb") as x, open(b, "rb") as y:
+        x.seek(start); y.seek(start); remaining = length
+        while remaining:
+            n = min(CHUNK, remaining); u = x.read(n); v = y.read(n)
+            if u != v or len(u) != n: return f"{Path(a).name}@{start + length - remaining}"
+            remaining -= n
+    return None
+
+
+def compare_dir(mounted, source, workers=4):
+    """Byte-compare every file of `source` (a directory whose verification.json passed) with the mounted image,
+    in RANGE_BYTES ranges across `workers` processes, so one huge file is still read in parallel (squashfuse
+    decompresses concurrent reads on several threads)."""
+    mounted = Path(mounted); source = Path(source)
+    names = sorted(p.name for p in source.iterdir() if p.is_file())
+    if sorted(p.name for p in mounted.iterdir()) != names: return {"passed": False, "bad": ["file list differs"]}
+    tasks = []
+    for name in names:
+        size = (source / name).stat().st_size
+        if (mounted / name).stat().st_size != size: return {"passed": False, "bad": [f"{name}: size"]}
+        tasks += [(str(mounted / name), str(source / name), start, min(RANGE_BYTES, size - start)) for start in range(0, size, RANGE_BYTES)]
+    with concurrent.futures.ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("spawn")) as pool:
+        bad = [r for r in pool.map(_compare_range, tasks) if r]
+    return {"files": len(names), "ranges": len(tasks), "bytes": sum(t[3] for t in tasks), "bad": bad, "passed": not bad}
+
+
 def link_dir(root, prefix, name):
     """Replace root/<prefix> by a symlink to the mount point of images/<name>.sqfs (after verify-dir passed)."""
     root = Path(root); marker = root / "images" / f"{name}.sqfs.json"
@@ -578,7 +609,7 @@ def main(argv=None):
     p.add_argument("--mksquashfs", default=os.environ.get("PKABENCH_MKSQUASHFS", "mksquashfs")); p.add_argument("--replace", action="store_true")
     p = sub.add_parser("squash-dir"); p.add_argument("prefix"); p.add_argument("name")
     p.add_argument("--mksquashfs", default=os.environ.get("PKABENCH_MKSQUASHFS", "mksquashfs"))
-    p = sub.add_parser("verify-dir"); p.add_argument("path")
+    p = sub.add_parser("verify-dir"); p.add_argument("path"); p.add_argument("--against")
     p = sub.add_parser("link-dir"); p.add_argument("prefix"); p.add_argument("name")
     p = sub.add_parser("stage"); p.add_argument("source"); p.add_argument("--local", required=True)
     sub.add_parser("build-validation")
@@ -597,7 +628,8 @@ def main(argv=None):
     elif args.action == "squash-dir":
         print(squash_dir(runtime, args.prefix, args.name, mksquashfs=args.mksquashfs, processors=workers))
     elif args.action == "verify-dir":
-        report = verify_dir(args.path, workers); print(json.dumps({**report, "bad": report["bad"][:20]}))
+        report = compare_dir(args.path, args.against, workers) if args.against else verify_dir(args.path, workers)
+        print(json.dumps({**report, "bad": report["bad"][:20]}))
         if not report["passed"]: raise SystemExit(1)
     elif args.action == "link-dir": link_dir(runtime, args.prefix, args.name); print("linked")
     elif args.action == "stage": print(stage(args.source, args.local))
