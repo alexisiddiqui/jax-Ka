@@ -432,3 +432,39 @@ selection stay unweighted. Run `gqt-production-v2/runs/pilot-10pct-winterface` (
   pKPDB or benchmark error. The interface MSE gain is outside the validation-sampling CI; the MAE and selection gains
   are borderline.
 - One seed each. The CIs cover only which validation complexes were sampled, not seed-to-seed variation.
+
+### Query norm x paired weighting, two seeds, 10% pool (2026-10-10)
+
+2 x 2 x 2: site-token query attention with the shared query/context LayerNorm (default) or separate affine parameters
+(`--query-norm separate`: `query_context_norm`, initialised as query `norm1`; `production_train.VariantEngine`, checked
+to reproduce `JointEngine` at initialisation: identical losses, gradients equal to 3e-7) x unweighted or
+`w_interface`-weighted paired loss x seeds 17 and 29 (initialisation and batch order). Batch 16; about 6-7 min per run.
+Runs `gqt-production-v2/runs/pilot-10pct[-winterface][-qsep...][-s29]`.
+
+| Norm | Paired loss | Seed | Epoch | Selection | State MAE | Interface paired MAE | Interface paired MSE | pKPDB val MAE | Benchmark MAE |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| shared | unweighted | 17 | 17 | 0.7375 | 0.4730 | 0.2644 | 0.2525 | 0.5572 | 0.5728 |
+| shared | unweighted | 29 | 17 | 0.7355 | 0.4694 | 0.2660 | 0.2558 | 0.5598 | 0.5790 |
+| shared | interface | 17 | 17 | 0.7317 | 0.4712 | 0.2605 | 0.2407 | 0.5548 | 0.5747 |
+| shared | interface | 29 | 17 | 0.7414 | 0.4736 | 0.2678 | 0.2615 | 0.5623 | 0.5832 |
+| separate | unweighted | 17 | 17 | 0.7413 | 0.4733 | 0.2680 | 0.2583 | 0.5559 | 0.5678 |
+| separate | unweighted | 29 | 16 | 0.7397 | 0.4731 | 0.2667 | 0.2629 | 0.5622 | 0.5825 |
+| separate | interface | 17 | 17 | 0.7343 | 0.4731 | 0.2612 | 0.2465 | 0.5589 | 0.5800 |
+| separate | interface | 29 | 15 | 0.7435 | 0.4759 | 0.2677 | 0.2532 | 0.5640 | 0.5872 |
+
+Main effects (mean over seeds and the other factor; 95% complex-bootstrap CI over the 800 PINDER validation complexes):
+
+| Effect | Selection | State MAE | Interface paired MAE | Interface paired MSE |
+|---|---|---|---|---|
+| separate - shared | +0.0032 (+0.0008, +0.0055) | +0.0020 (+0.0008, +0.0032) | +0.0012 (-0.0007, +0.0030) | +0.0026 (-0.0027, +0.0077) |
+| interface - unweighted | -0.0007 (-0.0044, +0.0027) | +0.0012 (-0.0006, +0.0031) | -0.0020 (-0.0047, +0.0009) | -0.0069 (-0.0133, -0.0006) |
+
+- Seeds differ by about 0.004 in mean selection (17: 0.7362, 29: 0.7400), as large as either effect; the bootstrap
+  intervals cover validation sampling only, not seed variation.
+- The seed-17 interface-weighting gain did not repeat at seed 29 (shared: -0.0058 at seed 17, +0.0059 at seed 29).
+  Averaged, weighting lowers interface paired MSE slightly and leaves selection unchanged.
+- Separate query/context norms are slightly worse here (mostly state MAE), unlike the earlier three-seed test
+  (`training/ogqt-query-norm-v1`, -0.0022 selection), which used the auxiliary objective, a warmup with the norm split
+  afterwards, and the old 400-complex validation set.
+- Weighting x norm interaction on selection: -0.0017.
+- Neither change is adopted from this evidence: the default (shared norm, unweighted paired loss) is kept.
