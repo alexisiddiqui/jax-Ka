@@ -848,27 +848,28 @@ def train_scale(root, mode, objective, batch_size=None, max_epochs=100, learning
 
 def rescore(root, runs):
     """Re-run the default validation (with the interface paired metrics) on saved best.pt checkpoints of this
-    encoding/geometry: runs are seed directories (runs/<arm>/seed-17), or "reference" for the released pKAI model
-    (atom16, 15 A, all-atom features). Writes validation-v2.json beside each checkpoint (reference:
-    training/pkai-features-v2/reference-pkai-validation.json)."""
+    encoding/geometry: runs are seed directories (runs/<arm>/seed-17), or "reference" / "reference-plus" for the
+    released pKAI / pKAI+ models (atom16, 15 A, all-atom features). Writes validation-v2.json beside each checkpoint
+    (references: training/pkai-features-v2/atom16/reference-pkai[+]-validation.json)."""
     from .loading import LoaderConfig
     torch, package = native(); require_compute(threads=2, gpu_benchmark=True, allow_comp1400=True); torch.set_num_threads(2)
     root = Path(root); config = LoaderConfig(); store = FeatureStore(feature_root(root, "pinder") / "store")
     selection = {"pinder-val": {"dataset": "pinder", "names": [n for n in store.names if n.startswith("val-")]}}; store.close()
     for run in runs:
-        if run == "reference":
+        released_names = {"reference": "pKAI", "reference-plus": "pKAI+"}
+        if run in released_names:
             if ENCODING != "atom16" or GEOMETRY: raise ValueError("the released model takes atom16 15 A features")
-            mode = "full"; released = torch.jit.load(str(package / "models/pKAI_model.pt"), map_location="cuda").eval()
+            mode = "full"; released = torch.jit.load(str(package / f"models/{released_names[run]}_model.pt"), map_location="cuda").eval()
             class Released(torch.nn.Module):
                 def __init__(self): super().__init__(); self.inner = released
                 def forward(self, x): return self.inner(x).reshape(-1)
-            forward = Released(); dest = feature_root(root, "pinder").parent / "reference-pkai-validation.json"
+            forward = Released(); dest = feature_root(root, "pinder").parent / f"reference-{released_names[run].lower()}-validation.json"
         else:
             run = Path(run); manifest = read(run / "manifest.json"); mode = manifest["mode"]
             net = model_class(torch, inputs=WIDTH)().cuda(); net.load_state_dict(torch.load(run / "best.pt", map_location="cuda")); net.eval()
             forward = net; dest = run / "validation-v2.json"
         sources = _validation_sources(torch, root, mode, "joint", config, selection)
-        metrics = _validation(torch, forward, sources, config, "pkpdb" if run != "reference" and manifest["objective"] == "pkpdb" else "joint")
+        metrics = _validation(torch, forward, sources, config, "pkpdb" if run not in released_names and manifest["objective"] == "pkpdb" else "joint")
         for source in sources.values(): source.close()
         atomic_json(dest, {"run": str(run), "mode": mode, "encoding": ENCODING, "geometry": GEOMETRY or "r15s250", **metrics})
         print(json.dumps({"run": str(run), **{k: round(v, 4) for k, v in metrics.items()}}), flush=True)
