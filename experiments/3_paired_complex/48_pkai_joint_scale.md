@@ -169,3 +169,28 @@ and exclusions). Batch 4,096, LR 8e-6, cap 400.
 Isambard file limit: per-record feature files are archived into `features/<dataset>.tar` (+ `.tar.json`) after packing
 (`$S/_submission/jaxka_pkai_archive_features.sbatch`; about 338k files so far). Nested fractions can share one
 `features/` (the combined 10% run links to the 50% one), since `pack` now selects only the run's registered records.
+
+## Feature store (2026-10-10)
+
+The per-record `.npz` files, their tar archives and every run's dense `packed/*.npy` arrays are replaced by one
+compressed store per encoding, `training/pkai-features-v2/<encoding>/{pkpdb,pinder}/store/` (17 files per encoding),
+covering the 100% pool plus the PINDER validation cohort and shared by every fraction (`pkatrain.pkai_joint_scale`:
+`store-ids`, `import`, `prepare`, `pack-store`; Isambard job `jaxka_pkai_store.sbatch`).
+
+- Each site is stored in compact slot form (`pkai_scratch.compact`): the 250 slot values (1/d²), each slot's atom
+  class and/or residue type, and the site class; 1.25–1.5 kB per site against 16–36 kB dense. `compact()` checks that
+  `expand()` rebuilds the dense row exactly; training expands batches on the GPU (`expand_torch`).
+- One zstd frame per structure, written in shards by 72 prepare tasks (or imported from an earlier run's archive),
+  concatenated in the old file-name row order and verified record by record.
+
+| Encoding | pKPDB records / sites | PINDER records / sites | Store | Dense equivalent |
+|---|---:|---:|---:|---:|
+| atom16 | 62,559 / 1,724,738 | 35,386 / 1,804,630 | 2.8 GB | 171 GB |
+| aa20 | same | same | 3.0 GB | 214 GB |
+| atom16aa20 | same | same | 3.3 GB | 384 GB |
+
+Exclusions are unchanged (315 pKPDB, 70 PINDER). For all eight earlier runs (atom16 10/50/75/100%, aa20 and
+atom16aa20 10/50%) `compare-packed` found the store's selection, expanded, bit-identical to the run's dense arrays
+(`packed-comparison.json`); the dense arrays (711 GB) and per-record archives were then removed (the JSON receipts stay).
+Runs now load their compact rows resident on the GPU: a 2-epoch check of 50% atom16aa20 full/joint reproduced the
+original run's epoch 1–2 metrics exactly at 2.8 s per epoch (was ~120 s, loader wait 57–95%; now 0.02%).
