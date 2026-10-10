@@ -351,17 +351,34 @@ def _write_tsv(path, rows):
     tmp.rename(path)
 
 
-def build_v4(root, workers, size=None):
+def build_v4(root, workers, size=None, overlap=0, anchor=None):
     """size: validation groups per dataset (default VALIDATION_GROUPS, written to training/pool-v4); another size is a
-    what-if written to training/pool-v4-n<size>."""
+    what-if written to training/pool-v4-n<size>. overlap/anchor: the anchor dataset's validation set is drawn as usual,
+    then `overlap` of the other dataset's validation groups are drawn among structures with a chain >= 70% / 80% to (or
+    equal to) an anchor validation chain, and the rest as usual (training/pool-v4-n<size>-o<overlap>-<anchor>)."""
     groups = {d: size or n for d, n in VALIDATION_GROUPS.items()}
-    out = root/(V4_DIR if size is None else f'{V4_DIR}-n{size}'); out.mkdir(parents=True, exist_ok=True)
+    name = V4_DIR if size is None else f'{V4_DIR}-n{size}' + (f'-o{overlap}-{anchor}' if overlap else '')
+    out = root/name; out.mkdir(parents=True, exist_ok=True)
     candidates = {'pinder': pinder_candidates(root, workers), 'pkpdb': pkpdb_candidates(root, workers)}
     validation = {}; cells = {}
-    validation['pinder'], cells['pinder'] = choose_validation(candidates['pinder'][0], groups['pinder'],
-                                                               eligible=lambda r: int(r['eval_interface_sites']) > 0)
-    validation['pkpdb'], cells['pkpdb'] = choose_validation(candidates['pkpdb'][0], groups['pkpdb'],
-                                                             eligible=lambda r: int(r['labelled_sites']) > 0)
+    eligible = {'pinder': lambda r: int(r['eval_interface_sites']) > 0, 'pkpdb': lambda r: int(r['labelled_sites']) > 0}
+    order = ('pinder', 'pkpdb') if anchor != 'pkpdb' else ('pkpdb', 'pinder')
+    first, second = order
+    validation[first], cells[first] = choose_validation(candidates[first][0], groups[first], eligible=eligible[first])
+    if overlap:
+        anchor_seqs = {s for r in validation[first] for s in r['_sequences']}
+        pool = {sequence_key(s): s for r in candidates[second][0] for s in r['_sequences']}
+        matched = {pool[k] for k in screen(root, pool, {sequence_key(s): s for s in anchor_seqs}, workers)} | anchor_seqs
+        near_rows = [r for r in candidates[second][0] if any(s in matched for s in r['_sequences'])]
+        shared, shared_cells = choose_validation(near_rows, overlap, eligible=eligible[second])
+        taken = {r['group'] for r in shared}
+        rest, rest_cells = choose_validation([r for r in candidates[second][0] if r['group'] not in taken], groups[second] - overlap,
+                                             eligible=eligible[second])
+        validation[second] = sorted(shared + rest, key=lambda r: r['id'])
+        for r in validation[second]: r['shares_anchor_chain'] = int(r['group'] in taken)
+        cells[second] = {'overlap': shared_cells, 'rest': rest_cells}
+    else:
+        validation[second], cells[second] = choose_validation(candidates[second][0], groups[second], eligible=eligible[second])
     val_sequences = {s for rows in validation.values() for r in rows for s in r['_sequences']}
     val_groups = {d: {r['group'] for r in validation[d]} for d in validation}
     queries = {sequence_key(s): s for d in candidates for r in candidates[d][0] if r['group'] not in val_groups[d] for s in r['_sequences']}
@@ -416,7 +433,8 @@ if __name__ == '__main__':
     workers = int(os.environ['SLURM_CPUS_PER_TASK'])
     require_compute(threads=workers, allow_comp1400=os.environ.get('PKABENCH_ALLOW_COMP1400') == '1')  # explicit per-run opt-in
     if sys.argv[1] == 'v4':
-        result = build_v4(Path(os.environ['PKABENCH_RUNTIME']), workers, int(sys.argv[2]) if len(sys.argv) > 2 else None)
+        result = build_v4(Path(os.environ['PKABENCH_RUNTIME']), workers, int(sys.argv[2]) if len(sys.argv) > 2 else None,
+                          int(sys.argv[3]) if len(sys.argv) > 3 else 0, sys.argv[4] if len(sys.argv) > 4 else None)
         print(json.dumps({d: {k: v[k] for k in ('candidates', 'removed', 'fractions')} | {'validation': {k: x for k, x in v['validation'].items() if k != 'cells'}}
                           for d, v in result['datasets'].items()}, indent=1))
     else:
