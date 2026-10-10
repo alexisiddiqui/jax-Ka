@@ -536,3 +536,36 @@ Runs `pilot-10pct-mask2[-s29]` (P = 0.2, 60% kept on average) and `pilot-10pct-m
   grows (0.002 default, 0.008 at P = 0.5, 0.016 at P = 0.2).
 - On the 10% pool for 20 epochs, dropping sites mainly removes training signal. Whether masking helps as a
   regulariser on larger pools or longer schedules is untested. Default kept.
+
+### Dropout, 10% and 50% pools, two seeds (2026-10-10)
+
+`--dropout 0.1` (`production_train.DropoutEngine`): oGQT's built-in residual dropout (`pkanet.model.dropout`) on every
+attention and feed-forward output (residue blocks, site query, site-site block) during training, the experiment 17 /
+diagnostic campaign rate. Each complex's AB and free branches share one key (coordinated dropout); pKPDB structures
+draw their own. Objectives, optimizer and schedule as JointEngine; validation without dropout. Runs
+`pilot-{10,50}pct[-drop10][-s29]`; the 10% defaults are the existing `pilot-10pct[-s29]`.
+
+| Pool | Arm | Seed | Epoch | Selection | State MAE | Interface paired MAE | pKPDB val MAE | pKPDB val MSE | Benchmark MAE |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 10% | default | 17 | 17 | 0.7375 | 0.4730 | 0.2644 | 0.5572 | 0.7328 | 0.5728 |
+| 10% | default | 29 | 17 | 0.7355 | 0.4694 | 0.2660 | 0.5598 | 0.7568 | 0.5790 |
+| 10% | dropout | 17 | 17 | 0.7292 | 0.4695 | 0.2597 | 0.5578 | 0.7306 | 0.5808 |
+| 10% | dropout | 29 | 17 | 0.7300 | 0.4695 | 0.2605 | 0.5544 | 0.7211 | 0.5863 |
+| 50% | default | 17 | 11 | 0.6794 | 0.4360 | 0.2434 | 0.5370 | 0.7104 | 0.5556 |
+| 50% | default | 29 | 8 | 0.6926 | 0.4511 | 0.2415 | 0.5509 | 0.7392 | 0.5588 |
+| 50% | dropout | 17 | 17 | 0.6730 | 0.4299 | 0.2431 | 0.5215 | 0.6445 | 0.5344 |
+| 50% | dropout | 29 | 17 | 0.6802 | 0.4360 | 0.2441 | 0.5214 | 0.6289 | 0.5353 |
+
+| Contrast (seed means; 95% bootstrap over validation complexes/structures) | Selection | State MAE | Interface paired MAE | pKPDB val MAE | pKPDB val MSE |
+|---|---|---|---|---|---|
+| dropout - default, 10% | -0.0069 (-0.0114, -0.0026) | -0.0018 | -0.0051 (-0.0084, -0.0020) | -0.0024 | -0.0190 (-0.0284, -0.0099) |
+| dropout - default, 50% | -0.0094 (-0.0148, -0.0044) | -0.0106 (-0.0140, -0.0075) | +0.0012 | -0.0225 (-0.0267, -0.0183) | -0.0881 (-0.1058, -0.0708) |
+| 50% - 10%, default | -0.0505 (-0.0551, -0.0455) | -0.0277 | -0.0228 | -0.0146 | -0.0200 |
+| 50% - 10%, dropout | -0.0530 (-0.0587, -0.0472) | -0.0365 | -0.0165 | -0.0346 | -0.0891 |
+
+- Dropout is the first variant to beat the default: selection improves at both pool sizes, in all four seed pairs.
+- At 50% the default overfits: it selects epochs 11 and 8 (the seed 29 run early-stopped at epoch 16), seed spread
+  0.013. With dropout both seeds select epoch 17, spread 0.007, and pKPDB val MSE falls 12% (0.725 to 0.637); the
+  benchmark MAE also improves (0.557 to 0.535). The interface gain seen at 10% does not appear at 50%.
+- Cost: 50% epochs take 64 s default and 67-70 s with dropout. Train loss is higher with dropout, as expected.
+- Production default changed to dropout 0.1 is a decision for the 100% run; rate not tuned (0.1 only).
