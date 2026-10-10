@@ -133,3 +133,23 @@ def test_squash_rejects_corrupted_shard(tmp_path, monkeypatch):
     shard = next(out.glob("pkpdb-core-*.tar.gz")); data = bytearray(shard.read_bytes()); data[-10] ^= 0xFF; shard.write_bytes(bytes(data))
     with pytest.raises(Exception): dt.squash(out / "pkpdb-bundle.json", tmp_path / "dst", mksquashfs=tools[0], processors=1)
     assert not list((tmp_path / "dst" / "images").glob("*.sqfs")) and not list((tmp_path / "dst" / "images").glob(".*pending*"))
+
+
+def test_squash_dir_verify_and_link(tmp_path, monkeypatch):
+    import os, subprocess
+    tools = _mksquashfs()
+    if tools is None: pytest.skip("mksquashfs with -tar (squashfs-tools >= 4.6) not available")
+    monkeypatch.setenv("PKABENCH_SQFS_MOUNT", str(tmp_path / "mnt"))
+    store = tmp_path / "root" / "training" / "x" / "store-v1"; store.mkdir(parents=True)
+    (store / "a.npy").write_bytes(b"\0" * 5000); (store / "b.json").write_text("{}")
+    with pytest.raises(Exception): dt.squash_dir(tmp_path / "root", "training/x/store-v1", "x-store", mksquashfs=tools[0])
+    (store / "verification.json").write_text(json.dumps({"passed": True, "files": {n: dt.sha256_file(store / n) for n in ("a.npy", "b.json")}}))
+    assert dt.squash_dir(tmp_path / "root", "training/x/store-v1", "x-store", mksquashfs=tools[0], processors=1) == "built"
+    assert dt.squash_dir(tmp_path / "root", "training/x/store-v1", "x-store", mksquashfs=tools[0]) == "present"
+    out = tmp_path / "extracted"
+    subprocess.run([tools[1], "-q", "-n", "-d", str(out), str(tmp_path / "root" / "images" / "x-store.sqfs")], check=True)
+    assert dt.verify_dir(out, workers=1)["passed"]
+    (out / "a.npy").write_bytes(b"\1" * 5000)
+    assert not dt.verify_dir(out, workers=1)["passed"]
+    dt.link_dir(tmp_path / "root", "training/x/store-v1", "x-store")
+    assert os.readlink(store) == str(tmp_path / "mnt" / "x-store")
