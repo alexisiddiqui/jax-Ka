@@ -194,3 +194,19 @@ atom16aa20 10/50%) `compare-packed` found the store's selection, expanded, bit-i
 (`packed-comparison.json`); the dense arrays (711 GB) and per-record archives were then removed (the JSON receipts stay).
 Runs now load their compact rows resident on the GPU: a 2-epoch check of 50% atom16aa20 full/joint reproduced the
 original run's epoch 1–2 metrics exactly at 2.8 s per epoch (was ~120 s, loader wait 57–95%; now 0.02%).
+
+## 100%, all three encodings (2026-10-10)
+
+Batch 4096, LR 8e-6, cap 400, early stopping (delta 0.001, patience 8); aa20 and atom16aa20 trained from the feature
+store (jobs 7230716–7230724, 1.5–9 min each). Best epoch's pKPDB val MSE / PINDER state / paired (epochs run):
+
+| Arm | atom16 | aa20 | atom16aa20 |
+|---|---:|---:|---:|
+| BB pkpdb | 1.075 (43) | 0.984 (43) | **0.948** (53) |
+| BB joint | 1.066 / 0.825 / 0.203 (70) | 0.974 / 0.669 / 0.181 (57) | **0.941 / 0.650 / 0.179** (57) |
+| AA pkpdb | 0.381 (43) | 0.539 (35) | **0.380** (43) |
+| AA joint | 0.305 / **0.048 / 0.020** (81) | 0.500 / 0.205 / 0.050 (74) | **0.296** / 0.050 / 0.020 (81) |
+
+At 100% atom16aa20 is best or level everywhere: AA joint pKPDB 0.296 (atom16 0.305, released pKAI 0.324); BB joint
+0.941 vs 1.066. No arm reached the cap: the joint AA arms stopped at epoch 81 with the best epoch the last one (gains
+below the 0.001 stopping delta), so they were still improving slowly.
