@@ -224,3 +224,22 @@ setting under the same rule. Explicit rates (train arg 6, runs `-lr<rate>`), bat
 | 1.28e-4 | 26 (22) | **0.285** | **0.044** | **0.017** | 0.104 |
 
 Higher rates are better on every metric and converge faster; 1.28e-4 is the first to stop on a plateau (best epoch 22).
+
+## Cosine schedule and the 12 arms at 100% (2026-10-10)
+
+Rate/schedule on 100% atom16aa20 full/joint (selection MSE / pKPDB val / state / paired, epochs (best)):
+5.12e-4 constant 0.118 / 0.288 / 0.046 / 0.019, 21 (17); 1.28e-4 cosine over 40 epochs 0.114 / 0.282 / 0.044 / 0.018,
+32 (24); **5.12e-4 cosine over 40 epochs 0.113 / 0.279 / 0.042 / 0.017, 40 (34)** (train args `4096 40 5.12e-4 cosine`).
+
+All arms at 5.12e-4 cosine/40 (pKPDB val / PINDER state / paired; epochs (best)); 8e-6 constant results above for comparison:
+
+| Arm | atom16 | aa20 | atom16aa20 |
+|---|---:|---:|---:|
+| BB pkpdb | 1.045 / 0.865 / 0.210, 12 (4) | 0.972 / 0.739 / 0.190, 10 (2) | **0.931** / 0.707 / 0.194, 13 (5) |
+| BB joint | 1.043 / 0.815 / 0.204, 24 (16) | 0.966 / 0.667 / 0.180, 11 (3) | **0.921 / 0.653 / 0.182**, 12 (4) |
+| AA pkpdb | 0.319 / 0.109 / 0.027, 37 (35) | 0.500 / 0.269 / 0.067, 40 (33) | **0.311** / 0.116 / 0.033, 40 (35) |
+| AA joint | 0.287 / **0.034 / 0.016**, 40 (34) | 0.498 / 0.202 / 0.045, 13 (9) | **0.279** / 0.042 / 0.017, 40 (34) |
+
+Every arm improves over 8e-6 constant; AA pKPDB-only gains most (0.381 → 0.311–0.319). The backbone arms peak within
+2–5 epochs (before the rate has decayed) and then overfit, so they would likely gain from a lower rate. AA joint:
+atom16aa20 is best on pKPDB (0.279), atom16 on PINDER (state 0.034).
