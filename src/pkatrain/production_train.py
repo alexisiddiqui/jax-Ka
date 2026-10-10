@@ -22,7 +22,11 @@ selection.json, predictions-{pinder,benchmark}-epoch-NNN.csv.
 
 Batch-size sweep (2026-10-10): --batch B trains with a constant B structures per batch in every bucket and the
 learning rate scaled by sqrt(B / 8) (the same rule); validation always runs at 16 per batch (per-structure predictions,
-so the batch size only changes padding). The default 16 reproduces the pilot's protocol.
+so the batch size only changes padding). The default 16 reproduces the pilot's protocol. Batches above MICRO (128, the largest batch measured to
+fit in every bucket; batch 256 in the 1,536-residue bucket needs a single 45 GiB allocation and fails) are split into chunks
+of MICRO structures on the host; both objectives are means over the batch's valid structures, so the full-batch value
+and gradient are the chunk values and gradients weighted by (valid structures in chunk / valid in batch). Chunks that
+are pure padding are skipped. One optimizer step per batch, as before.
 
   python -m pkatrain.production_train train RUN [--fraction 0.1] [--batch 16] [--smoke]
 """
@@ -49,6 +53,9 @@ ARCHITECTURE = {"width": 44, "ff": 88}
 
 
 def lr_scale(batch): return math.sqrt(batch / 8)
+
+
+MICRO = 128
 
 
 def run_dir(root, run): return Path(root) / "training/gqt-production-v1/runs" / run
@@ -98,6 +105,31 @@ def to_device(batch):
     import jax
     pair, pk = batch; graphs, targets, mask, wb, wi, metadata, valid = pair
     return (*jax.device_put((graphs, targets, mask, wb, wi)), metadata, jax.device_put(valid)), jax.device_put(pk)
+
+
+def to_device_chunks(batch, micro=MICRO):
+    """Host batch -> ([(PINDER chunk, valid count)], [(pKPDB chunk, valid count)]) on device; padding-only chunks dropped."""
+    import jax
+    pair, pk = batch; graphs, targets, mask, wb, wi, _, valid = pair; pair = (graphs, targets, mask, wb, wi, valid)
+
+    def chunks(arrays, valid):
+        out = []
+        for start in range(0, len(valid), micro):
+            count = int(valid[start:start + micro].sum())
+            if count: out.append((jax.device_put(jax.tree.map(lambda x: x[start:start + micro], arrays)), count))
+        return out
+    return chunks(pair, valid), chunks(pk, pk[-1])
+
+
+def _accumulate(value_grad, chunks):
+    """Full-batch (value, gradient) of a mean over valid structures: sum over chunks of (count / total) x chunk's."""
+    import jax
+    import jax.numpy as jnp
+    total = sum(count for _, count in chunks); value = gradient = None
+    for arrays, count in chunks:
+        v, g = jax.tree.map(lambda x: (count / total) * x, value_grad(*arrays))
+        value, gradient = (v, g) if value is None else (jax.tree.map(jnp.add, value, v), jax.tree.map(jnp.add, gradient, g))
+    return value, gradient
 
 
 def _pinder_rows(engine, params, source, records, config):
@@ -178,6 +210,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH):
         "selection": "min PINDER validation state MAE + interface paired MAE", "validation": ["PINDER 400 (pKAI)", "benchmark-val 142 (PypKa)"],
         "counts": {"pinder_train": len(select(manifests["pinder"], "train", fraction)), "pkpdb_train": len(select(manifests["pkpdb"], "train", fraction)),
                    "pinder_val": len(select(manifests["pinder"], "val")), "benchmark_val": len(select(manifests["benchmark-val"], "val"))},
+        **({"micro_batch": MICRO, "accumulation": "exact: chunk values/gradients weighted by valid structures"} if batch > MICRO else {}),
         "pinder_weight_normalization": norms, "smoke": smoke, "test_data_included": False,
         "manifests": {d: digest(output(root, d) / MANIFEST) for d in manifests}, "code": code_hashes()}
     if (out / "protocol.json").exists():
@@ -204,12 +237,16 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH):
         pair, pk = epoch_plans(manifests, fraction, epoch, batch)
         if smoke: pair, pk = pair[:5], pk[:5]
         specs = list(zip(pair, pk)); deferred = DeferredScalars(every=50); began = time.time()
-        prefetcher = Prefetcher(sources["train"], specs, config, to_device)
+        prefetcher = Prefetcher(sources["train"], specs, config, to_device if batch <= MICRO else to_device_chunks)
         for number, (_, (pair_batch, pk_batch)) in enumerate(prefetcher, 1):
             rate = jnp.asarray(scale * learning_rate(epoch, number, len(specs)), jnp.float32)
-            graphs, targets, mask, wb, wi, _, valid = pair_batch
-            (pair_total, (state_loss, pair_loss)), pair_gradient = engine.paired_value_grad(params, graphs, targets, mask, wb, wi, valid)
-            pk_loss, pk_gradient = engine.pkpdb_value_grad(params, *pk_batch)
+            if batch <= MICRO:
+                graphs, targets, mask, wb, wi, _, valid = pair_batch
+                (pair_total, (state_loss, pair_loss)), pair_gradient = engine.paired_value_grad(params, graphs, targets, mask, wb, wi, valid)
+                pk_loss, pk_gradient = engine.pkpdb_value_grad(params, *pk_batch)
+            else:
+                (pair_total, (state_loss, pair_loss)), pair_gradient = _accumulate(lambda *a: engine.paired_value_grad(params, *a), pair_batch)
+                pk_loss, pk_gradient = _accumulate(lambda *a: engine.pkpdb_value_grad(params, *a), pk_batch)
             params, state, finite = engine.apply(params, state, pair_gradient, pk_gradient, rate)
             losses = jnp.stack((pair_total + pk_loss, pk_loss, state_loss, pair_loss))
             if not bool(finite & jnp.all(jnp.isfinite(losses))): raise FloatingPointError(f"nonfinite update at epoch {epoch} batch {number}")
