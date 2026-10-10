@@ -731,7 +731,7 @@ def _epoch_specs(order_pk, order_pi):
     return specs
 
 
-def train_scale(root, mode, objective, batch_size=None, max_epochs=100, learning_rate=None):
+def train_scale(root, mode, objective, batch_size=None, max_epochs=100, learning_rate=None, schedule="constant"):
     """batch_size/max_epochs other than the registered 256/100 (batch-size sweep, 2026-10-10) use the sqrt learning-rate
     rule and write to runs/<mode>-<objective>-b<batch>-e<epochs>/; the defaults keep the registered run paths."""
     global BATCH_SIZE, LEARNING_RATE
@@ -741,6 +741,8 @@ def train_scale(root, mode, objective, batch_size=None, max_epochs=100, learning
         tag = f"-b{BATCH_SIZE}-e{max_epochs}"
     if learning_rate is not None:  # explicit rate (learning-rate sweep, 2026-10-10) instead of the sqrt rule
         LEARNING_RATE = float(learning_rate); tag += f"-lr{LEARNING_RATE:g}"
+    if schedule not in ("constant", "cosine"): raise ValueError(schedule)
+    if schedule == "cosine": tag += "-cos"  # per-epoch cosine decay from LEARNING_RATE to 0 over max_epochs
     from .loading import DeferredScalars, LoaderConfig, Prefetcher
     from .loading_torch import CombinedSource, PackedSiteSource
     if mode not in MODES or objective not in OBJECTIVES: raise ValueError((mode,objective))
@@ -758,13 +760,15 @@ def train_scale(root, mode, objective, batch_size=None, max_epochs=100, learning
         sources["pi"]=PackedSiteSource(pi,config=config)
     train_source=CombinedSource(sources); validation_sources=_validation_sources(torch,root,mode,objective,config,selection)
     dest=out/"runs"/f"{mode}-{objective}{tag}"/f"seed-{SEED}";dest.mkdir(parents=True,exist_ok=True)
-    provenance={"mode":mode,"objective":objective,"seed":SEED,"batch_size":BATCH_SIZE,"max_epochs":max_epochs,"learning_rate":LEARNING_RATE,"lr_rule":"1e-6*sqrt(batch/64)" if learning_rate is None else "explicit","precision":"float32","cpus":2,"initialization":"scratch","features":{g:{k:(len(v) if k in ("names","excluded") else v) for k,v in s.items()} for g,s in selection.items()},"feature_encoding":ENCODING,"manifest_sha256":digest(out/"manifest.json"),"test_data_included":False,
+    provenance={"mode":mode,"objective":objective,"seed":SEED,"batch_size":BATCH_SIZE,"max_epochs":max_epochs,"learning_rate":LEARNING_RATE,"lr_rule":"1e-6*sqrt(batch/64)" if learning_rate is None else "explicit","lr_schedule":schedule,"precision":"float32","cpus":2,"initialization":"scratch","features":{g:{k:(len(v) if k in ("names","excluded") else v) for k,v in s.items()} for g,s in selection.items()},"feature_encoding":ENCODING,"manifest_sha256":digest(out/"manifest.json"),"test_data_included":False,
                 "loader":{"workers":config.workers,"prefetch":config.prefetch,"train":train_source.provenance(),"validation":{k:v.provenance() for k,v in validation_sources.items()}}}
     atomic_json(dest/"manifest.json",provenance)
     params=list(model.parameters())
     rng=np.random.default_rng(SEED);best=float("inf");anchor=float("inf");stall=0;history=[];began=time.monotonic();patience=8
     for epoch in range(1,max_epochs+1):
         if stall>=patience:break
+        if schedule=="cosine":
+            for group in opt.param_groups: group["lr"]=LEARNING_RATE*0.5*(1+math.cos(math.pi*(epoch-1)/max_epochs))
         model.train();order_pk=rng.permutation(len(pk["y"]));order_pi=rng.permutation(len(pi["ya"])) if pi else None
         losses=DeferredScalars(every=50)
         prefetcher=Prefetcher(train_source,_epoch_specs(order_pk,order_pi),config,train_source.to_device,train_source.on_consume)
@@ -1006,7 +1010,7 @@ def main():
     elif action == "build-validation":
         build_validation(root, sys.argv[2] if len(sys.argv) > 2 else ENCODING, int(os.environ.get("SLURM_CPUS_PER_TASK", "1")))
     elif action == "train":
-        train_scale(root, sys.argv[2], sys.argv[3], *(int(v) for v in sys.argv[4:6]), *(float(v) for v in sys.argv[6:7]))
+        train_scale(root, sys.argv[2], sys.argv[3], *(int(v) for v in sys.argv[4:6]), *(float(v) for v in sys.argv[6:7]), *sys.argv[7:8])
     else: raise ValueError(action)
 
 
