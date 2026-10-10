@@ -470,13 +470,13 @@ def _pkpdb_validation_arrays(root, mode):
 def _validation_sources(torch, root, mode, objective, config):
     from .loading_torch import PackedSiteSource
     sources = {"pk": PackedSiteSource(_pkpdb_validation_arrays(root, mode), config=config)}
-    if objective == "joint":
+    if objective in ("joint", "pkpdb"):  # PINDER validation is reported for pKPDB-only arms too (not used for their selection)
         pi = _arrays(output(root) / "packed/pinder-val", (f"{mode}_ab", f"{mode}_free", "target_ab", "target_free"))
         sources["pi"] = PackedSiteSource({"xa": pi[f"{mode}_ab"], "xf": pi[f"{mode}_free"], "ya": pi["target_ab"], "yf": pi["target_free"]}, config=config)
     return sources
 
 
-def _validation(torch, model, sources, config):
+def _validation(torch, model, sources, config, objective="joint"):
     # The established clean 5k validation is independent of the new 10% pool.
     pk = sources["pk"]
     result = {"pkpdb_mse": _squared_sums(torch, model, pk, pk.length, {"pk": lambda b, o: (o - b["y"]).square()}, config,
@@ -487,7 +487,8 @@ def _validation(torch, model, sources, config):
                  "pair": lambda b, o: ((o[0] - o[1]) - (b["ya"] - b["yf"])).square()}
         mse = _squared_sums(torch, model, pi, pi.length, terms, config, lambda b: (model(b["xa"]), model(b["xf"])))
         result.update(pinder_state_mse=(mse["a"] + mse["f"]) / 2, pinder_paired_mse=mse["pair"])
-    result["selection_mse"] = sum(result.values()) / len(result)
+    selected = ["pkpdb_mse"] if objective == "pkpdb" else list(result)
+    result["selection_mse"] = sum(result[k] for k in selected) / len(selected)
     return result
 
 
@@ -552,7 +553,7 @@ def train_scale(root, mode, objective, batch_size=None, max_epochs=100):
             if not bool(finite):raise FloatingPointError("nonfinite training step")  # one synchronisation per step
             opt.step();losses.add(loss.detach())
         loader=prefetcher.telemetry.summary()
-        metrics=_validation(torch,model,validation_sources,config);score=metrics["selection_mse"]
+        metrics=_validation(torch,model,validation_sources,config,objective);score=metrics["selection_mse"]
         if score<best:best=score;torch.save(model.state_dict(),dest/"best.pending.pt");os.replace(dest/"best.pending.pt",dest/"best.pt")
         if score<anchor-.001:anchor=score;stall=0
         else:stall+=1
