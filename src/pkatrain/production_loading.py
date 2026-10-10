@@ -7,7 +7,7 @@ mask cleared and valid False, as SiteBatchLoader does), so each bucket compiles 
 - PinderSource.load -> (graphs, targets, mask, burial, interface, metadata, valid): gqt_paired_pinder._load_one on
   each record (AB and partner-free branches, burial/interface weights divided by the training normalisation), the
   format PairedEngine.step consumes (valid passed explicitly).
-- PkpdbSource.load -> (graphs, targets, eligible, valid), also for benchmark-val (mask="eval_mask"): the SiteBatchLoader format (residue graph padded as
+- PkpdbSource.load -> (graphs, targets, eligible, valid), or with weights=True (graphs, targets, eligible, w_burial, valid), also for benchmark-val (mask="eval_mask"): the SiteBatchLoader format (residue graph padded as
   graph_data.pad, site graph as site_graph_data.pad_site). The store keeps every mapped site, so `eligible` is the
   store's train_mask (training) or eval_mask (evaluation); sites without a site token (query_site -1, never
   eligible) point at site 0.
@@ -164,9 +164,9 @@ class PinderSource(_Source):
 
 
 class PkpdbSource(_Source):
-    def __init__(self, manifest, store_path=None, config=None, mask="train_mask", spread=True):
+    def __init__(self, manifest, store_path=None, config=None, mask="train_mask", spread=True, weights=False):
         if mask not in ("train_mask", "eval_mask"): raise ValueError(mask)
-        super().__init__(manifest, store_path, config, spread); self.mask = mask
+        super().__init__(manifest, store_path, config, spread); self.mask = mask; self.weights = weights
 
     def _one(self, row, capacity):
         n, k, q, s, sk = capacity; raw = self.store.raw(row["id"])
@@ -177,12 +177,13 @@ class PkpdbSource(_Source):
         graph = {name: _pad(raw[name], shapes[name]) for name in RESIDUE_FIELDS + SITE_FIELDS}
         graph["query_site"] = np.maximum(graph["query_site"], 0)
         if self.spread: graph = spread_padding(graph)
+        if self.weights: return graph, _pad(raw["labels"], (q,)), _pad(raw[self.mask], (q,)), _pad(np.nan_to_num(raw["w_burial"].astype(np.float32), nan=0.0), (q,))
         return graph, _pad(raw["labels"], (q,)), _pad(raw[self.mask], (q,))
 
     def load(self, ids):
         rows, bucket, capacity = self._bucket(ids)
         items = list(self.pool.map(lambda row: self._one(row, capacity), rows))
-        return _stack(items, self.policy.batch_size(bucket), clear=(1, 2))
+        return _stack(items, self.policy.batch_size(bucket), clear=(1, 2, 3) if self.weights else (1, 2))
 
 
 # ---------------------------------------------------------------- checks

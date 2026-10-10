@@ -409,3 +409,130 @@ Selected epoch 17:
 
 Not comparable with the v1 pilot's numbers: the PINDER validation set, the training pools and the 10% subsets all
 changed.
+
+### Interface-weighted paired loss, 10% pool (2026-10-10)
+
+`--paired-weight interface` multiplies the paired (AB - free) squared error by the normalised `w_interface`
+(experiment 41's interface-arm formula; `production_train.interface_weighted`, `JointEngine` unchanged). Validation and
+selection stay unweighted. Run `gqt-production-v2/runs/pilot-10pct-winterface` (job 7233332), otherwise identical to
+`pilot-10pct`; both selected epoch 17.
+
+| Selected epoch 17 | Unweighted | Interface-weighted | Paired bootstrap difference (95% CI, 800 complexes) |
+|---|---:|---:|---|
+| Selection | 0.7375 | 0.7317 | -0.0058 (-0.0115 to +0.0001) |
+| Interface paired MAE | 0.2644 | 0.2605 | -0.0039 (-0.0082 to +0.0006) |
+| Interface paired MSE | 0.2525 | 0.2407 | -0.0117 (-0.0236 to -0.0009) |
+| Paired MAE, <= 4 A from partner | 0.5349 | 0.5224 | |
+| State MAE | 0.4730 | 0.4712 | -0.0019 (-0.0053 to +0.0019) |
+| State MSE | 0.5419 | 0.5503 | |
+| pKPDB val MAE | 0.5572 | 0.5548 | |
+| Benchmark MAE (group-macro) | 0.5728 | 0.5747 | |
+
+- Interface weighting lowers interface paired error, mostly at sites within 4 A of the partner, without hurting state,
+  pKPDB or benchmark error. The interface MSE gain is outside the validation-sampling CI; the MAE and selection gains
+  are borderline.
+- One seed each. The CIs cover only which validation complexes were sampled, not seed-to-seed variation.
+
+### Query norm x paired weighting, two seeds, 10% pool (2026-10-10)
+
+2 x 2 x 2: site-token query attention with the shared query/context LayerNorm (default) or separate affine parameters
+(`--query-norm separate`: `query_context_norm`, initialised as query `norm1`; `production_train.VariantEngine`, checked
+to reproduce `JointEngine` at initialisation: identical losses, gradients equal to 3e-7) x unweighted or
+`w_interface`-weighted paired loss x seeds 17 and 29 (initialisation and batch order). Batch 16; about 6-7 min per run.
+Runs `gqt-production-v2/runs/pilot-10pct[-winterface][-qsep...][-s29]`.
+
+| Norm | Paired loss | Seed | Epoch | Selection | State MAE | Interface paired MAE | Interface paired MSE | pKPDB val MAE | Benchmark MAE |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| shared | unweighted | 17 | 17 | 0.7375 | 0.4730 | 0.2644 | 0.2525 | 0.5572 | 0.5728 |
+| shared | unweighted | 29 | 17 | 0.7355 | 0.4694 | 0.2660 | 0.2558 | 0.5598 | 0.5790 |
+| shared | interface | 17 | 17 | 0.7317 | 0.4712 | 0.2605 | 0.2407 | 0.5548 | 0.5747 |
+| shared | interface | 29 | 17 | 0.7414 | 0.4736 | 0.2678 | 0.2615 | 0.5623 | 0.5832 |
+| separate | unweighted | 17 | 17 | 0.7413 | 0.4733 | 0.2680 | 0.2583 | 0.5559 | 0.5678 |
+| separate | unweighted | 29 | 16 | 0.7397 | 0.4731 | 0.2667 | 0.2629 | 0.5622 | 0.5825 |
+| separate | interface | 17 | 17 | 0.7343 | 0.4731 | 0.2612 | 0.2465 | 0.5589 | 0.5800 |
+| separate | interface | 29 | 15 | 0.7435 | 0.4759 | 0.2677 | 0.2532 | 0.5640 | 0.5872 |
+
+Main effects (mean over seeds and the other factor; 95% complex-bootstrap CI over the 800 PINDER validation complexes):
+
+| Effect | Selection | State MAE | Interface paired MAE | Interface paired MSE |
+|---|---|---|---|---|
+| separate - shared | +0.0032 (+0.0008, +0.0055) | +0.0020 (+0.0008, +0.0032) | +0.0012 (-0.0007, +0.0030) | +0.0026 (-0.0027, +0.0077) |
+| interface - unweighted | -0.0007 (-0.0044, +0.0027) | +0.0012 (-0.0006, +0.0031) | -0.0020 (-0.0047, +0.0009) | -0.0069 (-0.0133, -0.0006) |
+
+- Seeds differ by about 0.004 in mean selection (17: 0.7362, 29: 0.7400), as large as either effect; the bootstrap
+  intervals cover validation sampling only, not seed variation.
+- The seed-17 interface-weighting gain did not repeat at seed 29 (shared: -0.0058 at seed 17, +0.0059 at seed 29).
+  Averaged, weighting lowers interface paired MSE slightly and leaves selection unchanged.
+- Separate query/context norms are slightly worse here (mostly state MAE), unlike the earlier three-seed test
+  (`training/ogqt-query-norm-v1`, -0.0022 selection), which used the auxiliary objective, a warmup with the norm split
+  afterwards, and the old 400-complex validation set.
+- Weighting x norm interaction on selection: -0.0017.
+- Neither change is adopted from this evidence: the default (shared norm, unweighted paired loss) is kept.
+
+### Experiment 48's loss weighting on GQT, two seeds, 10% pool (2026-10-10)
+
+`--loss-reduction`: `structure` (default; each loss a per-structure site mean, then a mean over structures,
+unweighted), `site` (each loss a mean over the batch's supervised sites, unweighted) and `pkai` (experiment 48,
+`pkai_joint_scale._weighted_mse`: sum(w err^2) / sum(w) over the batch's sites, `w_burial` on the pKPDB and PINDER
+AB/free state losses, `w_interface` on the paired loss; pKPDB sites without a burial weight get weight 0). Batch 16,
+seeds 17 and 29, shared norm; runs `gqt-production-v2/runs/pilot-10pct[-site|-pkaiw][-s29]`. Validation unweighted.
+
+| Arm | Seed | Epoch | Selection | State MAE | Interface paired MAE | Interface paired MSE | pKPDB val MAE | pKPDB val MSE | Benchmark MAE |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| default | 17 | 17 | 0.7375 | 0.4730 | 0.2644 | 0.2525 | 0.5572 | 0.7328 | 0.5728 |
+| default | 29 | 17 | 0.7355 | 0.4694 | 0.2660 | 0.2558 | 0.5598 | 0.7568 | 0.5790 |
+| site | 17 | 19 | 0.7335 | 0.4658 | 0.2677 | 0.2562 | 0.5535 | 0.7130 | 0.5695 |
+| site | 29 | 18 | 0.7406 | 0.4728 | 0.2678 | 0.2533 | 0.5583 | 0.7242 | 0.5784 |
+| pkai | 17 | 17 | 0.7404 | 0.4746 | 0.2658 | 0.2582 | 0.5575 | 0.7327 | 0.5738 |
+| pkai | 29 | 18 | 0.7459 | 0.4768 | 0.2692 | 0.2496 | 0.5669 | 0.7524 | 0.5893 |
+
+Differences of seed means (95% bootstrap over the 800 PINDER and 800 pKPDB validation structures):
+
+| Contrast | Selection | State MAE | Interface paired MAE | pKPDB val MAE | pKPDB val MSE |
+|---|---|---|---|---|---|
+| pkai - default | +0.0067 (+0.0025, +0.0110) | +0.0044 (+0.0024, +0.0064) | +0.0022 (-0.0011, +0.0055) | +0.0037 (+0.0011, +0.0063) | -0.0022 (-0.0107, +0.0062) |
+| site - default | +0.0006 (-0.0034, +0.0042) | -0.0019 (-0.0041, +0.0001) | +0.0025 (-0.0004, +0.0054) | -0.0026 (-0.0053, +0.0003) | -0.0262 (-0.0346, -0.0176) |
+| pkai - site | +0.0061 (+0.0021, +0.0104) | +0.0064 (+0.0045, +0.0084) | -0.0003 (-0.0033, +0.0031) | +0.0063 (+0.0036, +0.0088) | +0.0239 (+0.0157, +0.0324) |
+
+- Experiment 48's weighting makes GQT slightly worse on every unweighted validation metric (both seeds), mostly state
+  and pKPDB error; the interface-weighted Siamese term does not improve interface paired error.
+- Site-level averaging alone matches the default on selection and lowers pKPDB validation MSE by 3.5%. The weights
+  undo that.
+- Seed spread in selection: 0.002 (default), 0.007 (site), 0.006 (pkai); intervals cover validation sampling only.
+- Default kept; `site` is a candidate if pKPDB MSE matters.
+
+### Stochastic site masking by weight percentile, two seeds, 10% pool (2026-10-10)
+
+User proposal: instead of weighting the losses, mask sites at random with the inverse of the weights.
+`--site-mask-pmin P` (`production_train.MaskedEngine`):
+- **Percentile:** each weight is mapped to its percentile u among the training pool's sites (mid-rank, so ties share a
+  value; tables in each run's `site-mask-tables.json`).
+- **Keep probability:** P + (1 - P) * u, redrawn every step. `w_burial` masks the state losses (PINDER AB and free
+  share a draw; pKPDB its own), `w_interface` masks the paired loss (an independent draw).
+- **Mean keep fraction:** (1 + P) / 2, whatever the weight's scale. Raw weights as probabilities would have kept 77%
+  for burial and about 21% for the Siamese loss: `w_burial` spans 0.40-1.0 (median 0.77), and 60% of `w_interface`
+  values sit at its 0.05 floor (1.0 within 4 A of the partner).
+- **Losses:** JointEngine's per-structure means over the kept sites; a structure with no kept site leaves that step's
+  mean. Validation is unmasked.
+
+With P = 0.2, sites at the `w_interface` floor (percentile 0.33) are kept 46% of the time and contact sites 97%.
+Runs `pilot-10pct-mask2[-s29]` (P = 0.2, 60% kept on average) and `pilot-10pct-mask5[-s29]` (P = 0.5, 75% kept).
+
+| Arm | Seed | Epoch | Selection | State MAE | Interface paired MAE | Interface paired MSE | pKPDB val MAE | pKPDB val MSE | Benchmark MAE |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| default | 17 | 17 | 0.7375 | 0.4730 | 0.2644 | 0.2525 | 0.5572 | 0.7328 | 0.5728 |
+| default | 29 | 17 | 0.7355 | 0.4694 | 0.2660 | 0.2558 | 0.5598 | 0.7568 | 0.5790 |
+| P = 0.2 | 17 | 17 | 0.7416 | 0.4767 | 0.2649 | 0.2546 | 0.5587 | 0.7339 | 0.5775 |
+| P = 0.2 | 29 | 17 | 0.7574 | 0.4810 | 0.2765 | 0.2627 | 0.5663 | 0.7567 | 0.5963 |
+| P = 0.5 | 17 | 18 | 0.7365 | 0.4724 | 0.2641 | 0.2507 | 0.5574 | 0.7188 | 0.5764 |
+| P = 0.5 | 29 | 17 | 0.7442 | 0.4754 | 0.2688 | 0.2641 | 0.5642 | 0.7600 | 0.5769 |
+
+| Contrast (seed means; 95% bootstrap) | Selection | State MAE | Interface paired MAE | pKPDB val MAE |
+|---|---|---|---|---|
+| P = 0.2 - default | +0.0131 (+0.0093, +0.0167) | +0.0076 | +0.0055 | +0.0040 |
+| P = 0.5 - default | +0.0039 (+0.0003, +0.0077) | +0.0027 | +0.0012 | +0.0023 |
+
+- Masking makes every validation metric worse, more so the more it masks. It gives no interface gain, and seed spread
+  grows (0.002 default, 0.008 at P = 0.5, 0.016 at P = 0.2).
+- On the 10% pool for 20 epochs, dropping sites mainly removes training signal. Whether masking helps as a
+  regulariser on larger pools or longer schedules is untested. Default kept.

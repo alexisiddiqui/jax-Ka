@@ -46,10 +46,10 @@ def dropout(x,key,rate):
     return jnp.where(jax.random.bernoulli(key,1-rate,x.shape),x/(1-rate),0.)
 
 
-def attend(p,x,context,neighbors,edge,mask,switch,*,key=None,dropout_rate=0.):
+def attend(p,x,context,neighbors,edge,mask,switch,*,key=None,dropout_rate=0.,context_norm=None):
     width=p['q']['w'].shape[0]
     q=linear(p['q'],norm(p['norm1'],x)).reshape((-1,HEADS,width//HEADS))
-    c=norm(p['norm1'],context)
+    c=norm(p['norm1'] if context_norm is None else context_norm,context)
     k=linear(p['k'],c)[neighbors].reshape((*neighbors.shape,HEADS,width//HEADS))
     v=linear(p['v'],c)[neighbors].reshape((*neighbors.shape,HEADS,width//HEADS))
     logits=jnp.einsum('nhd,nkhd->nkh',q,k)/jnp.sqrt(float(width//HEADS))+linear(p['edge'],edge)
