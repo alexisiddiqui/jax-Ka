@@ -8,6 +8,12 @@
   curve per partner residue; min_j d_j reproduces sites.json partner_distance_A); six cumulative binary targets
   [c > t] for t in 0 / 0.5 / 1 / 2 / 4 / 8 (t = 0 is the stored 10 A interface flag). PINDER bound branch only.
 
+Two loss forms (production_train.AuxEngine, --aux-loss):
+- "ordinal": cumulative BCE over the cut points / thresholds above (first version, 2026-10-11).
+- "ce" (2026-10-11, user revision): one sigmoid output per head, unweighted cross-entropy against a soft target in
+  [0, 1]: burial y = 1 - clip(RSA, 0, 1); interface y = log(1 + min(c, 8)) / log(9). No class balancing (the user
+  will address interface false negatives through the Siamese loss instead).
+
 The PINDER scores are not in store-v2: `build` writes a side table aligned to each record's store query sites,
 <runtime>/training/<version>/pinder/contacts-v1/{scores.npy, offsets.npy, ids.json, verification.json}; it reads the
 AB structures, so on Isambard it runs under scripts/sqfs_run.sh.
@@ -30,6 +36,7 @@ from .production_graphs import PINDER, ProductionStore, output, read, source
 
 BURIAL_RSA_CUTS = (0.1, 0.25, 0.5)
 INTERFACE_THRESHOLDS = (0.0, 0.5, 1.0, 2.0, 4.0, 8.0)
+INTERFACE_CAP = 8.0
 CONTACT_A, DECAY_A, CUTOFF_A = 4.0, 3.0, 10.0
 TABLE = "contacts-v1"
 
@@ -47,6 +54,15 @@ def burial_targets(rsa):
 
 def interface_targets(score):
     return (np.asarray(score, np.float32)[..., None] > np.asarray(INTERFACE_THRESHOLDS, np.float32)).astype(np.float32)
+
+
+def burial_soft(rsa):
+    """1 - clip(RSA, 0, 1); NaN RSA stays NaN (masked by the caller)."""
+    return 1.0 - np.clip(np.asarray(rsa, float), 0.0, 1.0)
+
+
+def interface_soft(score):
+    return np.log1p(np.minimum(np.asarray(score, float), INTERFACE_CAP)) / np.log1p(INTERFACE_CAP)
 
 
 def _scores_one(args):
