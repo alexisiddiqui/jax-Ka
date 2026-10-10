@@ -361,3 +361,55 @@ Files: `pretraining/pinder-pkai-v1/pool-v3.{tsv,json}`, `pretraining/pkpdb-full-
 pKPDB is redundant (largest group 556 structures; the top 1% of groups hold 30% of sites; PINDER: max 5, 9%), so sample
 by `group` rather than by structure or site; 5,694 PINDER and 7,917 pKPDB pool structures exceed the 768-residue GQT
 bucket cap (`n_res` column).
+
+### pool-v4: new validation sets (`pkabench.training_pools v4`, 2026-10-10)
+
+Why: the 400-complex PINDER validation set was capped at 768 residues (production buckets go to 1,536), 12 of its
+complexes are on the v2 exclusions, its absolute selection score has a bootstrap SE of about 0.019 (paired run
+comparisons about 0.005), and pKPDB had no held-out split of its own (only the 142-complex PypKa benchmark).
+
+User decisions: retire the 400 (their clusters are candidates again); new PINDER and pKPDB validation sets; one set for
+selection and reporting; size and overlap chosen after the comparison below.
+
+- **Candidates:** pool-v3's filters without the validation rules (PINDER accepted, not on exclusions v3, >= 1 labelled
+  interface site; every pKPDB pilot record; neither with a chain exactly equal to a held-out benchmark chain or a pKPDB
+  reference sequence): 35,955 PINDER complexes / 16,253 clusters, 63,808 pKPDB entries / 16,341 groups.
+- **Validation (option B):** 800 pKPDB groups, then 800 PINDER clusters, of which 400 are drawn among complexes with a
+  chain >= 70% / 80% to (or equal to) a pKPDB validation chain. One structure per group (the first eligible by the
+  pool-v4 rank: PINDER >= 1 labelled eval-mask interface site, the sites validation scores; pKPDB >= 1 clean site).
+  Groups are stratified by (stratum, size bucket 128..1,536) with proportional largest-remainder shares, chosen by a
+  separate validation rank.
+- **Training:** candidates outside the validation groups without any chain >= 70% identity over >= 80% of both
+  sequences to, or exactly equal to, any chain of either validation set. Both pools are screened against both sets.
+- **Reproducibility:** MMseqs2 chain clustering differed between thread counts (16,532 vs 16,544 clusters), so the
+  assignment is saved once (`pkpdb-chain-clusters.tsv`) and reused; two builds gave identical files.
+
+Size and overlap options (training at 100%; pool-v3: 35,056 PINDER, 62,874 pKPDB):
+
+| Option | PINDER train | pKPDB train | PINDER val sites (interface) | pKPDB val sites |
+|---|---:|---:|---:|---:|
+| 1,600 each | 20,322 (-42%) | 49,802 (-21%) | 86,586 (24,304) | 44,160 |
+| 800 each | 25,470 (-27%) | 55,392 (-12%) | 42,825 (12,044) | 21,877 |
+| 800 each, 400 pKPDB val sharing PINDER val proteins | 25,698 (-27%) | 56,819 (-10%) | 42,825 (12,044) | 24,033 |
+| **800 each, 400 PINDER val sharing pKPDB val proteins (B, chosen)** | **27,933 (-20%)** | **56,191 (-11%)** | **38,126 (10,200)** | **21,666** |
+
+- Most of the PINDER loss comes from PINDER's own validation chains (PINDER clusters pair interfaces, so the same
+  proteins recur across clusters). In B: 4,567 complexes match only PINDER validation chains, 454 only pKPDB's and
+  1,268 both, plus 1,733 in the validation clusters. pKPDB loses 3,611 in validation groups and 4,006 to the screen
+  (1,487 PINDER-only, 417 pKPDB-only, 2,102 both).
+- Caveat of B: half the PINDER validation set is drawn among proteins that also appear in pKPDB, so it has fewer
+  interface sites per complex than a random draw.
+- 3 PINDER pool PDB IDs are shared with benchmark val/test structures (different chains; sequence-screened).
+
+| Fraction | PINDER complexes / clusters | PINDER sites (interface) | pKPDB structures / groups | pKPDB sites |
+|---|---:|---:|---:|---:|
+| 10% | 2,783 / 1,240 | 151,046 (40,785) | 5,224 / 1,445 | 137,177 |
+| 50% | 13,948 / 6,206 | 740,642 (194,601) | 27,778 / 7,229 | 784,378 |
+| 75% | 20,881 / 9,309 | 1,078,956 (286,166) | 41,171 / 10,843 | 1,150,767 |
+| 100% | 27,933 / 12,414 | 1,422,001 (377,609) | 56,191 / 14,458 | 1,576,200 |
+
+Files: `training/pool-v4/{pinder,pkpdb}.tsv` (training, `min_fraction`), `{pinder,pkpdb}-val.tsv`, `pool-v4.json`,
+`pkpdb-chain-clusters.tsv`; what-ifs in `training/pool-v4-n1600`, `-n800`, `-n800-o400-pinder`, `-n800-o400-pkpdb`.
+Built on comp1400 (user-authorised one-off; general partitions queued about 8 h), about 1.5 min per build. On
+Isambard, the 465 PINDER and 836 pKPDB entries bundle-v1 did not carry (11,803 files, 476 MB) are in
+`<runtime>/overlay/` (sha256-checked against coulson); `production_graphs.source` reads them there.

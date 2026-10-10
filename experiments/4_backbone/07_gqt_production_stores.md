@@ -380,3 +380,32 @@ accumulate into the gathered rows, and the padding sent most gather indices to o
   neighbour blocks (k = 288 runs as 512) would need a kernel that loops over neighbour blocks. Both mean changing
   `pkanet/triton_attention.py`, which registered experiments hash, so neither is done here.
 - The batch-size sweep above ran with zero-fill padding; spread padding changes speed only.
+
+## gqt-production-v2: pool-v4 stores and the 10% pilot (2026-10-10)
+
+Stores for pool-v4 (option B; `05_pinder_dataset.md`) under `training/gqt-production-v2/` (the default
+`PKATRAIN_GQT_VERSION`; v1 stores and runs are unchanged). Every structure built: PINDER 28,733 (27,933 training +
+800 validation), pKPDB 56,991 (56,191 + 800 validation, split 'val', scored on `train_mask`), benchmark-val 142.
+Store-v2 sizes 79.9 GB and 163.2 GB; build + pack about 3 min (PINDER) and 6 min (pKPDB) on one GH200 job each.
+Entries bundle-v1 lacked are read from `<runtime>/overlay/`.
+
+Pilot `gqt-production-v2/runs/pilot-10pct` (job 7232756): batch 16, 10% pool (2,783 PINDER, 5,224 pKPDB), spread
+padding, 15 loader workers, prefetch 4. 7.5 min in total; about 12.4 s of training and 4.1 s of validation per epoch
+after epoch 1 (v1 pilot: 27.5 s on a larger 10% pool with zero-fill padding). Loader wait 4-9%.
+
+| Epoch | Train loss | PINDER state MAE | Interface paired MAE | pKPDB val MAE | Benchmark MAE | Selection |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 1.886 | 0.596 | 0.315 | 0.651 | 0.647 | 0.911 |
+| 5 | 1.155 | 0.540 | 0.295 | 0.621 | 0.623 | 0.835 |
+| 10 | 1.025 | 0.534 | 0.265 | 0.600 | 0.621 | 0.799 |
+| **17** | 0.848 | **0.473** | **0.264** | **0.557** | **0.573** | **0.737** |
+| 20 | 0.798 | 0.474 | 0.270 | 0.560 | 0.577 | 0.744 |
+
+Selected epoch 17:
+- **PINDER validation (800 complexes):** 29,906 eval-mask sites, 7,703 at the interface; state MAE 0.473 (MSE 0.542),
+  paired MAE 0.077 (MSE 0.067), interface paired MAE 0.264.
+- **pKPDB validation (800 structures, pKPDB labels):** 21,666 sites; MAE 0.557, MSE 0.733; structure-macro MAE 0.448.
+- **Benchmark (142, PypKa):** group-macro MAE 0.573, RMSE 0.818, Spearman 0.764.
+
+Not comparable with the v1 pilot's numbers: the PINDER validation set, the training pools and the 10% subsets all
+changed.
