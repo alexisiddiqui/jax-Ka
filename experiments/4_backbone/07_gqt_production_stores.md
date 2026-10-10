@@ -409,3 +409,26 @@ Selected epoch 17:
 
 Not comparable with the v1 pilot's numbers: the PINDER validation set, the training pools and the 10% subsets all
 changed.
+
+### Interface-weighted paired loss, 10% pool (2026-10-10)
+
+`--paired-weight interface` multiplies the paired (AB - free) squared error by the normalised `w_interface`
+(experiment 41's interface-arm formula; `production_train.interface_weighted`, `JointEngine` unchanged). Validation and
+selection stay unweighted. Run `gqt-production-v2/runs/pilot-10pct-winterface` (job 7233332), otherwise identical to
+`pilot-10pct`; both selected epoch 17.
+
+| Selected epoch 17 | Unweighted | Interface-weighted | Paired bootstrap difference (95% CI, 800 complexes) |
+|---|---:|---:|---|
+| Selection | 0.7375 | 0.7317 | -0.0058 (-0.0115 to +0.0001) |
+| Interface paired MAE | 0.2644 | 0.2605 | -0.0039 (-0.0082 to +0.0006) |
+| Interface paired MSE | 0.2525 | 0.2407 | -0.0117 (-0.0236 to -0.0009) |
+| Paired MAE, <= 4 A from partner | 0.5349 | 0.5224 | |
+| State MAE | 0.4730 | 0.4712 | -0.0019 (-0.0053 to +0.0019) |
+| State MSE | 0.5419 | 0.5503 | |
+| pKPDB val MAE | 0.5572 | 0.5548 | |
+| Benchmark MAE (group-macro) | 0.5728 | 0.5747 | |
+
+- Interface weighting lowers interface paired error, mostly at sites within 4 A of the partner, without hurting state,
+  pKPDB or benchmark error. The interface MSE gain is outside the validation-sampling CI; the MAE and selection gains
+  are borderline.
+- One seed each. The CIs cover only which validation complexes were sampled, not seed-to-seed variation.
