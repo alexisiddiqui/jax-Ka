@@ -70,3 +70,43 @@ validation rows, checked against `rows.json`) when it exists.
   - pKPDB: 19 with no usable side-chain sites, 6qsz (too large for the PDB format the pKAI parser reads), and 2xgc
     (coincident atoms);
   - PINDER: 8 training complexes with no paired sites. The 400 validation complexes are unaffected.
+
+## Batch-size sweep, fraction scaling and the released pKAI reference (2026-10-10, Isambard)
+
+All MSEs are at the best (selection) epoch on the same fixed validation sets: the frozen 5k-pilot pKPDB validation
+package and the 400-complex PINDER validation cohort. PINDER validation is now reported for pKPDB-only arms too, but
+their selection stays on pKPDB MSE alone; the earlier pKPDB-only runs were scored afterwards from `best.pt`
+(`posthoc-validation.json`). Early stopping is unchanged (delta 0.001, patience 8); `train` takes an optional batch size
+and epoch cap (sqrt LR rule, separate run directories), and `PKAI_FRACTION` selects the pool-v3 fraction (output
+`training/pkai-joint-scale-v1-f<pct>`; 10% keeps the registered path).
+
+Batch sweep, 10% full/joint, cap 400 (the registered b256/cap-100 run hit its cap at 0.406 pKPDB MSE):
+
+| Batch | LR | Epochs | Selection | pKPDB | PINDER state | PINDER paired | Wall |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 256 | 2e-6 | 177 | 0.1594 | 0.369 | 0.079 | 0.030 | 10.8 min |
+| 1,024 | 4e-6 | 183 | 0.1586 | 0.366 | 0.079 | 0.030 | 2.9 min |
+| 4,096 | 8e-6 | 231 | 0.1544 | 0.357 | 0.077 | 0.030 | 1.2 min |
+
+Batch 4,096 / LR 8e-6 / cap 400 was chosen for the fraction runs. Every run stopped on the delta threshold with its best
+epoch at or near the last, so convergence is slow rather than finished; a higher base LR or a schedule is untested.
+
+Fraction scaling (batch 4,096, LR 8e-6, cap 400; peak GPU memory under 9 GB of 96):
+
+| Model | Fraction | pKPDB val MSE | PINDER state MSE | PINDER paired MSE |
+|---|---|---:|---:|---:|
+| Released pKAI (all-atom) | - | 0.324 | 0.0070* | 0.0012* |
+| Backbone, pKPDB-only | 10% / 50% | 1.075 / 1.104 | 0.866 / 0.870 | 0.212 / 0.215 |
+| Backbone, joint | 10% / 50% | 1.077 / 1.088 | 0.847 / 0.840 | 0.205 / 0.205 |
+| All-atom, pKPDB-only | 10% / 50% | 0.405 / 0.383 | 0.147 / 0.082 | 0.040 / 0.029 |
+| All-atom, joint | 10% / 50% | 0.357 / 0.314 | 0.077 / 0.055 | 0.030 / 0.022 |
+
+\* The PINDER validation labels were produced by this pKAI model (Siamese-task relabelling), so its PINDER columns are
+a floor rather than a target. Its pKPDB figure is likely optimistic: it was trained on pKPDB PypKa labels, probably
+including these validation structures, and on more data than these subsets. Computed with exp 48's validation code in
+float32 (`native-pkai-validation.json`).
+
+- All-atom features improve from 10% to 50% on every metric. Joint training beats pKPDB-only at both fractions (50%:
+  pKPDB 0.314 vs 0.383; PINDER paired 0.022 vs 0.029), and the 50% joint model edges past the released pKAI on pKPDB.
+- Backbone features do not improve with more data (about 1.08-1.10 pKPDB MSE), and joint training changes little.
+- Training sites: pKPDB 154,539 (10%) and 872,450 (50%). 75% and 100% are running (jobs 7212900-7212915).
