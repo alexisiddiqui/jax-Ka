@@ -19,7 +19,7 @@ solver = ["optimistix>=0.0.10", "lineax>=0.0.7", "equinox>=0.11"]
 train = ["optimistix>=0.0.10", "lineax>=0.0.7", "equinox>=0.11", "optax>=0.2.5", "pyarrow>=20", "filelock>=3.16", "zstandard>=0.23"]
 triton = ["jax-triton==0.4.1; python_version >= '3.12'", "triton==3.8.0; python_version >= '3.12'"]
 # native pKAI (experiment 48 and the pKAI evaluations); torch pins its own triton, so install into a separate venv
-pkai = ["torch>=2.7"]
+pkai = ["torch>=2.7", "zstandard>=0.23"]
 mps = [
   "jax==0.11.1; python_version >= '3.12'",
   "jaxlib==0.11.1; python_version >= '3.12'",

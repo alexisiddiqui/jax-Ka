@@ -38,6 +38,48 @@ def aa20_index(resname):
     return AA20.index(name)
 
 
+# Compact slot form (2026-10-10). Every encoding is a function of, per site, the 250 slot values (1/d^2; 0 in empty
+# slots), each slot's atom class (atom16, atom16aa20) and/or residue type (aa20, atom16aa20), and the site class:
+# 1.25-1.5 kB per site against 16-36 kB dense. compact() inverts a dense matrix and checks that expand() rebuilds it
+# exactly; expand_torch() rebuilds batches on the GPU.
+def compact_fields(encoding="atom16"):
+    return ("value",) + (("atom",) if encoding != "aa20" else ()) + (("aa",) if encoding != "atom16" else ()) + ("site",)
+
+
+def _aa_offset(encoding): return 16 if encoding == "atom16aa20" else 0
+
+
+def expand(slots, encoding="atom16"):
+    slot = SLOT_WIDTH[encoding]; n = len(slots["site"]); x = np.zeros((n, feature_width(encoding)), np.float32)
+    rows = np.arange(n)[:, None]; base = np.arange(250) * slot
+    if "atom" in slots: x[rows, base + slots["atom"]] = slots["value"]
+    if "aa" in slots: x[rows, base + _aa_offset(encoding) + slots["aa"]] = slots["value"]
+    x[np.arange(n), 250 * slot + slots["site"]] = 1.0
+    return x
+
+
+def compact(x, encoding="atom16"):
+    slot = SLOT_WIDTH[encoding]; blocks = x[:, :250 * slot].reshape(len(x), 250, slot)
+    parts = {} if encoding == "aa20" else {"atom": blocks[..., :16]}
+    if encoding != "atom16": parts["aa"] = blocks[..., _aa_offset(encoding):]
+    out = {"value": next(iter(parts.values())).max(-1)}
+    for name, part in parts.items(): out[name] = part.argmax(-1).astype(np.uint8)
+    out["site"] = x[:, 250 * slot:].argmax(-1).astype(np.uint8)
+    out = {name: out[name] for name in compact_fields(encoding)}
+    if not np.array_equal(expand(out, encoding), x): raise ValueError("dense pKAI features are not in compact slot form")
+    return out
+
+
+def expand_torch(torch, slots, encoding="atom16"):
+    value = slots["value"]; slot = SLOT_WIDTH[encoding]; device = value.device
+    x = torch.zeros((value.shape[0], feature_width(encoding)), dtype=torch.float32, device=device)
+    base = torch.arange(250, device=device) * slot
+    if "atom" in slots: x.scatter_(1, base + slots["atom"].long(), value)
+    if "aa" in slots: x.scatter_(1, base + _aa_offset(encoding) + slots["aa"].long(), value)
+    x.scatter_(1, 250 * slot + slots["site"].long()[:, None], 1.0)
+    return x
+
+
 def feature_matrix(protein, encoding="atom16"):
     """Vectorized distances/OHE; use native atom classification and exact ordering."""
     from residue import AA_ATOMS, ATOM_OHE, RES_OHE

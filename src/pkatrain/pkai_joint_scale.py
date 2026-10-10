@@ -42,8 +42,8 @@ REFERENCE_BATCH = 64
 REFERENCE_LR = 1e-6
 LEARNING_RATE = REFERENCE_LR * math.sqrt(BATCH_SIZE / REFERENCE_BATCH)
 OBJECTIVES = ("pkpdb", "joint")
-# Feature failures that are properties of the record, not of the code: the record is excluded and listed in the packed
-# verification. Any other error still fails the shard and blocks packing.
+# Feature failures that are properties of the record, not of the code: the record is excluded and listed in the feature
+# store's metadata. Any other error still fails the shard and blocks packing.
 EXCLUDABLE = ("no mapped pKPDB sites", "no paired sites", "PDB capacity", "Coincident pKAI environment/reference atoms",
               "non-canonical residue in pKAI environment")
 
@@ -351,85 +351,281 @@ def _pinder_feature_record(root, cid, split):
     return {key: value[retained] for key, value in arrays.items()}
 
 
-def prepare_shard(root, dataset, task, tasks):
-    root = Path(root); out = output(root); manifest = read(out / "manifest.json")
-    if digest(out / "records.json") != manifest["records_sha256"]: raise AssertionError("records changed")
-    records = read(out / "records.json")
-    if dataset == "pkpdb": ids = records["pkpdb_train"]
-    elif dataset == "pinder": ids = [(cid, "train") for cid in records["pinder_train"]] + [(cid, "val") for cid in records["pinder_val"]]
-    else: raise ValueError(dataset)
-    selected = ids[task::tasks]; dest = out / "features" / dataset; dest.mkdir(parents=True, exist_ok=True)
-    done = 0; sites = 0; failures = []
-    for item in selected:
-        cid, split = (item, "train") if dataset == "pkpdb" else item
-        path = dest / f"{split}-{cid}.npz"
-        try:
-            if path.exists():
-                with np.load(path) as handle: n = len(handle["target"] if dataset == "pkpdb" else handle["target_ab"])
-            else:
-                values = _pkpdb_feature_record(root, cid) if dataset == "pkpdb" else _pinder_feature_record(root, cid, split)
-                pending = path.with_suffix(f".pending-{os.getpid()}.npz")
-                np.savez_compressed(pending, **values); os.replace(pending, path); n = len(next(iter(values.values())))
-            done += 1; sites += n
-        except Exception as exc:
-            failures.append({"id": cid, "split": split, "error": repr(exc)})
-        if (done + len(failures)) % 10 == 0: print(json.dumps({"dataset":dataset,"task":task,"done":done,"failures":len(failures)}), flush=True)
-    receipt = {"dataset":dataset,"task":task,"tasks":tasks,"assigned":len(selected),"completed":done,"sites":sites,"failures":failures}
-    atomic_json(out / f"prepare-{dataset}-{task:03d}.json", receipt)
+# ---------------------------------------------------------------- feature store
+# One store per encoding (2026-10-10), over the 100% pool-v3 records plus the PINDER validation cohort, shared by every
+# fraction: a run selects its registered records from it at training time (no per-run copies). Each record holds one
+# structure's sites in compact slot form (pkai_scratch.compact: per site 250 values + atom class/residue type + site
+# class, checked to expand back to the dense features exactly) and its targets/weights, as one zstd frame (an
+# uncompressed .npz inside). Layout under training/pkai-features-v2/<encoding>/<dataset>/:
+#   ids.json                     every (id, split) of the 100% pool (+ PINDER validation)
+#   shards/<name>/               records.bin (zstd records) + receipt.json (records, excludable failures); written by
+#                                `prepare` tasks (<t>-of-<T>) or `import` (import-<run>: an earlier run's per-record files)
+#   store/                       `pack-store`: records.bin in file-name order (the order the per-record packing used),
+#                                index.npz (names, sites, byte offsets), records.json, metadata.json, verification.json
+#                                (every record decompressed and checked against its digest); the shards are then removed
+STORE_VERSION = "pkai-features-v2"
+ZSTD_LEVEL = 3
+KINDS = {"pkpdb": ("full", "backbone"), "pinder": ("full_ab", "full_free", "backbone_ab", "backbone_free")}
+SCALARS = {"pkpdb": ("target", "weight"), "pinder": ("target_ab", "target_free", "w_burial", "w_interface")}
+
+
+def feature_root(root, dataset):
+    return Path(root) / "training" / STORE_VERSION / ENCODING / dataset
+
+
+def _name(cid, split): return f"{split}-{cid}"
+
+
+def _encode(arrays):
+    import io, zstandard
+    buffer = io.BytesIO(); np.savez(buffer, **arrays)
+    return zstandard.ZstdCompressor(level=ZSTD_LEVEL).compress(buffer.getvalue())
+
+
+def _decode(blob):
+    import io, zstandard
+    with np.load(io.BytesIO(zstandard.ZstdDecompressor().decompress(blob))) as handle: return {k: handle[k] for k in handle.files}
+
+
+def _record_digest(arrays):
+    h = hashlib.sha256()
+    for name in sorted(arrays): h.update(name.encode()); h.update(_array_digest(arrays[name]).encode())
+    return h.hexdigest()
+
+
+def _compact_record(dataset, dense):
+    from .pkai_scratch import compact
+    if any(dense[kind].shape[1:] != (WIDTH,) for kind in KINDS[dataset]): raise AssertionError(("feature width", WIDTH))
+    out = {f"{kind}.{field}": value for kind in KINDS[dataset] for field, value in compact(dense[kind], ENCODING).items()}
+    out.update({name: np.asarray(dense[name], np.float32) for name in SCALARS[dataset]})
+    return out
+
+
+def store_ids(root):
+    """ids.json of both datasets: the 100% pool-v3 lists (every fraction is a subset) and the PINDER validation cohort."""
+    root = Path(root)
+    pk = [[row["id"], "train"] for row in _pool_rows(root / "pretraining/pkpdb-full-v1/pool-v3.tsv", 1.0)]
+    pi = ([[row["id"], "train"] for row in _pool_rows(pinder_source(root) / "pool-v3.tsv", 1.0)] +
+          [[row["id"], "val"] for row in read(cohort(root))["records"] if row["split"] == "val"])
+    for dataset, ids in (("pkpdb", pk), ("pinder", pi)):
+        base = feature_root(root, dataset); base.mkdir(parents=True, exist_ok=True)
+        if len({_name(*x) for x in ids}) != len(ids): raise AssertionError((dataset, "duplicate ids"))
+        listing = {"encoding": ENCODING, "ids": ids}
+        if (base / "ids.json").exists() and read(base / "ids.json") != listing: raise AssertionError((dataset, "ids.json changed"))
+        atomic_json(base / "ids.json", listing)
+        print(json.dumps({"dataset": dataset, "encoding": ENCODING, "ids": len(ids)}), flush=True)
+
+
+def _write_shard(base, name, items, produce, total):
+    """For each (cid, split, payload) of items, produce(cid, split, payload) -> compact arrays (or raises); each result is
+    appended as one zstd record to shards/<name>/records.bin. Excludable failures are recorded; the shard directory is
+    installed only when no other failure occurred."""
+    shards = base / "shards"; shards.mkdir(parents=True, exist_ok=True); folder = shards / name
+    if (folder / "receipt.json").exists(): return read(folder / "receipt.json")
+    pending = shards / f".{name}.pending-{os.getpid()}"; pending.mkdir()
+    began = time.time(); records = []; failures = []; position = 0
+    with open(pending / "records.bin", "wb") as handle:
+        for number, (cid, split, payload) in enumerate(items, 1):
+            try:
+                arrays = produce(cid, split, payload)
+            except Exception as exc:
+                failures.append({"id": cid, "split": split, "error": repr(exc)}); continue
+            blob = _encode(arrays); handle.write(blob); sites = {len(v) for k, v in arrays.items() if k.endswith(".value")}
+            if len(sites) != 1: raise AssertionError((cid, "site counts differ between feature kinds"))
+            records.append({"name": _name(cid, split), "sites": int(sites.pop()), "sha256": _record_digest(arrays),
+                            "blob": [position, len(blob)]}); position += len(blob)
+            if number % 100 == 0: print(json.dumps({"shard": name, "done": number, "of": total, "failures": len(failures)}), flush=True)
+    receipt = {"name": name, "encoding": ENCODING, "assigned": total, "records": records, "failures": failures,
+               "seconds": round(time.time() - began, 1)}
+    atomic_json(pending / "receipt.json", receipt)
     blocking = [f for f in failures if not _excludable(f)]
-    if blocking: raise RuntimeError(f"{len(blocking)} feature failures ({len(failures) - len(blocking)} excludable); see receipt")
+    if blocking:
+        atomic_json(shards / f"{name}.failures.json", receipt)
+        raise RuntimeError(f"{len(blocking)} feature failures in shard {name} ({len(failures) - len(blocking)} excludable); see {name}.failures.json")
+    os.replace(pending, folder)
+    return receipt
 
 
-def _pack_group(paths, destination, fields):
-    counts = []
-    for path in paths:
-        with np.load(path) as handle: counts.append(len(handle[fields[0]]))
-    total = sum(counts); destination.mkdir(parents=True, exist_ok=True)
-    arrays = {}
-    for field in fields:
-        shape = (total, WIDTH) if field.startswith(("full", "backbone")) else (total,)
-        arrays[field] = np.lib.format.open_memmap(destination / f"{field}.npy", mode="w+", dtype=np.float32, shape=shape)
-    offsets = []; start = 0
-    for path, count in zip(paths, counts):
-        with np.load(path) as handle:
-            for field in fields: arrays[field][start:start+count] = handle[field]
-        offsets.append({"file": path.name, "start": start, "stop": start+count}); start += count
-    for value in arrays.values(): value.flush()
-    del arrays
-    atomic_json(destination / "offsets.json", offsets)
-    return {"sites": total, "files": len(paths), "offsets_sha256": digest(destination / "offsets.json"),
-            "arrays": {field: digest(destination / f"{field}.npy") for field in fields}}
+def _shard_names(base, pattern="*"):
+    receipts = [read(p) for p in sorted((base / "shards").glob(f"{pattern}/receipt.json"))]
+    return {r["name"] for x in receipts for r in x["records"]} | {_name(f["id"], f["split"]) for x in receipts for f in x["failures"]}
 
 
-def pack_features(root):
-    root = Path(root); out = output(root); records = read(out / "records.json")
-    expected = {"pkpdb": len(records["pkpdb_train"]),
-                "pinder": len(records["pinder_train"]) + len(records["pinder_val"])}
-    receipts = {}
-    for dataset in ("pkpdb", "pinder"):
-        rr = [read(p) for p in sorted(out.glob(f"prepare-{dataset}-*.json"))]
-        failures = [f for r in rr for f in r["failures"]]
-        if any(not _excludable(f) for f in failures): raise AssertionError((dataset, "feature failures"))
-        if not rr or sum(r["completed"] for r in rr) + len(failures) != expected[dataset]:
-            raise AssertionError((dataset, len(rr), sum(r["completed"] for r in rr), len(failures), expected[dataset]))
-        receipts[f"{dataset}_excluded"] = sorted(failures, key=lambda f: (f["split"], f["id"]))
-    # Only this run's registered records (features/ may be shared with a larger, nested fraction); sorted by file name as
-    # before, so runs whose features/ holds exactly their records pack identically.
-    def record_paths(dataset, split, ids):
-        paths = [out / f"features/{dataset}/{split}-{cid}.npz" for cid in ids]
-        return sorted((p for p in paths if p.exists()), key=lambda p: p.name)
-    pkpaths = record_paths("pkpdb", "train", records["pkpdb_train"])
-    if len(pkpaths) != sum(r["completed"] for r in [read(p) for p in sorted(out.glob("prepare-pkpdb-*.json"))]):
-        raise AssertionError(("pkpdb", "feature files differ from completed records", len(pkpaths)))
-    receipts["pkpdb_train"] = _pack_group(pkpaths, out / "packed/pkpdb-train",
-        ("full","backbone","target","weight"))
-    for split in ("train", "val"):
-        paths = record_paths("pinder", split, records[f"pinder_{split}"])
-        receipts[f"pinder_{split}"] = _pack_group(paths, out / f"packed/pinder-{split}",
-            ("full_ab","full_free","backbone_ab","backbone_free","target_ab","target_free","w_burial","w_interface"))
-    excluded = {k: receipts.pop(k) for k in [k for k in receipts if k.endswith("_excluded")]}
-    atomic_json(out / "packed/verification.json", {"passed":True,"groups":receipts,"excluded":excluded,"test_data_included":False})
-    print(json.dumps({**{k:v["sites"] for k,v in receipts.items()}, **{k:len(v) for k,v in excluded.items()}}, sort_keys=True), flush=True)
+def prepare_shard(root, dataset, task, tasks):
+    """Task t of T computes ids[t::T], skipping records that an import shard already holds."""
+    root = Path(root); base = feature_root(root, dataset); imported = _shard_names(base, "import-*")
+    mine = [tuple(x) for x in read(base / "ids.json")["ids"][task::tasks] if _name(*x) not in imported]
+    def produce(cid, split, _):
+        return _compact_record(dataset, _pkpdb_feature_record(root, cid) if dataset == "pkpdb" else _pinder_feature_record(root, cid, split))
+    receipt = _write_shard(base, f"{task:04d}-of-{tasks:04d}", ((cid, split, None) for cid, split in mine), produce, len(mine))
+    print(json.dumps({"dataset": dataset, "task": task, "records": len(receipt["records"]), "failures": len(receipt["failures"])}), flush=True)
+
+
+def import_run(root, run, dataset):
+    """Import an earlier run's per-record feature files (features/<dataset>.tar from the archive job, else the loose
+    features/<dataset>/ directory) as shards/import-<run>/, with the run's excludable failures (prepare-<dataset>-*.json).
+    Every record must be in ids.json and is converted by compact(), whose exact round trip is checked."""
+    import tarfile
+    root = Path(root); run = Path(run); base = feature_root(root, dataset)
+    wanted = {_name(*x) for x in read(base / "ids.json")["ids"]}
+    failures = [f for p in sorted(run.glob(f"prepare-{dataset}-*.json")) for f in read(p)["failures"]]
+    if any(not _excludable(f) for f in failures): raise AssertionError((run.name, dataset, "blocking failures in the run"))
+    def members():
+        tar = run / "features" / f"{dataset}.tar"
+        if tar.exists():
+            with tarfile.open(tar, "r|") as stream:  # one sequential pass
+                for member in stream:
+                    if member.isfile() and member.name.endswith(".npz"):
+                        with np.load(stream.extractfile(member)) as handle: yield Path(member.name).stem, {k: handle[k] for k in handle.files}
+        else:
+            for path in sorted((run / "features" / dataset).glob("*.npz")):
+                with np.load(path) as handle: yield path.stem, {k: handle[k] for k in handle.files}
+    def produce(cid, split, dense):
+        if _name(cid, split) not in wanted: raise AssertionError((_name(cid, split), "not in ids.json"))
+        return _compact_record(dataset, dense)
+    items = ((*reversed(stem.split("-", 1)), dense) for stem, dense in members())  # "<split>-<id>" -> (id, split, dense)
+    receipt = _write_shard(base, f"import-{run.name}", items, produce, None)
+    if receipt["failures"]: raise AssertionError((run.name, dataset, receipt["failures"][:3], "import failures"))
+    receipt["failures"] = [f for f in failures if _name(f["id"], f["split"]) in wanted]
+    atomic_json(base / "shards" / f"import-{run.name}" / "receipt.json", receipt)
+    print(json.dumps({"run": run.name, "dataset": dataset, "records": len(receipt["records"]), "failures": len(receipt["failures"])}), flush=True)
+
+
+def _order(names): return sorted(names, key=lambda n: n + ".npz")  # the file-name order of the per-record packing
+
+
+def pack_store(root, dataset, workers=8):
+    """Concatenate the shards' records (each name once; a name in several shards must have the same digest) into
+    store/records.bin in file-name order, verify every record, install, then remove the shards."""
+    import shutil
+    from concurrent.futures import ThreadPoolExecutor
+    root = Path(root); base = feature_root(root, dataset); destination = base / "store"
+    if (destination / "verification.json").exists(): return read(destination / "verification.json")
+    listing = [_name(*x) for x in read(base / "ids.json")["ids"]]
+    receipts = [read(p) for p in sorted((base / "shards").glob("*/receipt.json"))]
+    found = {}; excluded = {}
+    for receipt in receipts:
+        if receipt["encoding"] != ENCODING: raise AssertionError((receipt["name"], "encoding"))
+        for r in receipt["records"]:
+            if r["name"] in found and found[r["name"]][0]["sha256"] != r["sha256"]: raise AssertionError((r["name"], "records differ between shards"))
+            found.setdefault(r["name"], (r, base / "shards" / receipt["name"]))
+        for f in receipt["failures"]: excluded.setdefault(_name(f["id"], f["split"]), f)
+    if set(found) & set(excluded): raise AssertionError(("both built and excluded", sorted(set(found) & set(excluded))[:5]))
+    missing = [n for n in listing if n not in found and n not in excluded]
+    if missing: raise AssertionError(f"{len(missing)} records not built yet, e.g. {missing[:5]}")
+    if set(found) - set(listing): raise AssertionError("shard records outside ids.json")
+    names = _order(found); pending = base / f".store.pending-{os.getpid()}"; pending.mkdir()
+    offsets = np.zeros(len(names) + 1, np.int64); handles = {}; dtypes = None
+    with open(pending / "records.bin", "wb") as out:
+        for i, name in enumerate(names):
+            record, folder = found[name]
+            if folder not in handles: handles[folder] = open(folder / "records.bin", "rb")
+            start, length = record["blob"]; blob = os.pread(handles[folder].fileno(), length, start)
+            if len(blob) != length: raise AssertionError((name, "short read"))
+            if dtypes is None: dtypes = {k: [v.dtype.str, list(v.shape[1:])] for k, v in _decode(blob).items()}
+            out.write(blob); offsets[i + 1] = offsets[i] + length
+    for handle in handles.values(): handle.close()
+    np.savez(pending / "index.npz", names=np.asarray(names), sites=np.asarray([found[n][0]["sites"] for n in names], np.int64), offsets=offsets)
+    atomic_json(pending / "records.json", [{k: v for k, v in found[n][0].items() if k != "blob"} for n in names])
+    sites = int(sum(found[n][0]["sites"] for n in names))
+    atomic_json(pending / "metadata.json", {"version": STORE_VERSION, "format": "zstd-npz-records-v1", "zstd_level": ZSTD_LEVEL,
+        "encoding": ENCODING, "width": WIDTH, "dataset": dataset, "fields": dtypes, "records": len(names), "sites": sites,
+        "excluded": [excluded[n] for n in _order(excluded)], "ids_sha256": digest(base / "ids.json"),
+        "dense_float32_bytes": sites * WIDTH * 4 * len(KINDS[dataset]), "compressed_bytes": int(offsets[-1])})
+    store = FeatureStore(pending, verify=False)
+    with ThreadPoolExecutor(workers) as pool:
+        bad = [n for n, ok in zip(names, pool.map(lambda n: _record_digest(store.record(n)) == found[n][0]["sha256"], names)) if not ok]
+    store.close()
+    if bad: raise AssertionError(f"{len(bad)} records differ after packing, e.g. {bad[:5]}")
+    atomic_json(pending / "verification.json", {"passed": True, "records_checked": len(names),
+                "files": {p.name: digest(p) for p in sorted(pending.iterdir())}})
+    os.replace(pending, destination)
+    shutil.rmtree(base / "shards")
+    result = read(destination / "verification.json"); meta = read(destination / "metadata.json")
+    print(json.dumps({"dataset": dataset, "encoding": ENCODING, "records": meta["records"], "sites": sites, "excluded": len(meta["excluded"]),
+                      "compressed_gb": round(meta["compressed_bytes"] / 1e9, 2), "dense_gb": round(meta["dense_float32_bytes"] / 1e9, 2)}), flush=True)
+    return result
+
+
+class FeatureStore:
+    """Read access to a packed feature store: record(name) -> {field: array}; select(names, fields) -> the named
+    records' arrays concatenated in the given order (threaded decompression)."""
+    def __init__(self, path, verify=True):
+        self.path = Path(path); self.metadata = read(self.path / "metadata.json")
+        if verify and not read(self.path / "verification.json")["passed"]: raise AssertionError((str(path), "unverified store"))
+        index = np.load(self.path / "index.npz"); self.names = [str(n) for n in index["names"]]
+        self.position = {n: i for i, n in enumerate(self.names)}; self.sites = index["sites"]; self.offsets = index["offsets"]
+        self.fd = os.open(self.path / "records.bin", os.O_RDONLY)
+
+    def record(self, name):
+        i = self.position[name]; start, stop = int(self.offsets[i]), int(self.offsets[i + 1])
+        return _decode(os.pread(self.fd, stop - start, start))
+
+    def select(self, names, fields, workers=16):
+        from concurrent.futures import ThreadPoolExecutor
+        counts = np.asarray([self.sites[self.position[n]] for n in names], np.int64); starts = np.concatenate(([0], np.cumsum(counts)))
+        spec = self.metadata["fields"]
+        out = {f: np.empty((int(starts[-1]), *spec[f][1]), np.dtype(spec[f][0])) for f in fields}
+        def fill(i):
+            arrays = self.record(names[i])
+            for f in fields: out[f][starts[i]:starts[i + 1]] = arrays[f]
+        with ThreadPoolExecutor(workers) as pool: list(pool.map(fill, range(len(names))))
+        return out
+
+    def close(self): os.close(self.fd)
+
+
+def run_selection(root):
+    """The run's registered records per training/validation group, in file-name order, against the two stores; records
+    a store excluded are listed, any other absent record is an error."""
+    records = read(output(root) / "records.json"); groups = {}
+    for group, dataset, split, key in (("pkpdb-train", "pkpdb", "train", "pkpdb_train"), ("pinder-train", "pinder", "train", "pinder_train"),
+                                       ("pinder-val", "pinder", "val", "pinder_val")):
+        path = feature_root(root, dataset) / "store"; meta = read(path / "metadata.json")
+        index = set(str(n) for n in np.load(path / "index.npz")["names"]); excluded = {_name(f["id"], f["split"]) for f in meta["excluded"]}
+        names = _order(_name(cid, split) for cid in records[key])
+        absent = [n for n in names if n not in index]
+        if set(absent) - excluded: raise AssertionError((group, "records missing from the store", sorted(set(absent) - excluded)[:5]))
+        groups[group] = {"dataset": dataset, "names": [n for n in names if n in index], "excluded": absent,
+                         "store_verification_sha256": digest(path / "verification.json")}
+    return groups
+
+
+def load_group(root, selection, group, kinds, scalars):
+    """Compact arrays of one group: '<kind>.<field>' for each kind plus the scalar fields."""
+    from .pkai_scratch import compact_fields
+    item = selection[group]; store = FeatureStore(feature_root(root, item["dataset"]) / "store")
+    try: return store.select(item["names"], [f"{k}.{f}" for k in kinds for f in compact_fields(ENCODING)] + list(scalars))
+    finally: store.close()
+
+
+def dense(torch, batch, prefix):
+    """Batch features: the dense array if the source holds one, else expanded on the device from '<prefix>.<field>'."""
+    from .pkai_scratch import compact_fields, expand_torch
+    if prefix in batch: return batch[prefix]
+    return expand_torch(torch, {f: batch[f"{prefix}.{f}"] for f in compact_fields(ENCODING)}, ENCODING)
+
+
+def compare_packed(root, workers=16):
+    """Before an earlier run's dense packed/ arrays are removed: the store's selection, expanded, must equal them
+    bit for bit (same rows, same order)."""
+    from .pkai_scratch import compact_fields, expand
+    root = Path(root); out = output(root); selection = run_selection(root); report = {}
+    for group, kinds, scalars in (("pkpdb-train", KINDS["pkpdb"], SCALARS["pkpdb"]), ("pinder-train", KINDS["pinder"], SCALARS["pinder"]),
+                                  ("pinder-val", KINDS["pinder"], SCALARS["pinder"])):
+        arrays = load_group(root, selection, group, kinds, scalars); packed = out / "packed" / group; rows = len(arrays[scalars[0]])
+        for name in scalars:
+            if not np.array_equal(np.load(packed / f"{name}.npy"), arrays[name]): raise AssertionError((group, name))
+        for kind in kinds:
+            reference = np.load(packed / f"{kind}.npy", mmap_mode="r")
+            if reference.shape != (rows, WIDTH): raise AssertionError((group, kind, reference.shape, rows))
+            for start in range(0, rows, 65536):
+                stop = min(start + 65536, rows)
+                block = expand({f: arrays[f"{kind}.{f}"][start:stop] for f in compact_fields(ENCODING)}, ENCODING)
+                if not np.array_equal(block, reference[start:stop]): raise AssertionError((group, kind, start))
+        report[group] = {"rows": rows, "identical": True}
+    atomic_json(out / "packed-comparison.json", {"passed": True, "groups": report, "selection": {g: {k: v for k, v in s.items() if k != "names"} for g, s in selection.items()}})
+    print(json.dumps(report), flush=True)
 
 
 def feature_smoke(root):
@@ -483,12 +679,13 @@ def _pkpdb_validation_arrays(root, mode):
     return {"x": np.load(feature_path, mmap_mode="r")[ids], "y": np.asarray([rows[i]["pka"] - rows[i]["model_pka"] for i in ids], np.float32)}
 
 
-def _validation_sources(torch, root, mode, objective, config):
+def _validation_sources(torch, root, mode, objective, config, selection):
     from .loading_torch import PackedSiteSource
     sources = {"pk": PackedSiteSource(_pkpdb_validation_arrays(root, mode), config=config)}
     if objective in ("joint", "pkpdb"):  # PINDER validation is reported for pKPDB-only arms too (not used for their selection)
-        pi = _arrays(output(root) / "packed/pinder-val", (f"{mode}_ab", f"{mode}_free", "target_ab", "target_free"))
-        sources["pi"] = PackedSiteSource({"xa": pi[f"{mode}_ab"], "xf": pi[f"{mode}_free"], "ya": pi["target_ab"], "yf": pi["target_free"]}, config=config)
+        pi = _source_arrays(load_group(root, selection, "pinder-val", (f"{mode}_ab", f"{mode}_free"), ("target_ab", "target_free")),
+                            {f"{mode}_ab": "xa", f"{mode}_free": "xf", "target_ab": "ya", "target_free": "yf"})
+        sources["pi"] = PackedSiteSource(pi, config=config)
     return sources
 
 
@@ -496,16 +693,25 @@ def _validation(torch, model, sources, config, objective="joint"):
     # The established clean 5k validation is independent of the new 10% pool.
     pk = sources["pk"]
     result = {"pkpdb_mse": _squared_sums(torch, model, pk, pk.length, {"pk": lambda b, o: (o - b["y"]).square()}, config,
-                                         lambda b: model(b["x"]))["pk"]}
+                                         lambda b: model(dense(torch, b, "x")))["pk"]}
     if "pi" in sources:
         pi = sources["pi"]
         terms = {"a": lambda b, o: (o[0] - b["ya"]).square(), "f": lambda b, o: (o[1] - b["yf"]).square(),
                  "pair": lambda b, o: ((o[0] - o[1]) - (b["ya"] - b["yf"])).square()}
-        mse = _squared_sums(torch, model, pi, pi.length, terms, config, lambda b: (model(b["xa"]), model(b["xf"])))
+        mse = _squared_sums(torch, model, pi, pi.length, terms, config, lambda b: (model(dense(torch, b, "xa")), model(dense(torch, b, "xf"))))
         result.update(pinder_state_mse=(mse["a"] + mse["f"]) / 2, pinder_paired_mse=mse["pair"])
     selected = ["pkpdb_mse"] if objective == "pkpdb" else list(result)
     result["selection_mse"] = sum(result[k] for k in selected) / len(selected)
     return result
+
+
+def _source_arrays(arrays, rename):
+    """Rename '<kind>.<field>' / scalar fields to the loader's batch keys ('<key>.<field>' / key)."""
+    out = {}
+    for name, value in arrays.items():
+        kind, _, field = name.partition(".")
+        out[f"{rename[kind]}.{field}" if field else rename[kind]] = value
+    return out
 
 
 def _epoch_specs(order_pk, order_pi):
@@ -535,33 +741,34 @@ def train_scale(root, mode, objective, batch_size=None, max_epochs=100):
     from .loading import DeferredScalars, LoaderConfig, Prefetcher
     from .loading_torch import CombinedSource, PackedSiteSource
     if mode not in MODES or objective not in OBJECTIVES: raise ValueError((mode,objective))
-    root=Path(root);out=output(root); packed=read(out/"packed/verification.json")
-    if not packed["passed"]: raise AssertionError("unverified packed inputs")
+    root=Path(root);out=output(root); selection=run_selection(root)
     torch,_=native();require_compute(threads=2,gpu_benchmark=True,allow_comp1400=True)
     torch.set_num_threads(2);torch.manual_seed(SEED);np.random.seed(SEED);torch.backends.cuda.matmul.allow_tf32=False
     model=model_class(torch,inputs=WIDTH)().cuda().train();opt=torch.optim.Adam(model.parameters(),lr=LEARNING_RATE,weight_decay=1e-4)
     config=LoaderConfig()
-    pk=_arrays(out/"packed/pkpdb-train",(mode,"target","weight")); pi=None
-    sources={"pk":PackedSiteSource({"x":pk[mode],"y":pk["target"],"w":pk["weight"]},config=config)}
+    # compact features (pkai_scratch.compact) resident on the GPU when they fit, expanded per batch by dense()
+    pk=_source_arrays(load_group(root,selection,"pkpdb-train",(mode,),("target","weight")),{mode:"x","target":"y","weight":"w"}); pi=None
+    sources={"pk":PackedSiteSource(pk,config=config)}
     if objective=="joint":
-        pi=_arrays(out/"packed/pinder-train",(f"{mode}_ab",f"{mode}_free","target_ab","target_free","w_burial","w_interface"))
-        sources["pi"]=PackedSiteSource({"xa":pi[f"{mode}_ab"],"xf":pi[f"{mode}_free"],"ya":pi["target_ab"],"yf":pi["target_free"],"wb":pi["w_burial"],"wi":pi["w_interface"]},config=config)
-    train_source=CombinedSource(sources); validation_sources=_validation_sources(torch,root,mode,objective,config)
+        pi=_source_arrays(load_group(root,selection,"pinder-train",(f"{mode}_ab",f"{mode}_free"),("target_ab","target_free","w_burial","w_interface")),
+                          {f"{mode}_ab":"xa",f"{mode}_free":"xf","target_ab":"ya","target_free":"yf","w_burial":"wb","w_interface":"wi"})
+        sources["pi"]=PackedSiteSource(pi,config=config)
+    train_source=CombinedSource(sources); validation_sources=_validation_sources(torch,root,mode,objective,config,selection)
     dest=out/"runs"/f"{mode}-{objective}{tag}"/f"seed-{SEED}";dest.mkdir(parents=True,exist_ok=True)
-    provenance={"mode":mode,"objective":objective,"seed":SEED,"batch_size":BATCH_SIZE,"max_epochs":max_epochs,"learning_rate":LEARNING_RATE,"lr_rule":"1e-6*sqrt(batch/64)","precision":"float32","cpus":2,"initialization":"scratch","packed_verification_sha256":digest(out/"packed/verification.json"),"manifest_sha256":digest(out/"manifest.json"),"test_data_included":False,
+    provenance={"mode":mode,"objective":objective,"seed":SEED,"batch_size":BATCH_SIZE,"max_epochs":max_epochs,"learning_rate":LEARNING_RATE,"lr_rule":"1e-6*sqrt(batch/64)","precision":"float32","cpus":2,"initialization":"scratch","features":{g:{k:(len(v) if k in ("names","excluded") else v) for k,v in s.items()} for g,s in selection.items()},"feature_encoding":ENCODING,"manifest_sha256":digest(out/"manifest.json"),"test_data_included":False,
                 "loader":{"workers":config.workers,"prefetch":config.prefetch,"train":train_source.provenance(),"validation":{k:v.provenance() for k,v in validation_sources.items()}}}
     atomic_json(dest/"manifest.json",provenance)
     params=list(model.parameters())
     rng=np.random.default_rng(SEED);best=float("inf");anchor=float("inf");stall=0;history=[];began=time.monotonic();patience=8
     for epoch in range(1,max_epochs+1):
         if stall>=patience:break
-        model.train();order_pk=rng.permutation(len(pk["target"]));order_pi=rng.permutation(len(pi["target_ab"])) if pi else None
+        model.train();order_pk=rng.permutation(len(pk["y"]));order_pi=rng.permutation(len(pi["ya"])) if pi else None
         losses=DeferredScalars(every=50)
         prefetcher=Prefetcher(train_source,_epoch_specs(order_pk,order_pi),config,train_source.to_device,train_source.on_consume)
         for _,batch in prefetcher:
-            b=batch["pk"];lpk=_weighted_mse(torch,model(b["x"]),b["y"],b["w"]);components=[lpk]
+            b=batch["pk"];lpk=_weighted_mse(torch,model(dense(torch,b,"x")),b["y"],b["w"]);components=[lpk]
             if pi:
-                b=batch["pi"];pa=model(b["xa"]);pf=model(b["xf"])
+                b=batch["pi"];pa=model(dense(torch,b,"xa"));pf=model(dense(torch,b,"xf"))
                 components += [(_weighted_mse(torch,pa,b["ya"],b["wb"])+_weighted_mse(torch,pf,b["yf"],b["wb"]))/2,_weighted_mse(torch,pa-pf,b["ya"]-b["yf"],b["wi"])]
             loss=sum(components)/len(components);opt.zero_grad(set_to_none=True);loss.backward()
             if any(p.grad is None for p in params):raise FloatingPointError("missing gradient")
@@ -787,8 +994,11 @@ def main():
     action = sys.argv[1] if len(sys.argv) > 1 else "smoke"
     if action == "smoke": smoke(root)
     elif action == "register": register(root)
+    elif action == "store-ids": store_ids(root)
     elif action == "prepare": prepare_shard(root, sys.argv[2], int(sys.argv[3]), int(sys.argv[4]))
-    elif action == "pack": pack_features(root)
+    elif action == "import": import_run(root, sys.argv[2], sys.argv[3])
+    elif action == "pack-store": pack_store(root, sys.argv[2], int(os.environ.get("SLURM_CPUS_PER_TASK", "8")))
+    elif action == "compare-packed": compare_packed(root)
     elif action == "feature-smoke": feature_smoke(root)
     elif action == "build-validation":
         build_validation(root, sys.argv[2] if len(sys.argv) > 2 else ENCODING, int(os.environ.get("SLURM_CPUS_PER_TASK", "1")))
