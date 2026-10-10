@@ -23,7 +23,7 @@ from biotite.structure.io import pdbx
 
 from pkabench.runtime import atomic_json, digest, require_compute
 from pkabench.pkai_backbone_pinder_eval import _features as backbone_features
-from .pkai_scratch import architecture_gate, feature_matrix, model_class, native
+from .pkai_scratch import architecture_gate, feature_matrix, feature_width, model_class, native
 
 
 SEED = 17
@@ -33,6 +33,10 @@ GROUP_ALIAS = {"NTR": "NTERM", "CTR": "CTERM"}
 KEY_FIELDS = ("chain", "resnum", "icode", "group")
 # pool-v3 fraction (nested 0.1/0.5/0.75/1.0 subsets); PKAI_FRACTION selects another one, with its own output directory
 FRACTION = float(os.environ.get("PKAI_FRACTION", "0.1"))
+# neighbour-slot encoding (pkai_scratch): native "atom16" (4,008 inputs) or "aa20" (5,008); PKAI_ENCODING=aa20 uses its
+# own output directory and pKPDB validation package
+ENCODING = os.environ.get("PKAI_ENCODING", "atom16")
+WIDTH = feature_width(ENCODING)
 BATCH_SIZE = 256
 REFERENCE_BATCH = 64
 REFERENCE_LR = 1e-6
@@ -40,7 +44,8 @@ LEARNING_RATE = REFERENCE_LR * math.sqrt(BATCH_SIZE / REFERENCE_BATCH)
 OBJECTIVES = ("pkpdb", "joint")
 # Feature failures that are properties of the record, not of the code: the record is excluded and listed in the packed
 # verification. Any other error still fails the shard and blocks packing.
-EXCLUDABLE = ("no mapped pKPDB sites", "no paired sites", "PDB capacity", "Coincident pKAI environment/reference atoms")
+EXCLUDABLE = ("no mapped pKPDB sites", "no paired sites", "PDB capacity", "Coincident pKAI environment/reference atoms",
+              "non-canonical residue in pKAI environment")
 
 
 def _excludable(failure):
@@ -53,6 +58,7 @@ def read(path):
 
 def output(root):
     suffix = "" if FRACTION == 0.1 else f"-f{round(FRACTION * 100)}"  # the registered 10% runs keep their path
+    if ENCODING != "atom16": suffix += f"-{ENCODING}"
     return Path(root) / f"training/pkai-joint-scale-v1{suffix}"
 
 
@@ -192,7 +198,7 @@ def _full_features(root, cid, state, keys):
         import sys
         sys.path.insert(0, str(package))
         from protein import Protein
-        residues, matrix = feature_matrix(Protein(path))
+        residues, matrix = feature_matrix(Protein(path), ENCODING)
     lookup = {}
     for index, residue in enumerate(residues):
         original = mapping[(str(residue.chain), int(residue.resnumb))]
@@ -201,7 +207,7 @@ def _full_features(root, cid, state, keys):
             raise AssertionError((cid, state, key, "duplicate pKAI site"))
         lookup[key] = index
     retained = np.asarray([key in lookup for key in keys], bool)
-    result = np.zeros((len(keys), 4008), np.float32)
+    result = np.zeros((len(keys), WIDTH), np.float32)
     for index, key in enumerate(keys):
         if retained[index]:
             result[index] = matrix[lookup[key]]
@@ -211,7 +217,7 @@ def _full_features(root, cid, state, keys):
 def _state_features(root, cid, state, keys, mode):
     atoms = _read_cif(pinder_source(root) / "entries" / cid / f"{state}.cif.gz")
     if mode == "backbone":
-        return backbone_features(atoms, keys)
+        return backbone_features(atoms, keys, ENCODING)
     return _full_features(root, cid, state, keys)
 
 
@@ -290,7 +296,7 @@ def _native_features_for_atoms(atoms, keys):
         path = Path(directory) / "input.pdb"; mapping = _export_pdb(atoms, path)
         _, package = native(); import sys
         sys.path.insert(0, str(package)); from protein import Protein
-        residues, matrix = feature_matrix(Protein(path))
+        residues, matrix = feature_matrix(Protein(path), ENCODING)
     lookup = {}
     for index, residue in enumerate(residues):
         original = mapping[(str(residue.chain), int(residue.resnumb))]
@@ -298,7 +304,7 @@ def _native_features_for_atoms(atoms, keys):
         if key in lookup: raise AssertionError((key, "duplicate pKAI site"))
         lookup[key] = index
     retained = np.asarray([key in lookup for key in keys], bool)
-    result = np.zeros((len(keys), 4008), np.float32)
+    result = np.zeros((len(keys), WIDTH), np.float32)
     for i, key in enumerate(keys):
         if retained[i]: result[i] = matrix[lookup[key]]
     return result, retained
@@ -310,7 +316,7 @@ def _pkpdb_feature_record(root, cid):
     env = {tuple(row[k] for k in KEY_FIELDS): row for row in read(folder / "environment.json")["sites"]}
     keys = [tuple(s[k] for k in KEY_FIELDS) for s in sites]
     atoms = _pkpdb_atoms(root, cid)
-    full, kf = _native_features_for_atoms(atoms, keys); bb, kb = backbone_features(atoms, keys)
+    full, kf = _native_features_for_atoms(atoms, keys); bb, kb = backbone_features(atoms, keys, ENCODING)
     keep = kf & kb & np.asarray([key in env for key in keys], bool)  # bool also when there are no keys
     if not keep.any(): raise ValueError((cid, "no mapped pKPDB sites"))
     from protein import PK_MODS
@@ -381,7 +387,7 @@ def _pack_group(paths, destination, fields):
     total = sum(counts); destination.mkdir(parents=True, exist_ok=True)
     arrays = {}
     for field in fields:
-        shape = (total, 4008) if field.startswith(("full", "backbone")) else (total,)
+        shape = (total, WIDTH) if field.startswith(("full", "backbone")) else (total,)
         arrays[field] = np.lib.format.open_memmap(destination / f"{field}.npy", mode="w+", dtype=np.float32, shape=shape)
     offsets = []; start = 0
     for path, count in zip(paths, counts):
@@ -457,6 +463,9 @@ def _pkpdb_validation_arrays(root, mode):
     """Frozen 5k-pilot validation rows: the compact package (pkabench.dataset_transfer build-validation) when present,
     checked against the pilot row selection, else the pilot arrays themselves."""
     pilot = Path(root) / "pretraining/pkpdb-5k-comparison-v1/pkai-packed"; package = Path(root) / "pretraining/pkpdb-val-pkai-v1"
+    if ENCODING != "atom16":
+        package = validation_package(root, ENCODING)
+        return {"x": np.load(package / ("full.npy" if mode == "full" else "backbone.npy"), mmap_mode="r"), "y": np.load(package / "target.npy")}
     if package.exists():
         if (pilot / "rows.json").exists():
             rows = read(pilot / "rows.json"); ids = np.asarray([i for i, r in enumerate(rows) if r["split"] == "val" and r["group"] in SIDECHAIN_GROUPS])
@@ -523,7 +532,7 @@ def train_scale(root, mode, objective, batch_size=None, max_epochs=100):
     if not packed["passed"]: raise AssertionError("unverified packed inputs")
     torch,_=native();require_compute(threads=2,gpu_benchmark=True,allow_comp1400=True)
     torch.set_num_threads(2);torch.manual_seed(SEED);np.random.seed(SEED);torch.backends.cuda.matmul.allow_tf32=False
-    model=model_class(torch)().cuda().train();opt=torch.optim.Adam(model.parameters(),lr=LEARNING_RATE,weight_decay=1e-4)
+    model=model_class(torch,inputs=WIDTH)().cuda().train();opt=torch.optim.Adam(model.parameters(),lr=LEARNING_RATE,weight_decay=1e-4)
     config=LoaderConfig()
     pk=_arrays(out/"packed/pkpdb-train",(mode,"target","weight")); pi=None
     sources={"pk":PackedSiteSource({"x":pk[mode],"y":pk["target"],"w":pk["weight"]},config=config)}
@@ -678,6 +687,90 @@ def smoke(root):
     print(json.dumps(report, indent=2))
 
 
+def validation_package(root, encoding):
+    return Path(root) / f"pretraining/pkpdb-val-pkai-{encoding}-v1"
+
+
+def _validation_component(task):
+    """Full and backbone features of one frozen 5k-pilot validation component, from its pKAI input.pdb (internal
+    numbering, request.json mapping to author keys), in the given encoding. The backbone path mirrors
+    pkai_backbone_ablation.backbone_features: N/O atoms of other residues within 15 A of the query C-alpha."""
+    record, encoding, wanted = task
+    from .pkai_backbone_ablation import BACKBONE_ATOMS
+    from .pkai_scratch import SLOT_WIDTH, aa20_index
+    _, package = native(); import sys
+    sys.path.insert(0, str(package)); from protein import Protein
+    from residue import ATOM_OHE, RES_OHE
+    path = Path(record["path"])
+    if digest(path / "input.pdb") != record["pdb_sha256"] or digest(path / "rows.json") != record["rows_sha256"]:
+        raise AssertionError((record["complex_id"], "validation input changed"))
+    request = read(path / "request.json"); protein = Protein(path / "input.pdb")
+    residues, full = feature_matrix(protein, encoding)
+    lookup = {(*request["mapping"][str(r.resnumb)], r.resname): i for i, r in enumerate(residues)}
+    if len(lookup) != len(residues): raise AssertionError((record["complex_id"], "ambiguous residue map"))
+    ca = {}
+    with open(path / "input.pdb") as handle:
+        for line in handle:
+            if line.startswith("ATOM ") and line[12:16].strip() == "CA" and line[16] in (" ", "A"):
+                ca[(line[21], int(line[22:26]))] = np.asarray([float(line[30:38]), float(line[38:46]), float(line[46:54])])
+    atoms = [a for a in protein.iter_atoms() if a.aname in BACKBONE_ATOMS]
+    coords = np.asarray([a.coords for a in atoms], np.float64); slot = SLOT_WIDTH[encoding]
+    out = {}
+    for key in wanted:
+        index = lookup[key]; residue = residues[index]; origin = ca[(residue.chain, residue.resnumb)]
+        distance = np.sqrt(((coords - origin) ** 2).sum(-1))
+        ids = np.flatnonzero(np.asarray([a.residue is not residue for a in atoms]) & (distance < 15.0))
+        if np.any(distance[ids] == 0): raise ValueError((record["complex_id"], key, "coincident backbone atom"))
+        bb = np.zeros(feature_width(encoding), np.float32)
+        if encoding == "atom16":
+            residue.env_anames = [atoms[j].aname for j in ids]; residue.env_resnames = [atoms[j].residue.resname for j in ids]
+            residue.env_oheclasses = []; residue.encode_atoms()
+            ordered = [(d, ATOM_OHE.index(c)) for d, c in sorted(zip(distance[ids], residue.env_oheclasses), key=lambda v: (v[0], v[1]))[:250]]
+        else:
+            ordered = sorted(zip(distance[ids], [aa20_index(atoms[j].residue.resname) for j in ids]))[:250]
+        for position, (value, cls) in enumerate(ordered): bb[position * slot + cls] = 1 / float(value) ** 2
+        bb[250 * slot + RES_OHE.index(residue.resname)] = 1.0
+        out[key] = (full[index], bb)
+    return record["complex_id"], out
+
+
+def build_validation(root, encoding, workers=1):
+    """Re-encode the frozen 5k-pilot pKPDB validation rows (the same 7,778 rows, order and targets as
+    pkpdb-val-pkai-v1) from their pilot input.pdb files. With encoding="atom16" the arrays must reproduce the existing
+    package exactly; that check is recorded, and is what validates the builder for other encodings."""
+    from concurrent.futures import ProcessPoolExecutor
+    root = Path(root); base = Path(root) / "pretraining/pkpdb-val-pkai-v1"; rows = read(base / "rows.json")
+    pilot = Path(root) / "pretraining/pkpdb-5k-comparison-v1"
+    records = {r["complex_id"]: r for r in read(pilot / "pkai-features.json")["records"] if r["split"] == "val"}
+    for record in records.values():  # paths were recorded on coulson; resolve them under this runtime
+        record["path"] = str(pilot / "pkai-data/val" / Path(record["path"]).name)
+    wanted = {}
+    for r in rows: wanted.setdefault(r["complex_id"], []).append((r["chain"], r["resnum"], r["icode"], r["group"]))
+    with ProcessPoolExecutor(workers) as pool:
+        computed = dict(pool.map(_validation_component, [(records[c], encoding, keys) for c, keys in sorted(wanted.items())]))
+    full = np.zeros((len(rows), feature_width(encoding)), np.float32); bb = np.zeros_like(full)
+    for i, r in enumerate(rows):
+        f, b = computed[r["complex_id"]][(r["chain"], r["resnum"], r["icode"], r["group"])]; full[i] = f; bb[i] = b
+    dest = validation_package(root, encoding); pending = dest.parent / f".{dest.name}.pending-{os.getpid()}"
+    pending.mkdir(parents=True, exist_ok=True)
+    np.save(pending / "full.npy", full); np.save(pending / "backbone.npy", bb)
+    for name in ("target.npy", "source_rows.npy", "rows.json"): (pending / name).write_bytes((base / name).read_bytes())
+    check = None
+    if encoding == "atom16":
+        check = {"full_identical": bool(np.array_equal(full, np.load(base / "full.npy"))),
+                 "backbone_identical": bool(np.array_equal(bb, np.load(base / "backbone.npy")))}
+        if not all(check.values()): raise AssertionError(("atom16 re-encoding differs from pkpdb-val-pkai-v1", check))
+    atomic_json(pending / "manifest.json", {"encoding": encoding, "rows": len(rows), "width": feature_width(encoding),
+        "source": "pkpdb-5k-comparison-v1 pilot validation input.pdb files; rows, order and targets of pkpdb-val-pkai-v1",
+        "atom16_reproduces_existing_package": check,
+        "files": {p.name: digest(p) for p in sorted(pending.iterdir()) if p.name != "manifest.json"}})
+    if dest.exists():
+        import shutil; shutil.rmtree(dest)
+    os.replace(pending, dest)
+    print(json.dumps({"encoding": encoding, "rows": len(rows), "check": check}), flush=True)
+    return dest
+
+
 def main():
     import sys
     root = Path(os.environ["PKABENCH_RUNTIME"])
@@ -687,6 +780,8 @@ def main():
     elif action == "prepare": prepare_shard(root, sys.argv[2], int(sys.argv[3]), int(sys.argv[4]))
     elif action == "pack": pack_features(root)
     elif action == "feature-smoke": feature_smoke(root)
+    elif action == "build-validation":
+        build_validation(root, sys.argv[2] if len(sys.argv) > 2 else ENCODING, int(os.environ.get("SLURM_CPUS_PER_TASK", "1")))
     elif action == "train":
         train_scale(root, sys.argv[2], sys.argv[3], *(int(v) for v in sys.argv[4:6]))
     else: raise ValueError(action)

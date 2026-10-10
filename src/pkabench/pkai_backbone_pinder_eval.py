@@ -67,7 +67,7 @@ def _read_cif(path):
                               use_author_fields=True, include_bonds=False)
 
 
-def _features(atoms, keys):
+def _features(atoms, keys, encoding="atom16"):
     """Reproduce the registered strict-backbone pKAI representation.
 
     The checkpoint's backbone protocol uses the query residue C-alpha only as
@@ -82,6 +82,7 @@ def _features(atoms, keys):
     context_resnum = np.asarray(atoms.res_id[context], np.int64)
     context_icode = np.asarray(atoms.ins_code[context]).astype(str)
     context_name = atom_name[context]
+    context_residue = np.asarray(atoms.res_name[context]).astype(str)
 
     ca = protein & (atom_name == "CA")
     ca_lookup = {}
@@ -95,7 +96,9 @@ def _features(atoms, keys):
             raise AssertionError((key, "duplicate CA"))
         ca_lookup[key] = coord
 
-    matrix = np.zeros((len(keys), 4008), np.float32)
+    from pkatrain.pkai_scratch import SLOT_WIDTH, aa20_index, feature_width
+    slot = SLOT_WIDTH[encoding]  # "aa20": the slot holds the residue type of the backbone N/O atom (see pkai_scratch)
+    matrix = np.zeros((len(keys), feature_width(encoding)), np.float32)
     retained = np.zeros(len(keys), bool)
     for row, key in enumerate(keys):
         chain, number, insertion, group = key
@@ -110,11 +113,14 @@ def _features(atoms, keys):
             raise ValueError((key, "coincident backbone atom"))
         # Native pKAI sorts by (distance, encoded atom class).  In the strict
         # representation the only possible classes are N (0) and O (9).
-        ordered = sorted(((float(distance[j]), 0 if context_name[j] == "N" else 9)
-                          for j in ids))[:250]
-        for slot, (value, atom_class) in enumerate(ordered):
-            matrix[row, slot * 16 + atom_class] = 1.0 / value ** 2
-        matrix[row, 4000 + RES_OHE.index(group)] = 1.0
+        if encoding == "atom16":
+            ordered = sorted(((float(distance[j]), 0 if context_name[j] == "N" else 9)
+                              for j in ids))[:250]
+        else:
+            ordered = sorted(((float(distance[j]), aa20_index(context_residue[j])) for j in ids))[:250]
+        for position, (value, atom_class) in enumerate(ordered):
+            matrix[row, position * slot + atom_class] = 1.0 / value ** 2
+        matrix[row, 250 * slot + RES_OHE.index(group)] = 1.0
         retained[row] = True
     return matrix, retained
 
