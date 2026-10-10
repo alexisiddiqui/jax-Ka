@@ -284,3 +284,7 @@ rescored (`rescore`, validation-v2.json beside each best.pt; their earlier metri
 Released pKAI (reference; PINDER labels are its own predictions, so these are a floor): pKPDB 0.324, state 0.0070,
 paired 0.0012 / 0.0038 / 0.0028. Interface errors are 2–3× the all-site paired MSE, and the ranking is unchanged:
 AA joint atom16 is best at the interface; at 20 Å the interface metrics are level or slightly worse.
+
+Released pKAI+ (`rescore reference-plus`, job 7238921; same package, same input pipeline, the experimental-pKa-tuned
+variant): pKPDB 0.802, state 0.530, paired 0.090 / 0.268 / 0.199. It is not a target for these labels (PypKa shifts
+and pKAI's own PINDER predictions); pKAI is the reference to beat on pKPDB.
