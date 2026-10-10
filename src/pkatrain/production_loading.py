@@ -15,7 +15,7 @@ mask cleared and valid False, as SiteBatchLoader does), so each bucket compiles 
   node's slots and every padded site at row 0, so the backward scatters of the gathers (Triton atomic_add of dK/dV,
   XLA scatter-add) all accumulate into one row: 60-77% of residue and 77-91% of site gather indices (padding census,
   experiment note 07). spread_padding points masked neighbour slots at their own row and padded sites at distinct real
-  residues. Those slots carry zero attention weight and padded tokens zero upstream gradient, so the loss is unchanged
+  residues (mode "rotate": masked slot j of row i -> row (i + j + 1) mod rows). Those slots carry zero attention weight and padded tokens zero upstream gradient, so the loss is unchanged
   and gradients change only in float summation order.
 
 Manifests (<runtime>/training/gqt-production-v1/<dataset>/manifest-v1.json, `manifest` action, built once under
@@ -96,12 +96,15 @@ def _pad(value, shape):
     out = np.zeros(shape, value.dtype); out[tuple(slice(0, size) for size in value.shape)] = value; return out
 
 
-def spread_padding(graph):
-    """Masked neighbour slots -> own row (residue and site graphs); padded sites -> residue (index mod real residues).
-    Works on one structure's graph, with or without a leading branch axis."""
+def spread_padding(graph, mode="rotate"):
+    """Masked neighbour slots -> spread rows (residue and site graphs); padded sites -> residue (index mod real residues).
+    mode "own": slot -> its own row; "rotate": slot j of row i -> row (i + j + 1) mod rows, so one row's masked slots
+    never share an address (same-address atomics within a program serialise). Works on one structure's graph or a batch
+    (any leading axes)."""
     for index, mask in (("neighbors", "edge_mask"), ("site_neighbors", "site_edge_mask")):
-        value = graph[index]; own = np.broadcast_to(np.arange(value.shape[-2])[:, None], value.shape)
-        graph[index] = np.where(graph[mask].astype(bool), value, own).astype(value.dtype)
+        value = graph[index]; rows, slots = value.shape[-2:]
+        target = np.arange(rows)[:, None] if mode == "own" else (np.arange(rows)[:, None] + np.arange(1, slots + 1)[None, :]) % rows
+        graph[index] = np.where(graph[mask].astype(bool), value, np.broadcast_to(target, value.shape)).astype(value.dtype)
     residue = graph["site_residue"]; real = np.maximum(graph["node_mask"].astype(bool).sum(axis=-1, keepdims=True), 1)
     spread = np.broadcast_to(np.arange(residue.shape[-1]), residue.shape) % real
     graph["site_residue"] = np.where(graph["site_mask"].astype(bool), residue, spread).astype(residue.dtype)
