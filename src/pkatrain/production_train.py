@@ -59,6 +59,31 @@ ARCHITECTURE = {"width": 44, "ff": 88}
 def lr_scale(batch): return math.sqrt(batch / 8)
 
 
+def interface_weighted(engine):
+    """--paired-weight interface (2026-10-10): the paired (AB - free) squared error times the normalised w_interface,
+    experiment 41's 'interface' arm formula (gqt_paired_pinder.PairedEngine); state loss, pKPDB loss and optimizer as
+    JointEngine. Replaces engine.paired_value_grad only."""
+    import jax
+    import jax.numpy as jnp
+    from pkanet.model import PKPDB_PK_MOD
+    reference = jnp.asarray(PKPDB_PK_MOD, jnp.float32)
+    predictions = engine.predictions
+
+    def paired_objective(p, graphs, targets, mask, wb, wi, valid):
+        predicted = predictions(p, graphs)
+        expected = targets - reference[graphs["query_group"][:, 0]][:, None, :]
+        state_error = jnp.square(predicted - expected) * mask[:, None, :]
+        pair_error = jnp.square((predicted[:, 0] - predicted[:, 1]) - (expected[:, 0] - expected[:, 1])) * wi * mask
+        state_loss = jnp.sum(state_error, axis=(1, 2)) / jnp.maximum(2 * jnp.sum(mask, axis=1), 1)
+        pair_loss = jnp.sum(pair_error, axis=1) / jnp.maximum(jnp.sum(mask, axis=1), 1)
+        denominator = jnp.maximum(jnp.sum(valid), 1)
+        state_loss = jnp.sum(jnp.where(valid, state_loss, 0.0)) / denominator
+        pair_loss = jnp.sum(jnp.where(valid, pair_loss, 0.0)) / denominator
+        return state_loss + pair_loss, (state_loss, pair_loss)
+    engine.paired_value_grad = jax.jit(jax.value_and_grad(paired_objective, has_aux=True))
+    return engine
+
+
 MICRO_RESIDUES = 64 * 1536
 
 
@@ -251,7 +276,7 @@ def validate(engine, predict, params, sources, manifests, config, out=None, epoc
             "selection": pinder["state_mae"] + pinder["interface_paired_mae"]}
 
 
-def train(root, run, fraction=0.1, smoke=False, batch=BATCH):
+def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none"):
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
@@ -274,6 +299,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH):
                    "pinder_val": len(select(manifests["pinder"], "val")), "benchmark_val": len(select(manifests["benchmark-val"], "val")),
                    **({"pkpdb_val": len(select(manifests["pkpdb"], "val"))} if select(manifests["pkpdb"], "val") else {})},
         **({"micro_residues": MICRO_RESIDUES, "accumulation": "exact: per-bucket chunks (largest divisor of the batch within the residue budget), values/gradients weighted by valid structures"} if chunked(batch) else {}),
+        **({"paired_weight": "w_interface (experiment 41 interface arm formula)"} if paired_weight == "interface" else {}),
         "pinder_weight_normalization": norms, "smoke": smoke, "test_data_included": False,
         "manifests": {d: digest(output(root, d) / MANIFEST) for d in manifests}, "code": code_hashes()}
     if (out / "protocol.json").exists():
@@ -288,6 +314,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH):
                "benchmark": PkpdbSource(_with_policy(manifests["benchmark-val"]), config=config, mask="eval_mask"),
                **({"pkpdb-val": PkpdbSource(_with_policy(manifests["pkpdb"]), config=config, mask="train_mask")} if select(manifests["pkpdb"], "val") else {})}
     params = initialize_ogqt(jax.random.PRNGKey(SEED), **ARCHITECTURE); engine = JointEngine(params); state = engine.optimizer.init(params)
+    if paired_weight == "interface": engine = interface_weighted(engine)
     predict = jax.jit(jax.vmap(predict_shift, in_axes=(None, 0)))
     history = [json.loads(l) for l in (out / "history.jsonl").read_text().splitlines()] if (out / "history.jsonl").exists() else []
     if history:
@@ -374,14 +401,14 @@ def rescore(root, run, epochs=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="pkatrain.production_train"); sub = parser.add_subparsers(dest="action", required=True)
     p = sub.add_parser("train"); p.add_argument("run"); p.add_argument("--fraction", type=float, default=0.1); p.add_argument("--batch", type=int, default=BATCH)
-    p.add_argument("--smoke", action="store_true")
+    p.add_argument("--smoke", action="store_true"); p.add_argument("--paired-weight", choices=("none", "interface"), default="none")
     p = sub.add_parser("rescore"); p.add_argument("runs", nargs="+")
     args = parser.parse_args(argv); root = Path(os.environ["PKABENCH_RUNTIME"])
     if args.action == "rescore":
         for run in args.runs: rescore(root, run)
         return
     if args.action == "train":
-        result = train(root, args.run, args.fraction, args.smoke, args.batch)
+        result = train(root, args.run, args.fraction, args.smoke, args.batch, args.paired_weight)
         print(json.dumps({"selected_epoch": result["selected_epoch"], "selection": result["validation"]["selection"]}))
 
 
