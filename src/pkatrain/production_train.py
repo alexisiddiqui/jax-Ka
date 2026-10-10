@@ -20,7 +20,11 @@ the 67,725-parameter backbone oGQT (width 44, ff 88); first run on the 10% pool.
 Layout: <runtime>/training/gqt-production-v1/runs/<run>/ protocol.json, history.jsonl, checkpoints/epoch-NNN/,
 selection.json, predictions-{pinder,benchmark}-epoch-NNN.csv.
 
-  python -m pkatrain.production_train train RUN [--fraction 0.1] [--smoke]
+Batch-size sweep (2026-10-10): --batch B trains with a constant B structures per batch in every bucket and the
+learning rate scaled by sqrt(B / 8) (the same rule); validation always runs at 16 per batch (per-structure predictions,
+so the batch size only changes padding). The default 16 reproduces the pilot's protocol.
+
+  python -m pkatrain.production_train train RUN [--fraction 0.1] [--batch 16] [--smoke]
 """
 from __future__ import annotations
 
@@ -42,7 +46,9 @@ from .production_loading import MANIFEST, PinderSource, PkpdbSource, normalizati
 SEED = 17
 BATCH = 16
 ARCHITECTURE = {"width": 44, "ff": 88}
-LR_SCALE = math.sqrt(BATCH / 8)
+
+
+def lr_scale(batch): return math.sqrt(batch / 8)
 
 
 def run_dir(root, run): return Path(root) / "training/gqt-production-v1/runs" / run
@@ -56,23 +62,23 @@ def code_hashes():
     return {str(p.relative_to(src)): digest(p) for p in paths}
 
 
-def _policy(manifest):
+def _policy(manifest, batch=BATCH):
     bounds = BucketPolicy.from_json(manifest["bucket_policy"]).bounds
-    return BucketPolicy(bounds, (BATCH,) * len(bounds))
+    return BucketPolicy(bounds, (batch,) * len(bounds))
 
 
-def _with_policy(manifest):
-    return {**manifest, "bucket_policy": _policy(manifest).to_json()}
+def _with_policy(manifest, batch=BATCH):
+    return {**manifest, "bucket_policy": _policy(manifest, batch).to_json()}
 
 
-def epoch_plans(manifests, fraction, epoch):
+def epoch_plans(manifests, fraction, epoch, batch=BATCH):
     """(PINDER plans, pKPDB plans) for one epoch, deterministic in (SEED, epoch); the pKPDB stream continues across epochs."""
     pinder, pkpdb = manifests["pinder"], manifests["pkpdb"]
-    pair = _policy(pinder).plans(select(pinder, "train", fraction), np.random.default_rng((SEED, epoch, 1)))
+    pair = _policy(pinder, batch).plans(select(pinder, "train", fraction), np.random.default_rng((SEED, epoch, 1)))
     per_epoch = len(pair); start = (epoch - 1) * per_epoch; stream = []; cycle = 0
     pk_records = select(pkpdb, "train", fraction)
     while len(stream) < start + per_epoch:
-        stream.extend(_policy(pkpdb).plans(pk_records, np.random.default_rng((SEED, cycle, 2)))); cycle += 1
+        stream.extend(_policy(pkpdb, batch).plans(pk_records, np.random.default_rng((SEED, cycle, 2)))); cycle += 1
     return pair, stream[start:start + per_epoch]
 
 
@@ -152,7 +158,7 @@ def validate(engine, predict, params, sources, manifests, config, out=None, epoc
             "selection": pinder["state_mae"] + pinder["interface_paired_mae"]}
 
 
-def train(root, run, fraction=0.1, smoke=False):
+def train(root, run, fraction=0.1, smoke=False, batch=BATCH):
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
@@ -162,12 +168,12 @@ def train(root, run, fraction=0.1, smoke=False):
     root = Path(root); out = run_dir(root, run); out.mkdir(parents=True, exist_ok=True)
     jax.config.update("jax_compilation_cache_dir", str(out.parent / "compilation-cache"))
     manifests = {d: read(output(root, d) / MANIFEST) for d in ("pinder", "pkpdb", "benchmark-val")}
-    norms = normalization(manifests["pinder"], fraction)
-    protocol = {"version": "gqt-production-joint-v1", "run": run, "fraction": fraction, "seed": SEED, "batch": BATCH,
+    norms = normalization(manifests["pinder"], fraction); scale = lr_scale(batch)
+    protocol = {"version": "gqt-production-joint-v1", "run": run, "fraction": fraction, "seed": SEED, "batch": batch,
         "architecture": ARCHITECTURE, "initialization": "scratch (pkanet.ogqt.initialize, PRNGKey(17))",
         "objective": "gqt_multitask_replay.JointEngine: pKPDB state-shift MSE (train_mask) + PINDER AB/free state-shift MSE + binding-shift MSE; equal coefficients; no site weights",
         "optimizer": "AdamW weight decay 1e-4, global clip 1 after gradient summation",
-        "schedule": f"gqt_crop_radius.learning_rate x {LR_SCALE:.4f} (1e-3 hold to epoch 10, cosine to 1e-5 by epoch {EPOCHS}); patience {PATIENCE}, min delta {MIN_DELTA}",
+        "schedule": f"gqt_crop_radius.learning_rate x {scale:.4f} (1e-3 hold to epoch 10, cosine to 1e-5 by epoch {EPOCHS}); patience {PATIENCE}, min delta {MIN_DELTA}",
         "sampling": "full PINDER fraction per epoch; one pKPDB batch per PINDER batch from a continuing shuffled stream",
         "selection": "min PINDER validation state MAE + interface paired MAE", "validation": ["PINDER 400 (pKAI)", "benchmark-val 142 (PypKa)"],
         "counts": {"pinder_train": len(select(manifests["pinder"], "train", fraction)), "pkpdb_train": len(select(manifests["pkpdb"], "train", fraction)),
@@ -180,8 +186,8 @@ def train(root, run, fraction=0.1, smoke=False):
             raise AssertionError(f"{out} was registered with a different protocol")
     else: atomic_json(out / "protocol.json", protocol)
     config = LoaderConfig()
-    sources = {"train": JointSource(PinderSource(_with_policy(manifests["pinder"]), config=config, norms=norms),
-                                    PkpdbSource(_with_policy(manifests["pkpdb"]), config=config)),
+    sources = {"train": JointSource(PinderSource(_with_policy(manifests["pinder"], batch), config=config, norms=norms),
+                                    PkpdbSource(_with_policy(manifests["pkpdb"], batch), config=config)),
                "pinder-val": PinderSource(_with_policy(manifests["pinder"]), config=config, norms=norms),
                "benchmark": PkpdbSource(_with_policy(manifests["benchmark-val"]), config=config, mask="eval_mask")}
     params = initialize_ogqt(jax.random.PRNGKey(SEED), **ARCHITECTURE); engine = JointEngine(params); state = engine.optimizer.init(params)
@@ -195,12 +201,12 @@ def train(root, run, fraction=0.1, smoke=False):
     epochs = 2 if smoke else EPOCHS
     for epoch in range(len(history) + 1, epochs + 1):
         if stale >= PATIENCE: break
-        pair, pk = epoch_plans(manifests, fraction, epoch)
+        pair, pk = epoch_plans(manifests, fraction, epoch, batch)
         if smoke: pair, pk = pair[:5], pk[:5]
         specs = list(zip(pair, pk)); deferred = DeferredScalars(every=50); began = time.time()
         prefetcher = Prefetcher(sources["train"], specs, config, to_device)
         for number, (_, (pair_batch, pk_batch)) in enumerate(prefetcher, 1):
-            rate = jnp.asarray(LR_SCALE * learning_rate(epoch, number, len(specs)), jnp.float32)
+            rate = jnp.asarray(scale * learning_rate(epoch, number, len(specs)), jnp.float32)
             graphs, targets, mask, wb, wi, _, valid = pair_batch
             (pair_total, (state_loss, pair_loss)), pair_gradient = engine.paired_value_grad(params, graphs, targets, mask, wb, wi, valid)
             pk_loss, pk_gradient = engine.pkpdb_value_grad(params, *pk_batch)
@@ -212,7 +218,7 @@ def train(root, run, fraction=0.1, smoke=False):
         telemetry = prefetcher.telemetry.summary()
         began = time.time(); validation = validate(engine, predict, params, sources, manifests, config); val_seconds = time.time() - began
         save_checkpoint(out / "checkpoints" / f"epoch-{epoch:03d}", params, state, {"epoch": epoch, "run": run})
-        row = {"epoch": epoch, "updates": len(specs), "learning_rate_end": LR_SCALE * learning_rate(epoch, len(specs), len(specs)),
+        row = {"epoch": epoch, "updates": len(specs), "learning_rate_end": scale * learning_rate(epoch, len(specs), len(specs)),
                "train_loss": {name: float(values[:, i].mean()) for i, name in enumerate(("total", "pkpdb", "pinder_state", "pinder_paired"))},
                "validation": validation, "train_seconds": round(train_seconds, 1), "validation_seconds": round(val_seconds, 1),
                "loader_wait_fraction": telemetry.get("wait_fraction")}
@@ -264,12 +270,13 @@ def rescore(root, run, epochs=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="pkatrain.production_train"); sub = parser.add_subparsers(dest="action", required=True)
-    p = sub.add_parser("train"); p.add_argument("run"); p.add_argument("--fraction", type=float, default=0.1); p.add_argument("--smoke", action="store_true")
+    p = sub.add_parser("train"); p.add_argument("run"); p.add_argument("--fraction", type=float, default=0.1); p.add_argument("--batch", type=int, default=BATCH)
+    p.add_argument("--smoke", action="store_true")
     p = sub.add_parser("rescore"); p.add_argument("run")
     args = parser.parse_args(argv); root = Path(os.environ["PKABENCH_RUNTIME"])
     if args.action == "rescore": rescore(root, args.run); return
     if args.action == "train":
-        result = train(root, args.run, args.fraction, args.smoke)
+        result = train(root, args.run, args.fraction, args.smoke, args.batch)
         print(json.dumps({"selected_epoch": result["selected_epoch"], "selection": result["validation"]["selection"]}))
 
 
