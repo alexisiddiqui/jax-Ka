@@ -127,3 +127,48 @@ Training sizes per bucket (100%): PINDER 128: 2,499; 256: 6,993; 384: 6,846; 512
 
 Open: the pKPDB store has no validation records (the pool is training-only). The pKPDB validation set (the 142
 benchmark structures) is not on Isambard and needs a store built with the same rules.
+
+## Benchmark validation store (`benchmark-val`)
+
+The 142-complex PypKa validation set (`training/shared-v4-float32` `val`; the benchmark validation split both pools
+were screened against) is a third store, built by `graph_data.prepare`'s rules:
+- AB state, `load_topology` with the gap cap, 20 A geometry;
+- `supervision_eligible` finite PypKa midpoints as queries;
+- the site graph;
+- node column 22 (disulfide) zeroed, as `strict_backbone` does at load.
+
+Inputs (711 files, 66 MB; record JSON, AB structures with symlinks dereferenced, PypKa exports and raw results) were
+copied to the same relative runtime paths and checked by sha256. The records' absolute coulson paths are mapped onto
+the local runtime.
+
+Result:
+- 142/142 are identical to `pretraining/graph-pilot-v1` (the original 20 A graphs), edges included.
+- The store is 337 MB (zstd records).
+- `PkpdbSource(manifest, mask="eval_mask")` serves it; the loader content check passes, at about 1,100 structures/s.
+
+## GH200 batch-size calibration (`pkatrain.production_calibration`)
+
+One `JointEngine` gradient step (current 67,725-parameter backbone oGQT, width 44 / ff 88) was run per dataset, bucket
+and batch size, each in a fresh process, on one GH200 (76.5 GB usable). Memory never binds: the largest peak is 17.8 GB
+(PINDER, 1,536-residue bucket, batch 64). Throughput (structures/s; median of 3 steps after compilation):
+
+| Bucket | PINDER 4 | 8 | 16 | 32 | 64 | pKPDB 4 | 8 | 16 | 32 | 64 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 128 | 164 | 327 | 653 | 1,143 | 1,744 | 165 | 327 | 653 | 1,296 | 2,246 |
+| 256 | 145 | 224 | 321 | 405 | 451 | 165 | 304 | 476 | 691 | 863 |
+| 384 | 127 | 180 | 237 | 278 | 306 | 159 | 261 | 386 | 498 | 585 |
+| 512 | 105 | 144 | 174 | 192 | 203 | 141 | 229 | 313 | 404 | 450 |
+| 640 | 111 | 144 | 178 | 192 | 199 | 136 | 211 | 275 | 337 | 378 |
+| 768 | 91 | 120 | 136 | 142 | 150 | 123 | 180 | 227 | 262 | 285 |
+| 1024 | 76 | 95 | 107 | 110 | 114 | 103 | 142 | 181 | 201 | 216 |
+| 1280 | 71 | 88 | 94 | 105 | 108 | 125 | 186 | 244 | 282 | 315 |
+| 1536 | 70 | 81 | 88 | 91 | 95 | | | | | |
+
+The residue-budget policy gives 2-3 structures per batch for the large buckets, where the GPU is least efficient (about
+55-70 structures/s). Throughput saturates from about 16 structures per batch in the large buckets, while small buckets
+keep scaling. Experiment 45 estimated the joint gradient-noise scale at about 18 structures per task batch, and found
+the 1x-2x batch scales (8-16) equivalent on validation. Estimated PINDER epoch time from these rates:
+- residue budget (24/12/8/6/4/4/3/2/2): about 275 s;
+- constant 16 per batch: about 190 s;
+- constant 32 per batch: about 172 s.
+Results: `<runtime>/training/gqt-production-v1/calibration-sweep.json`.
