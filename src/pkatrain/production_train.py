@@ -77,7 +77,7 @@ class VariantEngine:
     """gqt_multitask_replay.JointEngine with the model function and the paired weighting as options (same optimizer,
     objectives and apply); used for --query-norm separate. The default configuration keeps JointEngine itself."""
 
-    def __init__(self, params, predict, paired_weight="none"):
+    def __init__(self, params, predict, paired_weight="none", reduction="structure"):
         import jax
         import jax.numpy as jnp
         import optax
@@ -85,6 +85,12 @@ class VariantEngine:
         from .gqt_regularization import decay_mask
         self.optimizer = optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(1.0, weight_decay=1e-4, mask=decay_mask(params)))
         reference = jnp.asarray(PKPDB_PK_MOD, jnp.float32); weighted = paired_weight == "interface"
+        site_level = reduction in ("site", "pkai"); pkai = reduction == "pkai"
+        # reduction "site": every loss is a mean over the batch's supervised sites; "pkai": experiment 48's weighted
+        # MSEs, sum(w * err^2) / sum(w) over the batch's sites, w_burial on both state losses (pKPDB and PINDER AB/free)
+        # and w_interface on the paired (Siamese) loss (pkatrain.pkai_joint_scale._weighted_mse).
+        def site_mean(err, weight, mask):
+            w = weight * mask; return jnp.sum(w * err) / jnp.maximum(jnp.sum(w), 1e-8)
 
         def paired_predictions(p, graphs):
             batch, branches = graphs["nodes"].shape[:2]
@@ -94,6 +100,12 @@ class VariantEngine:
         def paired_objective(p, graphs, targets, mask, wb, wi, valid):
             predicted = paired_predictions(p, graphs)
             expected = targets - reference[graphs["query_group"][:, 0]][:, None, :]
+            if site_level:
+                m = mask * valid[:, None]; ws = wb if pkai else jnp.ones_like(wb); wp = wi if pkai else jnp.ones_like(wi)
+                err = jnp.square(predicted - expected)
+                state_loss = (site_mean(err[:, 0], ws, m) + site_mean(err[:, 1], ws, m)) / 2
+                pair_loss = site_mean(jnp.square((predicted[:, 0] - predicted[:, 1]) - (expected[:, 0] - expected[:, 1])), wp, m)
+                return state_loss + pair_loss, (state_loss, pair_loss)
             state_error = jnp.square(predicted - expected) * mask[:, None, :]
             pair_error = jnp.square((predicted[:, 0] - predicted[:, 1]) - (expected[:, 0] - expected[:, 1])) * mask
             if weighted: pair_error = pair_error * wi
@@ -104,9 +116,13 @@ class VariantEngine:
             pair_loss = jnp.sum(jnp.where(valid, pair_loss, 0.0)) / denominator
             return state_loss + pair_loss, (state_loss, pair_loss)
 
-        def pkpdb_objective(p, graphs, targets, eligible, valid):
+        def pkpdb_objective(p, graphs, targets, eligible, *rest):
+            *weight, valid = rest
             expected = targets - reference[graphs["query_group"]]
             predicted = jax.vmap(predict, in_axes=(None, 0))(p, graphs)
+            if site_level:
+                w = weight[0] if pkai else jnp.ones_like(targets)
+                return site_mean(jnp.square(predicted - expected), w, eligible * valid[:, None])
             per_structure = jnp.sum(jnp.square(predicted - expected) * eligible, axis=1) / jnp.maximum(jnp.sum(eligible, axis=1), 1)
             return jnp.sum(jnp.where(valid, per_structure, 0.0)) / jnp.maximum(jnp.sum(valid), 1)
 
@@ -122,7 +138,7 @@ class VariantEngine:
         self.apply = jax.jit(apply)
 
 
-def make_model(seed, query_norm="shared", paired_weight="none"):
+def make_model(seed, query_norm="shared", paired_weight="none", reduction="structure"):
     """(params, engine, predict): scratch oGQT and its engine; separate query norm starts as a copy of query norm1."""
     import jax
     import jax.numpy as jnp
@@ -131,7 +147,9 @@ def make_model(seed, query_norm="shared", paired_weight="none"):
     params = initialize_ogqt(jax.random.PRNGKey(seed), **ARCHITECTURE)
     if query_norm == "separate":
         params = {**params, "query_context_norm": jnp.array(params["query"]["norm1"])}
-        return params, VariantEngine(params, predict_shift_separate, paired_weight), jax.jit(jax.vmap(predict_shift_separate, in_axes=(None, 0)))
+        return params, VariantEngine(params, predict_shift_separate, paired_weight, reduction), jax.jit(jax.vmap(predict_shift_separate, in_axes=(None, 0)))
+    if reduction != "structure":
+        return params, VariantEngine(params, predict_shift, paired_weight, reduction), jax.jit(jax.vmap(predict_shift, in_axes=(None, 0)))
     engine = JointEngine(params)
     if paired_weight == "interface": engine = interface_weighted(engine)
     return params, engine, jax.jit(jax.vmap(predict_shift, in_axes=(None, 0)))
@@ -354,7 +372,7 @@ def validate(engine, predict, params, sources, manifests, config, out=None, epoc
             "selection": pinder["state_mae"] + pinder["interface_paired_mae"]}
 
 
-def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none", seed=SEED, query_norm="shared"):
+def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none", seed=SEED, query_norm="shared", reduction="structure"):
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
@@ -378,6 +396,9 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
                    **({"pkpdb_val": len(select(manifests["pkpdb"], "val"))} if select(manifests["pkpdb"], "val") else {})},
         **({"micro_residues": MICRO_RESIDUES, "accumulation": "exact: per-bucket chunks (largest divisor of the batch within the residue budget), values/gradients weighted by valid structures"} if chunked(batch) else {}),
         **({"paired_weight": "w_interface (experiment 41 interface arm formula)"} if paired_weight == "interface" else {}),
+        **({"loss_reduction": {"site": "mean over the batch's supervised sites, unweighted",
+                                "pkai": "experiment 48: sum(w err^2)/sum(w) over the batch's sites; w_burial on pKPDB and PINDER state losses, w_interface on the paired loss"}[reduction]}
+           if reduction != "structure" else {}),
         **({"query_norm": "separate query/context LayerNorm affine in the site-token query attention (query_context_norm, initialised as query norm1)"}
            if query_norm == "separate" else {}),
         "pinder_weight_normalization": norms, "smoke": smoke, "test_data_included": False,
@@ -389,11 +410,12 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     else: atomic_json(out / "protocol.json", protocol)
     config = LoaderConfig()
     sources = {"train": JointSource(PinderSource(_with_policy(manifests["pinder"], batch), config=config, norms=norms),
-                                    PkpdbSource(_with_policy(manifests["pkpdb"], batch), config=config)),
+                                    PkpdbSource(_with_policy(manifests["pkpdb"], batch), config=config, weights=reduction != "structure")),
                "pinder-val": PinderSource(_with_policy(manifests["pinder"]), config=config, norms=norms),
                "benchmark": PkpdbSource(_with_policy(manifests["benchmark-val"]), config=config, mask="eval_mask"),
                **({"pkpdb-val": PkpdbSource(_with_policy(manifests["pkpdb"]), config=config, mask="train_mask")} if select(manifests["pkpdb"], "val") else {})}
-    params, engine, predict = make_model(seed, query_norm, paired_weight); state = engine.optimizer.init(params)
+    if reduction != "structure" and chunked(batch): raise ValueError("site-level losses are not chunk-additive; use batch <= 64")
+    params, engine, predict = make_model(seed, query_norm, paired_weight, reduction); state = engine.optimizer.init(params)
     history = [json.loads(l) for l in (out / "history.jsonl").read_text().splitlines()] if (out / "history.jsonl").exists() else []
     if history:
         last = history[-1]["epoch"]; params, state, _ = load_checkpoint(out / "checkpoints" / f"epoch-{last:03d}", (params, state))
@@ -460,8 +482,9 @@ def rescore(root, run, epochs=None):
     sources = {"pinder-val": PinderSource(_with_policy(manifests["pinder"]), config=config, norms=norms),
                "benchmark": PkpdbSource(_with_policy(manifests["benchmark-val"]), config=config, mask="eval_mask"),
                **({"pkpdb-val": PkpdbSource(_with_policy(manifests["pkpdb"]), config=config, mask="train_mask")} if select(manifests["pkpdb"], "val") else {})}
+    reduction = "structure" if "loss_reduction" not in protocol else ("pkai" if protocol["loss_reduction"].startswith("experiment 48") else "site")
     params, engine, predict = make_model(protocol.get("seed", SEED), "separate" if "query_norm" in protocol else "shared",
-                                         "interface" if "paired_weight" in protocol else "none")
+                                         "interface" if "paired_weight" in protocol else "none", reduction)
     state = engine.optimizer.init(params)
     folders = sorted((out / "checkpoints").glob("epoch-*")); rows = []
     for folder in folders:
@@ -482,13 +505,14 @@ def main(argv=None):
     p = sub.add_parser("train"); p.add_argument("run"); p.add_argument("--fraction", type=float, default=0.1); p.add_argument("--batch", type=int, default=BATCH)
     p.add_argument("--smoke", action="store_true"); p.add_argument("--paired-weight", choices=("none", "interface"), default="none")
     p.add_argument("--seed", type=int, default=SEED); p.add_argument("--query-norm", choices=("shared", "separate"), default="shared")
+    p.add_argument("--loss-reduction", choices=("structure", "site", "pkai"), default="structure")
     p = sub.add_parser("rescore"); p.add_argument("runs", nargs="+")
     args = parser.parse_args(argv); root = Path(os.environ["PKABENCH_RUNTIME"])
     if args.action == "rescore":
         for run in args.runs: rescore(root, run)
         return
     if args.action == "train":
-        result = train(root, args.run, args.fraction, args.smoke, args.batch, args.paired_weight, args.seed, args.query_norm)
+        result = train(root, args.run, args.fraction, args.smoke, args.batch, args.paired_weight, args.seed, args.query_norm, args.loss_reduction)
         print(json.dumps({"selected_epoch": result["selected_epoch"], "selection": result["validation"]["selection"]}))
 
 
