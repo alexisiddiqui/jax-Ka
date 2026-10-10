@@ -225,6 +225,63 @@ class MaskedEngine:
         self.keep_fraction = jax.jit(lambda key, weight, table: jnp.mean(keep(key, weight, table)), static_argnums=2)
 
 
+class DropoutEngine:
+    """--dropout R (2026-10-10): JointEngine's objectives with oGQT's built-in residual dropout (pkanet.model.dropout on
+    every attention and feed-forward output: residue blocks, site query, site-site block) at rate R during training.
+    One key per complex is shared by its AB and free branches (coordinated dropout, gqt_diagnostic_campaign's layout);
+    pKPDB structures draw their own keys. Validation and predictions are deterministic (no dropout)."""
+
+    def __init__(self, params, rate):
+        import jax
+        import jax.numpy as jnp
+        import optax
+        from pkanet.model import PKPDB_PK_MOD
+        from pkanet.ogqt import predict_shift
+        from .gqt_regularization import decay_mask
+        self.optimizer = optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(1.0, weight_decay=1e-4, mask=decay_mask(params)))
+        reference = jnp.asarray(PKPDB_PK_MOD, jnp.float32); rate = float(rate)
+
+        def flatten(graphs):
+            batch, branches = graphs["nodes"].shape[:2]
+            return jax.tree.map(lambda value: value.reshape((batch * branches,) + value.shape[2:]), graphs), batch, branches
+
+        def paired_predictions(p, graphs):
+            flat, batch, branches = flatten(graphs)
+            return jax.vmap(predict_shift, in_axes=(None, 0))(p, flat).reshape(batch, branches, -1)
+
+        def paired_objective(p, graphs, targets, mask, wb, wi, valid, key):
+            del wb, wi
+            flat, batch, branches = flatten(graphs); keys = jnp.repeat(jax.random.split(key, batch), branches, axis=0)
+            predicted = jax.vmap(lambda graph, k: predict_shift(p, graph, key=k, dropout_rate=rate))(flat, keys).reshape(batch, branches, -1)
+            expected = targets - reference[graphs["query_group"][:, 0]][:, None, :]
+            state_error = jnp.square(predicted - expected) * mask[:, None, :]
+            pair_error = jnp.square((predicted[:, 0] - predicted[:, 1]) - (expected[:, 0] - expected[:, 1])) * mask
+            state_loss = jnp.sum(state_error, axis=(1, 2)) / jnp.maximum(2 * jnp.sum(mask, axis=1), 1)
+            pair_loss = jnp.sum(pair_error, axis=1) / jnp.maximum(jnp.sum(mask, axis=1), 1)
+            denominator = jnp.maximum(jnp.sum(valid), 1)
+            state_loss = jnp.sum(jnp.where(valid, state_loss, 0.0)) / denominator
+            pair_loss = jnp.sum(jnp.where(valid, pair_loss, 0.0)) / denominator
+            return state_loss + pair_loss, (state_loss, pair_loss)
+
+        def pkpdb_objective(p, graphs, targets, eligible, valid, key):
+            keys = jax.random.split(key, graphs["nodes"].shape[0])
+            predicted = jax.vmap(lambda graph, k: predict_shift(p, graph, key=k, dropout_rate=rate))(graphs, keys)
+            expected = targets - reference[graphs["query_group"]]
+            per_structure = jnp.sum(jnp.square(predicted - expected) * eligible, axis=1) / jnp.maximum(jnp.sum(eligible, axis=1), 1)
+            return jnp.sum(jnp.where(valid, per_structure, 0.0)) / jnp.maximum(jnp.sum(valid), 1)
+
+        def apply(p, state, pair_gradient, pk_gradient, rate_):
+            gradient = jax.tree.map(lambda a, b: a + b, pair_gradient, pk_gradient)
+            finite = jnp.all(jnp.stack([jnp.all(jnp.isfinite(value)) for value in jax.tree.leaves(gradient)]))
+            updates, state = self.optimizer.update(gradient, state, p)
+            return optax.apply_updates(p, jax.tree.map(lambda value: value * rate_, updates)), state, finite
+
+        self.predictions = jax.jit(paired_predictions)
+        self.paired_value_grad = jax.jit(jax.value_and_grad(paired_objective, has_aux=True))
+        self.pkpdb_value_grad = jax.jit(jax.value_and_grad(pkpdb_objective))
+        self.apply = jax.jit(apply)
+
+
 def make_model(seed, query_norm="shared", paired_weight="none", reduction="structure"):
     """(params, engine, predict): scratch oGQT and its engine; separate query norm starts as a copy of query norm1."""
     import jax
@@ -460,7 +517,7 @@ def validate(engine, predict, params, sources, manifests, config, out=None, epoc
 
 
 def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none", seed=SEED, query_norm="shared", reduction="structure",
-          mask_pmin=None):
+          mask_pmin=None, dropout=0.0):
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
@@ -491,6 +548,8 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
                          "w_burial on state losses, w_interface on the paired loss"} if mask_pmin is not None else {}),
         **({"query_norm": "separate query/context LayerNorm affine in the site-token query attention (query_context_norm, initialised as query norm1)"}
            if query_norm == "separate" else {}),
+        **({"dropout": f"oGQT residual dropout {dropout} on attention and feed-forward outputs during training (DropoutEngine); "
+                       "one key per complex shared by its AB and free branches"} if dropout else {}),
         "pinder_weight_normalization": norms, "smoke": smoke, "test_data_included": False,
         "manifests": {d: digest(output(root, d) / MANIFEST) for d in manifests}, "code": code_hashes()}
     if (out / "protocol.json").exists():
@@ -506,11 +565,16 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
                **({"pkpdb-val": PkpdbSource(_with_policy(manifests["pkpdb"]), config=config, mask="train_mask")} if select(manifests["pkpdb"], "val") else {})}
     if (reduction != "structure" or mask_pmin is not None) and chunked(batch): raise ValueError("this loss is not chunk-additive; use batch <= 64")
     params, engine, predict = make_model(seed, query_norm, paired_weight, reduction); state = engine.optimizer.init(params)
-    mask_key = None
+    step_key = None
+    if dropout:
+        if query_norm != "shared" or paired_weight != "none" or reduction != "structure" or mask_pmin is not None:
+            raise ValueError("dropout combines with the defaults only")
+        if chunked(batch): raise ValueError("dropout runs the unchunked path; use batch <= 64")
+        engine = DropoutEngine(params, dropout); state = engine.optimizer.init(params); step_key = jax.random.PRNGKey(seed + 200003)
     if mask_pmin is not None:
         if query_norm != "shared" or paired_weight != "none" or reduction != "structure": raise ValueError("site masking combines with the defaults only")
         tables = site_weight_tables(manifests, norms, fraction)
-        engine = MaskedEngine(params, tables, mask_pmin); state = engine.optimizer.init(params); mask_key = jax.random.PRNGKey(seed + 100003)
+        engine = MaskedEngine(params, tables, mask_pmin); state = engine.optimizer.init(params); step_key = jax.random.PRNGKey(seed + 100003)
         atomic_json(out / "site-mask-tables.json", {k: {"x": x.tolist(), "u": u.tolist()} for k, (x, u) in tables.items()})
     history = [json.loads(l) for l in (out / "history.jsonl").read_text().splitlines()] if (out / "history.jsonl").exists() else []
     if history:
@@ -527,9 +591,9 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
         prefetcher = Prefetcher(sources["train"], specs, config, to_device if not chunked(batch) else host_chunks)
         for number, (_, (pair_batch, pk_batch)) in enumerate(prefetcher, 1):
             rate = jnp.asarray(scale * learning_rate(epoch, number, len(specs)), jnp.float32)
-            if mask_key is not None:
+            if step_key is not None:
                 graphs, targets, mask, wb, wi, _, valid = pair_batch
-                k_pair, k_pk = jax.random.split(jax.random.fold_in(jax.random.fold_in(mask_key, epoch), number))
+                k_pair, k_pk = jax.random.split(jax.random.fold_in(jax.random.fold_in(step_key, epoch), number))
                 (pair_total, (state_loss, pair_loss)), pair_gradient = engine.paired_value_grad(params, graphs, targets, mask, wb, wi, valid, k_pair)
                 pk_loss, pk_gradient = engine.pkpdb_value_grad(params, *pk_batch, k_pk)
             elif not chunked(batch):
@@ -607,14 +671,15 @@ def main(argv=None):
     p.add_argument("--smoke", action="store_true"); p.add_argument("--paired-weight", choices=("none", "interface"), default="none")
     p.add_argument("--seed", type=int, default=SEED); p.add_argument("--query-norm", choices=("shared", "separate"), default="shared")
     p.add_argument("--loss-reduction", choices=("structure", "site", "pkai"), default="structure")
-    p.add_argument("--site-mask-pmin", type=float, default=None)
+    p.add_argument("--site-mask-pmin", type=float, default=None); p.add_argument("--dropout", type=float, default=0.0)
     p = sub.add_parser("rescore"); p.add_argument("runs", nargs="+")
     args = parser.parse_args(argv); root = Path(os.environ["PKABENCH_RUNTIME"])
     if args.action == "rescore":
         for run in args.runs: rescore(root, run)
         return
     if args.action == "train":
-        result = train(root, args.run, args.fraction, args.smoke, args.batch, args.paired_weight, args.seed, args.query_norm, args.loss_reduction, args.site_mask_pmin)
+        result = train(root, args.run, args.fraction, args.smoke, args.batch, args.paired_weight, args.seed, args.query_norm, args.loss_reduction, args.site_mask_pmin,
+                       args.dropout)
         print(json.dumps({"selected_epoch": result["selected_epoch"], "selection": result["validation"]["selection"]}))
 
 
