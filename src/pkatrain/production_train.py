@@ -55,6 +55,7 @@ from .loading import PRODUCTION_BOUNDS, BucketPolicy, DeferredScalars, LoaderCon
 from .production_graphs import VERSION, output, read
 from .production_aux import BURIAL_RSA_CUTS, INTERFACE_CAP, INTERFACE_THRESHOLDS, RSA_BOUND_TABLE, ContactTable
 from .production_aux import TABLE as CONTACTS_TABLE
+from .production_sidechains import WIDTH as SIDECHAIN_WIDTH, SidechainTable
 from .production_loading import MANIFEST, AuxPinderSource, PinderSource, PkpdbSource, normalization, select
 
 SEED = 17
@@ -476,11 +477,12 @@ def auxiliary_metrics(engine, params, pinder_source, pinder_records, pkpdb_sourc
     return out
 
 
-def architecture(width=None):
-    """ARCHITECTURE, or width W with ff = 2W (the size-sweep tiers; W divisible by the 4 attention heads)."""
-    if width is None: return ARCHITECTURE
-    if width % 4: raise ValueError("width must be divisible by the 4 attention heads")
-    return {"width": int(width), "ff": 2 * int(width)}
+def architecture(width=None, sidechains=False):
+    """ARCHITECTURE, or width W with ff = 2W (the size-sweep tiers; W divisible by the 4 attention heads); with
+    sidechains, node_dim 152 (24 backbone + 128 side-chain features, production_sidechains)."""
+    if width is not None and width % 4: raise ValueError("width must be divisible by the 4 attention heads")
+    base = ARCHITECTURE if width is None else {"width": int(width), "ff": 2 * int(width)}
+    return {**base, "node_dim": 24 + SIDECHAIN_WIDTH} if sidechains else base
 
 
 def parameter_count(params):
@@ -488,13 +490,13 @@ def parameter_count(params):
     return int(sum(np.size(x) for x in jax.tree.leaves(params)))
 
 
-def make_model(seed, query_norm="shared", paired_weight="none", reduction="structure", width=None):
+def make_model(seed, query_norm="shared", paired_weight="none", reduction="structure", width=None, sidechains=False):
     """(params, engine, predict): scratch oGQT and its engine; separate query norm starts as a copy of query norm1."""
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
     from .gqt_multitask_replay import JointEngine
-    params = initialize_ogqt(jax.random.PRNGKey(seed), **architecture(width))
+    params = initialize_ogqt(jax.random.PRNGKey(seed), **architecture(width, sidechains))
     if query_norm == "separate":
         params = {**params, "query_context_norm": jnp.array(params["query"]["norm1"])}
         return params, VariantEngine(params, predict_shift_separate, paired_weight, reduction), jax.jit(jax.vmap(predict_shift_separate, in_axes=(None, 0)))
@@ -724,7 +726,7 @@ def validate(engine, predict, params, sources, manifests, config, out=None, epoc
 
 def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none", seed=SEED, query_norm="shared", reduction="structure",
           mask_pmin=None, dropout=0.0, aux_weight=None, aux_loss="ce", aux_interface_branch="bound", aux_heads="both", width=None,
-          crop_radius=None, crop_inner=5.0, crop_probability=0.25):
+          sidechains=False, crop_radius=None, crop_inner=5.0, crop_probability=0.25):
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
@@ -738,7 +740,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     manifests = {d: read(output(root, d) / MANIFEST) for d in ("pinder", "pkpdb", "benchmark-val")}
     norms = normalization(manifests["pinder"], fraction); scale = lr_scale(batch)
     protocol = {"version": "gqt-production-joint-v1", "run": run, "fraction": fraction, "seed": seed, "batch": batch,
-        "architecture": architecture(width), "initialization": f"scratch (pkanet.ogqt.initialize, PRNGKey({seed}))",
+        "architecture": architecture(width, sidechains), "initialization": f"scratch (pkanet.ogqt.initialize, PRNGKey({seed}))",
         "objective": "gqt_multitask_replay.JointEngine: pKPDB state-shift MSE (train_mask) + PINDER AB/free state-shift MSE + binding-shift MSE; equal coefficients; no site weights",
         "optimizer": "AdamW weight decay 1e-4, global clip 1 after gradient summation",
         "schedule": f"gqt_crop_radius.learning_rate x {scale:.4f} (1e-3 hold to epoch 10, cosine to 1e-5 by epoch {EPOCHS}); patience {PATIENCE}, min delta {MIN_DELTA}",
@@ -773,6 +775,9 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
                           f"PINDER {aux_interface_branch} branch); one-logit heads aux_burial/aux_interface on the final site embedding (pkatrain.production_aux)"),
             ("rsa_bound_verification_sha256" if aux_heads == "burial-siamese" else "contacts_verification_sha256"):
                 ContactTable(root, RSA_BOUND_TABLE if aux_heads == "burial-siamese" else CONTACTS_TABLE).verification_sha256} if aux_weight is not None else {}),
+        **({"sidechains": {"definition": "pkanet.graph.sidechain_features appended to the node features (production_sidechains, sidechains-v1)",
+                           "verification_sha256": {d: SidechainTable(root, d).verification_sha256 for d in ("pinder", "pkpdb", "benchmark-val")}}}
+           if sidechains else {}),
         **({"crop": describe_crop(crop_radius, crop_inner, crop_probability)} if crop_radius is not None else {}),
         "pinder_weight_normalization": norms, "smoke": smoke, "test_data_included": False,
         "manifests": {d: digest(output(root, d) / MANIFEST) for d in manifests}, "code": code_hashes()}
@@ -782,23 +787,25 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
             raise AssertionError(f"{out} was registered with a different protocol")
     else: atomic_json(out / "protocol.json", protocol)
     config = LoaderConfig()
+    side = {d: SidechainTable(root, d) for d in ("pinder", "pkpdb", "benchmark-val")} if sidechains else {d: None for d in ("pinder", "pkpdb", "benchmark-val")}
     contacts = ContactTable(root, RSA_BOUND_TABLE if aux_heads == "burial-siamese" else CONTACTS_TABLE) if aux_weight is not None else None
     spread = crop_radius is None  # a crop must precede the padding spread (CroppedSource applies it)
-    train_pinder = AuxPinderSource(_with_policy(manifests["pinder"], batch), contacts, config=config, norms=norms, spread=spread) if contacts else \
-        PinderSource(_with_policy(manifests["pinder"], batch), config=config, norms=norms, spread=spread)
+    train_pinder = AuxPinderSource(_with_policy(manifests["pinder"], batch), contacts, config=config, norms=norms, spread=spread, sidechains=side["pinder"]) if contacts else \
+        PinderSource(_with_policy(manifests["pinder"], batch), config=config, norms=norms, spread=spread, sidechains=side["pinder"])
     train_pkpdb = PkpdbSource(_with_policy(manifests["pkpdb"], batch), config=config, weights=reduction != "structure" or mask_pmin is not None,
-                              aux=contacts is not None, spread=spread)
+                              aux=contacts is not None, spread=spread, sidechains=side["pkpdb"])
     if crop_radius is not None:
         train_pinder = CroppedSource(train_pinder, "pinder", crop_radius, crop_inner, crop_probability, seed)
         train_pkpdb = CroppedSource(train_pkpdb, "pkpdb", crop_radius, crop_inner, crop_probability, seed)
     sources = {"train": JointSource(train_pinder, train_pkpdb),
-               "pinder-val": PinderSource(_with_policy(manifests["pinder"]), config=config, norms=norms),
-               "benchmark": PkpdbSource(_with_policy(manifests["benchmark-val"]), config=config, mask="eval_mask"),
-               **({"pkpdb-val": PkpdbSource(_with_policy(manifests["pkpdb"]), config=config, mask="train_mask")} if select(manifests["pkpdb"], "val") else {})}
+               "pinder-val": PinderSource(_with_policy(manifests["pinder"]), config=config, norms=norms, sidechains=side["pinder"]),
+               "benchmark": PkpdbSource(_with_policy(manifests["benchmark-val"]), config=config, mask="eval_mask", sidechains=side["benchmark-val"]),
+               **({"pkpdb-val": PkpdbSource(_with_policy(manifests["pkpdb"]), config=config, mask="train_mask", sidechains=side["pkpdb"])}
+                  if select(manifests["pkpdb"], "val") else {})}
     if (reduction != "structure" or mask_pmin is not None) and chunked(batch): raise ValueError("this loss is not chunk-additive; use batch <= 64")
-    if width is not None and (query_norm != "shared" or paired_weight != "none" or reduction != "structure"):
-        raise ValueError("--width combines with the default objective, dropout and auxiliaries only")
-    params, engine, predict = make_model(seed, query_norm, paired_weight, reduction, width); state = engine.optimizer.init(params)
+    if (width is not None or sidechains) and (query_norm != "shared" or paired_weight != "none" or reduction != "structure"):
+        raise ValueError("--width / --sidechains combine with the default objective, dropout and auxiliaries only")
+    params, engine, predict = make_model(seed, query_norm, paired_weight, reduction, width, sidechains); state = engine.optimizer.init(params)
     step_key = None
     if aux_weight is not None:
         if query_norm != "shared" or paired_weight != "none" or reduction != "structure" or mask_pmin is not None:
@@ -873,8 +880,9 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     params, state, _ = load_checkpoint(out / "checkpoints" / f"epoch-{selected:03d}", (params, state))
     final = validate(engine, predict, params, sources, manifests, config, out=out, epoch=selected)
     if contacts is not None:
-        aux_sources = (AuxPinderSource(_with_policy(manifests["pinder"]), contacts, config=config, norms=norms),
-                       PkpdbSource(_with_policy(manifests["pkpdb"]), config=config, mask="train_mask", aux=True) if "pkpdb-val" in sources else None)
+        aux_sources = (AuxPinderSource(_with_policy(manifests["pinder"]), contacts, config=config, norms=norms, sidechains=side["pinder"]),
+                       PkpdbSource(_with_policy(manifests["pkpdb"]), config=config, mask="train_mask", aux=True, sidechains=side["pkpdb"])
+                       if "pkpdb-val" in sources else None)
         final["auxiliary"] = auxiliary_metrics(engine, params, aux_sources[0], select(manifests["pinder"], "val"), aux_sources[1],
                                                select(manifests["pkpdb"], "val"), config)
         for source in aux_sources:
@@ -929,6 +937,7 @@ def aux_rescore(root, run):
     manifests = {d: read(output(root, d) / MANIFEST) for d in ("pinder", "pkpdb")}
     config = LoaderConfig(); norms = protocol["pinder_weight_normalization"]
     contacts = ContactTable(root, RSA_BOUND_TABLE if heads == "burial-siamese" else CONTACTS_TABLE)
+    if "sidechains" in protocol: raise NotImplementedError("aux-rescore does not load side-chain tables")
     params, _, _ = make_model(protocol["seed"], width=protocol["architecture"]["width"]); params = initialize_aux(params, protocol["seed"], mode, heads)
     engine = AuxEngine(params, weight, dropout, mode, branch, heads); state = engine.optimizer.init(params)
     params, state, _ = load_checkpoint(out / "checkpoints" / f"epoch-{selection['selected_epoch']:03d}", (params, state))
@@ -948,7 +957,7 @@ def export_model(root, run, destination):
     import jax
     from .trainer import load_checkpoint
     root = Path(root); out = run_dir(root, run); protocol = read(out / "protocol.json"); selection = read(out / "selection.json")
-    width = protocol["architecture"]["width"]; params, _, _ = make_model(protocol["seed"], width=width)
+    width = protocol["architecture"]["width"]; params, _, _ = make_model(protocol["seed"], width=width, sidechains="sidechains" in protocol)
     if "auxiliary" in protocol:
         text = protocol["auxiliary"]; mode = "ce" if text.startswith("AuxEngine ce") else "ordinal"
         heads = "burial" if text.startswith("AuxEngine ce burial-only") else "burial-siamese" if text.startswith("AuxEngine ce burial-siamese") else "both"
@@ -997,6 +1006,7 @@ def main(argv=None):
     p.add_argument("--aux-interface-branch", choices=("bound", "free"), default="bound")
     p.add_argument("--aux-heads", choices=("both", "burial", "burial-siamese"), default="both")
     p.add_argument("--width", type=int, default=None, help="model width (ff = 2 x width); default ARCHITECTURE")
+    p.add_argument("--sidechains", action="store_true", help="append side-chain node features (production_sidechains)")
     p.add_argument("--crop-radius", type=float, default=None, help="inner-radius site crops (pkatrain.production_crop), radius <= 20 A")
     p.add_argument("--crop-inner", type=float, default=5.0); p.add_argument("--crop-probability", type=float, default=0.25)
     p = sub.add_parser("count"); p.add_argument("widths", type=int, nargs="+")
@@ -1023,7 +1033,7 @@ def main(argv=None):
     if args.action == "train":
         result = train(root, args.run, args.fraction, args.smoke, args.batch, args.paired_weight, args.seed, args.query_norm, args.loss_reduction, args.site_mask_pmin,
                        args.dropout, args.aux_weight, args.aux_loss, args.aux_interface_branch,
-                       args.aux_heads, args.width, args.crop_radius, args.crop_inner, args.crop_probability)
+                       args.aux_heads, args.width, args.sidechains, args.crop_radius, args.crop_inner, args.crop_probability)
         print(json.dumps({"selected_epoch": result["selected_epoch"], "selection": result["validation"]["selection"]}))
 
 
