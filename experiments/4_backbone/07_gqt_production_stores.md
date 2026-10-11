@@ -613,3 +613,47 @@ Nearest partner distance alone ranks abs(AB - free) about as well (Spearman 0.85
 decay length barely changes ranking; it decides how the 0-8 thresholds populate. With plateau L = 3 every threshold
 holds at least 1.7% of sites and the mean shift roughly doubles per band, matching the doubling thresholds; L = 1.5 and
 the pure exponentials leave the top thresholds nearly empty, and plain counts separate worse.
+
+### Auxiliary burial/interface heads: cumulative BCE vs soft-target cross-entropy, 10% and 50% (2026-10-11)
+
+`--aux-weight W` (`production_train.AuxEngine`, targets in `pkatrain.production_aux`), all on top of dropout 0.1, two
+seeds; baseline `pilot-{10,50}pct-drop10[-s29]`. Contact-score table `pinder/contacts-v1` (28,733 structures, 1.45M
+sites; nearest distance matches `partner_distance_A` to 0.005 A, score > 0 equals the stored interface flag on every
+site). Two loss forms:
+- `--aux-loss ordinal` (runs `-aux01`, `-aux1`): cumulative BCE, burial [RSA < 0.1 / 0.25 / 0.5], interface
+  [c > 0 / 0.5 / 1 / 2 / 4 / 8];
+- `--aux-loss ce` (runs `-ce01`, `-ce1`; user revision): one logit per head, cross-entropy against the soft targets
+  1 - clip(RSA, 0, 1) and log(1 + min(c, 8)) / log 9, unweighted.
+
+| Contrast vs dropout-only (seed means; 95% bootstrap) | Selection | State MAE | Interface paired MAE | pKPDB val MSE |
+|---|---|---|---|---|
+| ordinal W 0.1, 10% | -0.0041 (-0.0077, -0.0005) | -0.0037 | -0.0005 | -0.003 |
+| ordinal W 1, 10% | +0.0049 (-0.0003, +0.0104) | -0.0076 | +0.0124 (+0.008, +0.017) | -0.003 |
+| ce W 0.1, 10% | -0.0014 (-0.0045, +0.0019) | -0.0016 | +0.0001 | +0.003 |
+| ce W 1, 10% | +0.0049 (+0.0003, +0.0096) | -0.0038 | +0.0087 (+0.005, +0.012) | +0.007 |
+| ordinal W 0.1, 50% | +0.0016 (-0.0032, +0.0065) | -0.0011 | +0.0026 | +0.019 (+0.010, +0.028) |
+| ordinal W 1, 50% | +0.0094 (+0.0041, +0.0146) | +0.0008 | +0.0086 | +0.023 (+0.013, +0.033) |
+| ce W 0.1, 50% | +0.0075 (+0.0027, +0.0123) | +0.0036 | +0.0039 | +0.027 (+0.017, +0.037) |
+| ce W 1, 50% | -0.0017 (-0.0066, +0.0030) | -0.0033 (-0.005, -0.001) | +0.0016 | +0.005 |
+
+Head discrimination on validation (seed means; interface on the PINDER bound branch, burial on the PINDER free branch):
+
+| Arm | Interface AUROC, c > 0 / > 2 / > 8 | Interface recall at 10% FPR, c > 0 | Burial AUROC, RSA < 0.1 / 0.25 / 0.5 |
+|---|---|---|---|
+| ordinal W 0.1, 10% | 0.61 / 0.68 / 0.81 | | 0.96 / 0.94 / 0.91 |
+| ordinal W 1, 10% | 0.97 / 0.98 / 0.99 | | 0.97 / 0.96 / 0.94 |
+| ce W 0.1, 10% | 0.62 / 0.69 / 0.78 | 0.19 | 0.95 / 0.93 / 0.89 |
+| ce W 1, 10% | 0.95 / 0.97 / 0.98 | 0.88 | 0.96 / 0.95 / 0.92 |
+| ordinal W 0.1, 50% | 0.93 / 0.97 / 0.99 | | 0.98 / 0.97 / 0.95 |
+| ordinal W 1, 50% | 0.99 / 1.00 / 0.99 | | 0.98 / 0.98 / 0.96 |
+| ce W 0.1, 50% | 0.91 / 0.97 / 0.98 | 0.76 | 0.97 / 0.96 / 0.93 |
+| ce W 1, 50% | 0.99 / 0.99 / 0.99 | 0.98 | 0.98 / 0.97 / 0.96 |
+
+- No auxiliary arm improves pKa selection at both pool sizes. The only interval excluding zero in favour is ordinal
+  W 0.1 at 10% (-0.004), which reverses at 50%. W 1 consistently lowers state MAE but raises interface paired MAE at
+  10%; at 50% most arms raise pKPDB val MSE, and seed spread grows (selected epochs 12-14 in four 50% runs).
+- The heads learn: burial is easy (AUROC 0.89-0.98 at every weight); interface needs W 1 at 10% (AUROC 0.62 at
+  W 0.1) and reaches 0.99 with 98% recall at 10% FPR for ce W 1 at 50%. ce and ordinal discriminate alike.
+- Of the auxiliary arms, ce W 1 at 50% is the only one with no pKa cost (selection -0.002, n.s.; state MAE -0.003),
+  so it is the candidate if the interface prediction is to be used (e.g. in the Siamese loss, the user's next step).
+  Production default unchanged (no auxiliary heads).
