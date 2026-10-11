@@ -52,6 +52,7 @@ from .production_graphs import VERSION, output, read
 from .production_aux import BURIAL_RSA_CUTS, INTERFACE_CAP, INTERFACE_THRESHOLDS, RSA_BOUND_TABLE, ContactTable
 from .production_aux import TABLE as CONTACTS_TABLE
 from .production_depth import INJECT_SCALE, add_injection, deepen, model_functions
+from .production_inputs import BACKBONE_WIDTH, ORIENTATION_EDGE, BackboneTable, ConcatTable, add_orientation, input_functions
 from .production_sidechains import WIDTH as SIDECHAIN_WIDTH, SidechainTable
 from .production_loading import MANIFEST, AuxPinderSource, PinderSource, PkpdbSource, normalization, select
 
@@ -492,22 +493,25 @@ def parameter_count(params):
     return int(sum(np.size(x) for x in jax.tree.leaves(params)))
 
 
-def make_model(seed, query_norm="shared", paired_weight="none", reduction="structure", width=None, sidechains=False, depth=2, loops=1):
+def make_model(seed, query_norm="shared", paired_weight="none", reduction="structure", width=None, sidechains=False, depth=2, loops=1,
+               orientation=False, sidechain_view="all", sidechain_drop=0.0):
     """(params, engine, predict): scratch oGQT and its engine; separate query norm starts as a copy of query norm1.
-    depth / loops (production_depth): the engine returned is JointEngine, valid for depth; looped models take
-    DropoutEngine / AuxEngine with model_functions(loops) (train())."""
+    depth / loops (production_depth), orientation / side-chain views (production_inputs): the engine returned is
+    JointEngine, valid for depth alone; the others take DropoutEngine / AuxEngine with model_inputs(...) (train())."""
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
     from .gqt_multitask_replay import JointEngine
     shape = architecture(width, sidechains)
     params = initialize_ogqt(jax.random.PRNGKey(seed), **shape)
-    if depth != 2 or loops != 1:
+    if depth != 2 or loops != 1 or orientation or sidechain_view != "all":
         architecture(width, sidechains, depth, loops)  # validates the combination
-        if query_norm != "shared" or paired_weight != "none" or reduction != "structure": raise ValueError("depth / loops combine with the default objective only")
+        if query_norm != "shared" or paired_weight != "none" or reduction != "structure":
+            raise ValueError("depth / loops / input variants combine with the default objective only")
         if depth != 2: params = deepen(params, seed, depth, shape["width"], shape["ff"], shape.get("node_dim", 24))
         if loops != 1: params = add_injection(params, seed)
-        predict_shift = model_functions(loops)[1]
+        if orientation: params = add_orientation(params, seed)
+        predict_shift = model_inputs(loops, orientation, sidechain_view, sidechain_drop)[1]
         return params, JointEngine(params), jax.jit(jax.vmap(predict_shift, in_axes=(None, 0)))
     if query_norm == "separate":
         params = {**params, "query_context_norm": jnp.array(params["query"]["norm1"])}
@@ -517,6 +521,11 @@ def make_model(seed, query_norm="shared", paired_weight="none", reduction="struc
     engine = JointEngine(params)
     if paired_weight == "interface": engine = interface_weighted(engine)
     return params, engine, jax.jit(jax.vmap(predict_shift, in_axes=(None, 0)))
+
+
+def model_inputs(loops=1, orientation=False, sidechain_view="all", sidechain_drop=0.0):
+    """(site_embeddings, predict_shift) for the looped encoder and the input variants (pkanet.site_model's by default)."""
+    return input_functions(model_functions(loops), sidechain_view, sidechain_drop, orientation)
 
 
 def interface_weighted(engine):
@@ -563,7 +572,7 @@ def run_dir(root, run): return Path(root) / "training" / VERSION / "runs" / run
 def code_hashes():
     src = Path(__file__).parents[1]
     paths = [Path(__file__), src / "pkatrain/production_loading.py", src / "pkatrain/production_graphs.py",
-             src / "pkatrain/loading.py", src / "pkatrain/production_depth.py", src / "pkatrain/gqt_multitask_replay.py", src / "pkatrain/gqt_paired_pinder.py",
+             src / "pkatrain/loading.py", src / "pkatrain/production_depth.py", src / "pkatrain/production_inputs.py", src / "pkatrain/gqt_multitask_replay.py", src / "pkatrain/gqt_paired_pinder.py",
              src / "pkatrain/site_graph_data.py", src / "pkanet/ogqt.py", src / "pkanet/model.py", src / "pkanet/triton_attention.py"]
     return {str(p.relative_to(src)): digest(p) for p in paths}
 
@@ -738,7 +747,7 @@ def validate(engine, predict, params, sources, manifests, config, out=None, epoc
 
 def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none", seed=SEED, query_norm="shared", reduction="structure",
           mask_pmin=None, dropout=0.0, aux_weight=None, aux_loss="ce", aux_interface_branch="bound", aux_heads="both", width=None,
-          sidechains=False, depth=2, loops=1):
+          sidechains=False, depth=2, loops=1, orientation=False, sidechain_view="all", sidechain_drop=0.0):
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
@@ -750,7 +759,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     manifests = {d: read(output(root, d) / MANIFEST) for d in ("pinder", "pkpdb", "benchmark-val")}
     norms = normalization(manifests["pinder"], fraction); scale = lr_scale(batch)
     protocol = {"version": "gqt-production-joint-v1", "run": run, "fraction": fraction, "seed": seed, "batch": batch,
-        "architecture": architecture(width, sidechains, depth, loops), "initialization": f"scratch (pkanet.ogqt.initialize, PRNGKey({seed}))"
+        "architecture": {**architecture(width, sidechains, depth, loops), **({"orientation_edges": ORIENTATION_EDGE} if orientation else {})}, "initialization": f"scratch (pkanet.ogqt.initialize, PRNGKey({seed}))"
         + (f"; residue blocks 3-{depth} from production_depth.deepen" if depth != 2 else "") + ("; W_inject from production_depth.add_injection" if loops != 1 else ""),
         "objective": "gqt_multitask_replay.JointEngine: pKPDB state-shift MSE (train_mask) + PINDER AB/free state-shift MSE + binding-shift MSE; equal coefficients; no site weights",
         "optimizer": "AdamW weight decay 1e-4, global clip 1 after gradient summation",
@@ -786,6 +795,14 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
                           f"PINDER {aux_interface_branch} branch); one-logit heads aux_burial/aux_interface on the final site embedding (pkatrain.production_aux)"),
             ("rsa_bound_verification_sha256" if aux_heads == "burial-siamese" else "contacts_verification_sha256"):
                 ContactTable(root, RSA_BOUND_TABLE if aux_heads == "burial-siamese" else CONTACTS_TABLE).verification_sha256} if aux_weight is not None else {}),
+        **({"sidechain_view": {"titratable": "side-chain features on D/E/H/C/Y/K/R residues only",
+                               "non-titratable": "side-chain features on all residues except D/E/H/C/Y/K/R",
+                               "dropout": f"side-chain features hidden per structure with probability {sidechain_drop} in training (AB/free share the draw); "
+                                          "validation without side chains"}[sidechain_view]} if sidechain_view != "all" else {}),
+        **({"orientation": {"definition": "production_inputs: residue edges + direction to i in j's frame, F_i^T F_j, signed sequence separation / 32 "
+                                          "(13 features) from backbone-v1; residue and query block edge projections 20 -> 33",
+                            "verification_sha256": {d: BackboneTable(root, d).verification_sha256 for d in ("pinder", "pkpdb", "benchmark-val")}}}
+           if orientation else {}),
         **({"sidechains": {"definition": "pkanet.graph.sidechain_features appended to the node features (production_sidechains, sidechains-v1)",
                            "verification_sha256": {d: SidechainTable(root, d).verification_sha256 for d in ("pinder", "pkpdb", "benchmark-val")}}}
            if sidechains else {}),
@@ -797,7 +814,10 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
             raise AssertionError(f"{out} was registered with a different protocol")
     else: atomic_json(out / "protocol.json", protocol)
     config = LoaderConfig()
-    side = {d: SidechainTable(root, d) for d in ("pinder", "pkpdb", "benchmark-val")} if sidechains else {d: None for d in ("pinder", "pkpdb", "benchmark-val")}
+    side = {}
+    for d in ("pinder", "pkpdb", "benchmark-val"):
+        tables = ([SidechainTable(root, d)] if sidechains else []) + ([BackboneTable(root, d)] if orientation else [])
+        side[d] = None if not tables else tables[0] if len(tables) == 1 else ConcatTable(*tables)
     contacts = ContactTable(root, RSA_BOUND_TABLE if aux_heads == "burial-siamese" else CONTACTS_TABLE) if aux_weight is not None else None
     train_pinder = AuxPinderSource(_with_policy(manifests["pinder"], batch), contacts, config=config, norms=norms, sidechains=side["pinder"]) if contacts else \
         PinderSource(_with_policy(manifests["pinder"], batch), config=config, norms=norms, sidechains=side["pinder"])
@@ -810,10 +830,15 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     if (reduction != "structure" or mask_pmin is not None) and chunked(batch): raise ValueError("this loss is not chunk-additive; use batch <= 64")
     if (width is not None or sidechains) and (query_norm != "shared" or paired_weight != "none" or reduction != "structure"):
         raise ValueError("--width / --sidechains combine with the default objective, dropout and auxiliaries only")
-    params, engine, predict = make_model(seed, query_norm, paired_weight, reduction, width, sidechains, depth, loops); state = engine.optimizer.init(params)
-    if loops != 1 and aux_weight is None and not dropout: raise ValueError("--loops runs through DropoutEngine / AuxEngine (use --dropout or --aux-weight)")
-    if (depth != 2 or loops != 1) and mask_pmin is not None: raise ValueError("depth / loops do not combine with site masking")
-    embeddings_fn, shift_fn = model_functions(loops)
+    if sidechain_view != "all" and not sidechains: raise ValueError("--sidechain-view needs --sidechains")
+    if (sidechain_view == "dropout") != (sidechain_drop > 0): raise ValueError("--sidechain-drop goes with --sidechain-view dropout")
+    params, engine, predict = make_model(seed, query_norm, paired_weight, reduction, width, sidechains, depth, loops,
+                                         orientation, sidechain_view, sidechain_drop); state = engine.optimizer.init(params)
+    custom_inputs = loops != 1 or orientation or sidechain_view != "all"
+    if custom_inputs and aux_weight is None and not dropout:
+        raise ValueError("--loops / --orientation / --sidechain-view run through DropoutEngine / AuxEngine (use --dropout or --aux-weight)")
+    if (depth != 2 or custom_inputs) and mask_pmin is not None: raise ValueError("depth / loops / input variants do not combine with site masking")
+    embeddings_fn, shift_fn = model_inputs(loops, orientation, sidechain_view, sidechain_drop)
     step_key = None
     if aux_weight is not None:
         if query_norm != "shared" or paired_weight != "none" or reduction != "structure" or mask_pmin is not None:
@@ -965,7 +990,7 @@ def export_model(root, run, destination):
     from .trainer import load_checkpoint
     root = Path(root); out = run_dir(root, run); protocol = read(out / "protocol.json"); selection = read(out / "selection.json")
     arch = protocol["architecture"]; params, _, _ = make_model(protocol["seed"], width=arch["width"], sidechains="sidechains" in protocol,
-                                                                depth=arch.get("depth", 2), loops=arch.get("loops", 1))
+                                                                depth=arch.get("depth", 2), loops=arch.get("loops", 1), orientation="orientation_edges" in arch)
     if "auxiliary" in protocol:
         text = protocol["auxiliary"]; mode = "ce" if text.startswith("AuxEngine ce") else "ordinal"
         heads = "burial" if text.startswith("AuxEngine ce burial-only") else "burial-siamese" if text.startswith("AuxEngine ce burial-siamese") else "both"
@@ -1017,6 +1042,9 @@ def main(argv=None):
     p.add_argument("--sidechains", action="store_true", help="append side-chain node features (production_sidechains)")
     p.add_argument("--depth", type=int, default=2, help="untied residue-encoder blocks (production_depth); default 2")
     p.add_argument("--loops", type=int, default=1, help="tie the 2 residue blocks and loop them r times with input re-injection (production_depth)")
+    p.add_argument("--orientation", action="store_true", help="13 orientation features on the residue edges (production_inputs, backbone-v1)")
+    p.add_argument("--sidechain-view", choices=("all", "titratable", "non-titratable", "dropout"), default="all")
+    p.add_argument("--sidechain-drop", type=float, default=0.0, help="with --sidechain-view dropout: per-structure probability of hiding side chains")
     p = sub.add_parser("count"); p.add_argument("widths", type=int, nargs="+"); p.add_argument("--sidechains", action="store_true")
     p.add_argument("--depth", type=int, default=2); p.add_argument("--loops", type=int, default=1)
     p = sub.add_parser("export"); p.add_argument("run"); p.add_argument("destination")
@@ -1042,7 +1070,7 @@ def main(argv=None):
     if args.action == "train":
         result = train(root, args.run, args.fraction, args.smoke, args.batch, args.paired_weight, args.seed, args.query_norm, args.loss_reduction, args.site_mask_pmin,
                        args.dropout, args.aux_weight, args.aux_loss, args.aux_interface_branch,
-                       args.aux_heads, args.width, args.sidechains, args.depth, args.loops)
+                       args.aux_heads, args.width, args.sidechains, args.depth, args.loops, args.orientation, args.sidechain_view, args.sidechain_drop)
         print(json.dumps({"selected_epoch": result["selected_epoch"], "selection": result["validation"]["selection"]}))
 
 
