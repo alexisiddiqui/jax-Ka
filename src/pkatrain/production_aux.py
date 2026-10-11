@@ -19,6 +19,7 @@ The PINDER scores are not in store-v2: `build` writes a side table aligned to ea
 AB structures, so on Isambard it runs under scripts/sqfs_run.sh.
 
   python -m pkatrain.production_aux build [--workers 64] [--limit N (smoke table)]
+  python -m pkatrain.production_aux build-rsa-bound [--workers 64] [--limit N]   (bound-state RSA, Siamese burial)
 """
 from __future__ import annotations
 
@@ -39,6 +40,7 @@ INTERFACE_THRESHOLDS = (0.0, 0.5, 1.0, 2.0, 4.0, 8.0)
 INTERFACE_CAP = 8.0
 CONTACT_A, DECAY_A, CUTOFF_A = 4.0, 3.0, 10.0
 TABLE = "contacts-v1"
+RSA_BOUND_TABLE = "rsa-bound-v1"
 
 
 def contact_score(distances):
@@ -111,11 +113,52 @@ def build(root, workers=64, limit=None):
     atomic_json(out / "verification.json", summary); return summary
 
 
-class ContactTable:
-    """Per-store-site contact scores by structure id (memory-mapped)."""
+def _rsa_bound_one(args):
+    """Bound-state RSA (sites.json rsa_bound) per store query site of one PINDER record, in the build's site order
+    (production_graphs._pinder_one: paired rows whose residue maps into the AB topology); checked against the store's
+    rsa_free and targets."""
+    root, cid, split, store_path = args
+    from jaxpropka.topology import load_topology
+    from .gqt_paired_pinder import _paired_rows, _read_cif_gz
+    store = ProductionStore(Path(store_path)); raw = store.raw(cid); store.close()
+    src = source(root, f"{PINDER}/entries/{cid}")
+    keys = load_topology(_read_cif_gz(src / "AB.cif.gz"), gap_policy="cap", freeze_disulfides=True).keys
+    lookup = {(k.chain, k.number, k.insertion) for k in keys}
+    rows = [row for row in _paired_rows(src, split) if row["key"][:3] in lookup]
+    if len(rows) != len(raw["rsa_free"]): raise AssertionError((cid, "site count differs from the store"))
+    free = np.asarray([np.nan if r["rsa_free"] is None else r["rsa_free"] for r in rows], np.float32)
+    if not np.allclose(free, raw["rsa_free"], equal_nan=True): raise AssertionError((cid, "rsa_free differs from the store"))
+    if not np.allclose(np.asarray([(r["target_ab"], r["target_free"]) for r in rows], np.float32).T, raw["targets"]):
+        raise AssertionError((cid, "targets differ from the store"))
+    bound = np.asarray([np.nan if r.get("rsa_bound") is None else r["rsa_bound"] for r in rows], np.float32)
+    return cid, bound, {"sites": len(rows), "missing": int(np.sum(~np.isfinite(bound))),
+                        "bound_above_free": int(np.sum(np.clip(bound, 0, 1) > np.clip(free, 0, 1) + 1e-4))}
 
-    def __init__(self, root):
-        path = output(root, "pinder") / TABLE; self.scores = np.load(path / "scores.npy", mmap_mode="r")
+
+def build_rsa_bound(root, workers=64, limit=None):
+    """<runtime>/training/<version>/pinder/rsa-bound-v1: bound-state RSA aligned to store query sites (ContactTable
+    layout, field scores.npy). limit: smoke build into rsa-bound-v1-smoke."""
+    root = Path(root); manifest = read(output(root, "pinder") / "manifest-v1.json"); store = manifest["store"]
+    out = output(root, "pinder") / (RSA_BOUND_TABLE + ("-smoke" if limit else "")); out.mkdir(parents=True, exist_ok=True); began = time.time()
+    records = manifest["records"][:limit]; ids = [r["id"] for r in records]
+    with ProcessPoolExecutor(workers) as ex: results = list(ex.map(_rsa_bound_one, [(root, r["id"], r["split"], store) for r in records], chunksize=8))
+    offsets = np.cumsum([0] + [len(s) for _, s, _ in results]).astype(np.int64)
+    np.save(out / "scores.npy", np.concatenate([s for _, s, _ in results])); np.save(out / "offsets.npy", offsets)
+    atomic_json(out / "ids.json", ids); checks = [c for _, _, c in results]
+    summary = {"version": RSA_BOUND_TABLE, "definition": "sites.json rsa_bound per store query site (PINDER AB state)",
+               "structures": len(ids), "sites": int(offsets[-1]), "missing": sum(c["missing"] for c in checks),
+               "clipped_bound_above_free": sum(c["bound_above_free"] for c in checks),
+               "manifest_sha256": digest(output(root, "pinder") / "manifest-v1.json"),
+               "files": {f: digest(out / f) for f in ("scores.npy", "offsets.npy", "ids.json")}, "seconds": round(time.time() - began, 1)}
+    atomic_json(out / "verification.json", summary); return summary
+
+
+class ContactTable:
+    """Per-store-site values by structure id (memory-mapped): contact scores (default) or, with table=RSA_BOUND_TABLE,
+    bound-state RSA."""
+
+    def __init__(self, root, table=TABLE):
+        path = output(root, "pinder") / table; self.scores = np.load(path / "scores.npy", mmap_mode="r")
         self.offsets = np.load(path / "offsets.npy"); self.index = {cid: i for i, cid in enumerate(read(path / "ids.json"))}
         self.verification_sha256 = digest(path / "verification.json")
 
@@ -125,9 +168,10 @@ class ContactTable:
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="pkatrain.production_aux"); sub = p.add_subparsers(dest="action", required=True)
-    b = sub.add_parser("build"); b.add_argument("--workers", type=int, default=64); b.add_argument("--limit", type=int)
-    a = p.parse_args(argv)
-    if a.action == "build": print(json.dumps(build(Path(os.environ["PKABENCH_RUNTIME"]), a.workers, a.limit), indent=1))
+    for name in ("build", "build-rsa-bound"):
+        b = sub.add_parser(name); b.add_argument("--workers", type=int, default=64); b.add_argument("--limit", type=int)
+    a = p.parse_args(argv); fn = build if a.action == "build" else build_rsa_bound
+    print(json.dumps(fn(Path(os.environ["PKABENCH_RUNTIME"]), a.workers, a.limit), indent=1))
 
 
 if __name__ == "__main__":
