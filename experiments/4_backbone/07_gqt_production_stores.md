@@ -709,3 +709,16 @@ free; site counts, rsa_free and targets checked against the store). All W = 1, d
   > 0.1, 6.4% of validation sites, recall 0.97 at 10% FPR; MAE 0.014; bound-branch burial AUROC 0.92-0.96) but does
   not help pKa beyond burial alone: selection +0.003 (n.s.), interface paired MAE +0.003 worse, pKPDB MSE slightly
   better. Burial-only W 1 is the auxiliary candidate; the 50% burial-only runs are pending.
+
+**Burial-only at 50% and W 0.1** (`pilot-{10,50}pct-drop10-bur{01,1}[-s29]`, two seeds, vs dropout only):
+
+| Contrast | Selection | State MAE | Interface paired MAE | pKPDB val MSE |
+|---|---|---|---|---|
+| burial W 0.1, 10% | +0.0018 (-0.0011, +0.0050) | +0.0008 | +0.0010 | -0.001 |
+| burial W 1, 10% | -0.0100 (-0.0135, -0.0063) | -0.0068 | -0.0032 | -0.008 |
+| burial W 0.1, 50% | +0.0005 (-0.0040, +0.0049) | -0.0013 | +0.0018 | +0.010 (+0.001, +0.019) |
+| burial W 1, 50% | -0.0004 (-0.0056, +0.0049) | -0.0027 (-0.005, -0.000) | +0.0023 | -0.001 |
+
+The 10% gain of burial W 1 does not hold at 50%: selection is unchanged (state MAE still slightly better, -0.003).
+W 0.1 does nothing at either size. Like dropout's interface gain at 10%, it looks like a small-pool regulariser.
+Production default unchanged (dropout 0.1 is the only change that held at both pool sizes).
