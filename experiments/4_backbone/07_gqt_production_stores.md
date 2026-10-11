@@ -675,3 +675,37 @@ free branch, where the partner is not in the graph. AUROC for c > 0 / > 2 / > 8:
 - Burial is unaffected: it was always trained and scored on the free branch (and pKPDB), AUROC 0.88-0.98.
 - The free-branch training runs launched by mistake (`-cefree*`) were cancelled after 4 minutes; their partial run
   directories are not results.
+
+### Burial-only auxiliary and Siamese burial, 10% pool (2026-10-11)
+
+User decision: drop the interface head; keep burial. `--aux-heads burial` (burial cross-entropy vs 1 - clip(RSA_free)
+on the PINDER free branch and pKPDB train_mask sites) and `--aux-heads burial-siamese`: the burial head on each branch
+learns its own state (bound 1 - clip(RSA_bound), free 1 - clip(RSA_free); cross-entropy, the two averaged), plus the
+squared error of the predicted bound - free burial (sigmoid outputs) against clip(RSA_free) - clip(RSA_bound), mirroring
+the pKa state + Siamese losses. RSA_bound comes from `pinder/rsa-bound-v1` (`production_aux build-rsa-bound`; sites.json
+rsa_bound in the store's site order; 28,733 structures, 1,451,907 sites, none missing, none with clipped bound RSA above
+free; site counts, rsa_free and targets checked against the store). All W = 1, dropout 0.1, two seeds; runs
+`pilot-10pct-drop10-bur1[-s29]` (off) and `pilot-10pct-drop10-bursiam[-s29]` (on).
+
+| Arm | Seed | Epoch | Selection | State MAE | Interface paired MAE | pKPDB val MAE | pKPDB val MSE | Benchmark MAE |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| dropout only | 17 | 17 | 0.7292 | 0.4695 | 0.2597 | 0.5578 | 0.7306 | 0.5808 |
+| dropout only | 29 | 17 | 0.7300 | 0.4695 | 0.2605 | 0.5544 | 0.7211 | 0.5863 |
+| burial (off) | 17 | 17 | 0.7195 | 0.4633 | 0.2562 | 0.5537 | 0.7246 | 0.5709 |
+| burial (off) | 29 | 18 | 0.7198 | 0.4621 | 0.2577 | 0.5513 | 0.7116 | 0.5743 |
+| Siamese burial (on) | 17 | 18 | 0.7245 | 0.4624 | 0.2622 | 0.5537 | 0.7140 | 0.5675 |
+| Siamese burial (on) | 29 | 18 | 0.7203 | 0.4621 | 0.2582 | 0.5482 | 0.7068 | 0.5673 |
+
+| Contrast (seed means; 95% bootstrap) | Selection | State MAE | Interface paired MAE | pKPDB val MSE |
+|---|---|---|---|---|
+| burial - dropout only | -0.0100 (-0.0135, -0.0063) | -0.0068 (-0.009, -0.005) | -0.0032 (-0.006, -0.000) | -0.008 (-0.017, +0.001) |
+| Siamese burial - dropout only | -0.0072 (-0.0108, -0.0035) | -0.0073 (-0.009, -0.005) | +0.0001 | -0.015 (-0.024, -0.007) |
+| Siamese burial - burial | +0.0028 (-0.0001, +0.0057) | -0.0005 | +0.0032 (+0.001, +0.006) | -0.008 (-0.015, -0.001) |
+
+- Burial alone is the largest gain over dropout-only of any auxiliary arm (selection -0.010, seed spread 0.0003),
+  improving state, interface paired and pKPDB MAE together. With the interface head (ce W 1, earlier) the same
+  weight gave +0.005 at 10%, so the interface head was what hurt.
+- Siamese burial learns the burial change well (predicted bound - free burial vs truth: AUROC 0.98 for a change
+  > 0.1, 6.4% of validation sites, recall 0.97 at 10% FPR; MAE 0.014; bound-branch burial AUROC 0.92-0.96) but does
+  not help pKa beyond burial alone: selection +0.003 (n.s.), interface paired MAE +0.003 worse, pKPDB MSE slightly
+  better. Burial-only W 1 is the auxiliary candidate; the 50% burial-only runs are pending.
