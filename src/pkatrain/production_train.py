@@ -751,7 +751,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     norms = normalization(manifests["pinder"], fraction); scale = lr_scale(batch)
     protocol = {"version": "gqt-production-joint-v1", "run": run, "fraction": fraction, "seed": seed, "batch": batch,
         "architecture": architecture(width, sidechains, depth, loops), "initialization": f"scratch (pkanet.ogqt.initialize, PRNGKey({seed}))"
-        + (f"; residue blocks 3-{depth} and/or W_inject from production_depth (fold_in salts)" if depth != 2 or loops != 1 else ""),
+        + (f"; residue blocks 3-{depth} from production_depth.deepen" if depth != 2 else "") + ("; W_inject from production_depth.add_injection" if loops != 1 else ""),
         "objective": "gqt_multitask_replay.JointEngine: pKPDB state-shift MSE (train_mask) + PINDER AB/free state-shift MSE + binding-shift MSE; equal coefficients; no site weights",
         "optimizer": "AdamW weight decay 1e-4, global clip 1 after gradient summation",
         "schedule": f"gqt_crop_radius.learning_rate x {scale:.4f} (1e-3 hold to epoch 10, cosine to 1e-5 by epoch {EPOCHS}); patience {PATIENCE}, min delta {MIN_DELTA}",
