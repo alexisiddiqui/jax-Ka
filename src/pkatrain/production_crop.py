@@ -174,6 +174,66 @@ def audit(root, fraction=0.1, radius=20.0, inner=5.0, structures=200, seed=17):
     return report
 
 
+def _run_rows(out, epoch):
+    """Per-complex / per-structure error sums of a run's selected-epoch prediction CSVs (validate's definitions:
+    pooled site MAEs, so a bootstrap over complexes resamples these sums)."""
+    import csv
+    from collections import defaultdict
+    pinder = defaultdict(lambda: np.zeros(4))  # sum |state error|, sites, sum |paired error| at interface sites, interface sites
+    with open(out / f"predictions-pinder-epoch-{epoch:03d}.csv") as handle:
+        for r in csv.DictReader(handle):
+            v = pinder[r["complex_id"]]; v[0] += abs(float(r["state_error"])); v[1] += 1
+            if r["interface"] == "True": v[2] += abs(float(r["paired_error"])); v[3] += 1
+    pkpdb = defaultdict(lambda: np.zeros(3))  # sum |error|, sum error^2, sites
+    with open(out / f"predictions-pkpdb-epoch-{epoch:03d}.csv") as handle:
+        for r in csv.DictReader(handle):
+            e = float(r["predicted_shift"]) - float(r["teacher_shift"]); v = pkpdb[r["structure_id"]]; v += (abs(e), e * e, 1)
+    return dict(pinder), dict(pkpdb)
+
+
+def report(root, arms=("crop20i5", "crop20i10"), baseline="drop10-bur1", pools=(10, 50), seeds=((17, ""), (29, "-s29")), resamples=2000, seed=0):
+    """Per-run selected-epoch metrics and contrasts (arm seed mean - baseline seed mean) with 95% paired bootstrap
+    intervals over the PINDER validation complexes (selection, state MAE, interface paired MAE) and the pKPDB
+    validation structures (pKPDB val MAE / MSE); one common resample per draw across all runs."""
+    from pathlib import Path
+    from .production_graphs import VERSION, read
+    runs_dir = Path(root) / "training" / VERSION / "runs"; out = {"runs": [], "contrasts": []}; rng = np.random.default_rng(seed)
+    def stats(p, k):
+        s = p.sum(axis=-2); return {"state_mae": s[..., 0] / s[..., 1], "interface_paired_mae": s[..., 2] / s[..., 3],
+                                    "selection": s[..., 0] / s[..., 1] + s[..., 2] / s[..., 3], "pkpdb_mae": k.sum(-2)[..., 0] / k.sum(-2)[..., 2],
+                                    "pkpdb_mse": k.sum(-2)[..., 1] / k.sum(-2)[..., 2]}
+    for pool in pools:
+        loaded = {}
+        for arm in (baseline,) + tuple(arms):
+            for number, suffix in seeds:
+                name = f"pilot-{pool}pct-{arm}{suffix}"; folder = runs_dir / name
+                if not (folder / "selection.json").exists(): continue
+                selection = read(folder / "selection.json"); epoch = selection["selected_epoch"]; v = selection["validation"]
+                loaded[(arm, number)] = _run_rows(folder, epoch)
+                history = [__import__("json").loads(l) for l in (folder / "history.jsonl").read_text().splitlines()]
+                crops = [h["crop"] for h in history if "crop" in h]
+                out["runs"].append({"run": name, "pool": pool, "arm": arm, "seed": number, "epoch": epoch, "epochs_run": selection["epochs_run"],
+                    "selection": v["selection"], "state_mae": v["pinder"]["state_mae"], "interface_paired_mae": v["pinder"]["interface_paired_mae"],
+                    "pkpdb_mae": v["pkpdb"]["site_mae"], "pkpdb_mse": v["pkpdb"]["site_mse"], "benchmark_mae": v["benchmark"]["overall"]["mae"],
+                    **({"supervised_per_crop": {d: float(np.mean([c[d]["supervised_per_crop"] for c in crops])) for d in ("pinder", "pkpdb")},
+                        "kept_node_fraction": {d: float(np.mean([c[d]["kept_node_fraction"] for c in crops])) for d in ("pinder", "pkpdb")},
+                        "crop_fraction": {d: float(np.mean([c[d]["crop_fraction"] for c in crops])) for d in ("pinder", "pkpdb")}} if crops else {})})
+        if not loaded: continue
+        complexes = sorted(next(iter(loaded.values()))[0]); structures = sorted(next(iter(loaded.values()))[1])
+        arrays = {key: (np.stack([p[c] for c in complexes]), np.stack([k[s] for s in structures])) for key, (p, k) in loaded.items()}
+        pi = rng.integers(0, len(complexes), (resamples, len(complexes))); ki = rng.integers(0, len(structures), (resamples, len(structures)))
+        for arm in arms:
+            a = [arrays[(arm, n)] for n, _ in seeds if (arm, n) in arrays]; b = [arrays[(baseline, n)] for n, _ in seeds if (baseline, n) in arrays]
+            if not a or not b: continue
+            mean = lambda group, index=None: {m: np.mean([stats(p if index is None else p[index[0]], k if index is None else k[index[1]])[m] for p, k in group], axis=0)
+                                               for m in ("selection", "state_mae", "interface_paired_mae", "pkpdb_mae", "pkpdb_mse")}
+            point = {m: float(mean(a)[m] - mean(b)[m]) for m in mean(a)}
+            ma, mb = mean(a, (pi, ki)), mean(b, (pi, ki))
+            out["contrasts"].append({"pool": pool, "arm": arm, "baseline": baseline, "seeds": [len(a), len(b)],
+                **{m: {"difference": point[m], "ci95": [float(np.quantile(ma[m] - mb[m], 0.025)), float(np.quantile(ma[m] - mb[m], 0.975))]} for m in point}})
+    return out
+
+
 def main(argv=None):
     import json
     import os
@@ -182,10 +242,20 @@ def main(argv=None):
     from pkabench.runtime import atomic_json
     argv = sys.argv[1:] if argv is None else argv
     root = Path(os.environ["PKABENCH_RUNTIME"])
+    from .production_graphs import VERSION
+    if argv[0] == "report":
+        result = report(root); atomic_json(root / "training" / VERSION / "crop-report.json", result)
+        for r in result["runs"]:
+            print(f"| {r['pool']}% | {r['arm']} | {r['seed']} | {r['epoch']} | {r['selection']:.4f} | {r['state_mae']:.4f} | {r['interface_paired_mae']:.4f} | "
+                  f"{r['pkpdb_mae']:.4f} | {r['pkpdb_mse']:.4f} | {r['benchmark_mae']:.4f} |")
+        for c in result["contrasts"]:
+            print(f"| {c['arm']} - {c['baseline']}, {c['pool']}% | " + " | ".join(
+                f"{c[m]['difference']:+.4f} ({c[m]['ci95'][0]:+.4f}, {c[m]['ci95'][1]:+.4f})" for m in ("selection", "state_mae", "interface_paired_mae", "pkpdb_mse")) + " |")
+        print(json.dumps([{k: r[k] for k in ("run", "supervised_per_crop", "kept_node_fraction", "crop_fraction") if k in r} for r in result["runs"]], indent=1))
+        return
     if argv[0] != "audit": raise ValueError(argv[0])
     radius, inner = (float(argv[1]), float(argv[2])) if len(argv) > 2 else (20.0, 5.0)
     report = audit(root, radius=radius, inner=inner)
-    from .production_graphs import VERSION
     atomic_json(root / "training" / VERSION / f"crop-audit-r{radius:g}-i{inner:g}.json", report); print(json.dumps(report, indent=1))
 
 
