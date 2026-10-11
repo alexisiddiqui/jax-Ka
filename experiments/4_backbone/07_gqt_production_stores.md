@@ -657,3 +657,21 @@ Head discrimination on validation (seed means; interface on the PINDER bound bra
 - Of the auxiliary arms, ce W 1 at 50% is the only one with no pKa cost (selection -0.002, n.s.; state MAE -0.003),
   so it is the candidate if the interface prediction is to be used (e.g. in the Siamese loss, the user's next step).
   Production default unchanged (no auxiliary heads).
+
+**Interface head tested on the free branch** (`production_train aux-rescore`, job 7243593; selected checkpoints of the
+16 bound-trained runs above; `aux-rescore.json` per run). Same head and bound-state contact-score labels, scored on the
+free branch, where the partner is not in the graph. AUROC for c > 0 / > 2 / > 8:
+
+| Arm | 10% bound | 10% free | 50% bound | 50% free |
+|---|---|---|---|---|
+| ordinal W 0.1 | 0.61 / 0.68 / 0.81 | 0.51 / 0.45 / 0.41 | 0.93 / 0.97 / 0.99 | 0.48 / 0.43 / 0.37 |
+| ordinal W 1 | 0.97 / 0.98 / 0.99 | 0.57 / 0.49 / 0.43 | 0.99 / 1.00 / 0.99 | 0.52 / 0.45 / 0.41 |
+| ce W 0.1 | 0.62 / 0.69 / 0.78 | 0.49 / 0.47 / 0.43 | 0.91 / 0.97 / 0.98 | 0.48 / 0.48 / 0.49 |
+| ce W 1 | 0.95 / 0.97 / 0.98 | 0.57 / 0.57 / 0.57 | 0.99 / 0.99 / 0.99 | 0.51 / 0.49 / 0.50 |
+
+- Without the partner the interface head is at chance (0.41-0.57; below 0.5 for the cumulative BCE heads at high
+  thresholds). Its bound-branch accuracy is reading partner residues from the graph, not interface propensity; the
+  bound-branch numbers in the table above are not evidence of interface prediction.
+- Burial is unaffected: it was always trained and scored on the free branch (and pKPDB), AUROC 0.88-0.98.
+- The free-branch training runs launched by mistake (`-cefree*`) were cancelled after 4 minutes; their partial run
+  directories are not results.
