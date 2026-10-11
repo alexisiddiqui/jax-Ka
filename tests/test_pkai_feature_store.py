@@ -16,7 +16,8 @@ def _dense(encoding, n, seed):
         value[1:3] = value[1] if m > 2 else value[1:3]  # ties
         atom = rng.integers(0, 16, m); aa = rng.integers(0, 20, m); j = np.arange(m) * slot
         if encoding != "aa20": x[i, j + atom] = value
-        if encoding != "atom16": x[i, j + (16 if encoding == "atom16aa20" else 0) + aa] = value
+        if encoding != "atom16": x[i, j + (16 if encoding.startswith("atom16aa20") else 0) + aa] = value
+        if encoding == "atom16aa20sc": x[i, j + 36 + rng.integers(0, 2, m)] = value
         x[i, 250 * slot + rng.integers(0, 8)] = 1
     return x
 
@@ -105,3 +106,30 @@ def test_import_run_archive(tmp_path, monkeypatch):
     store = js.FeatureStore(base / "store"); got = store.select(["train-x2"], ["full.value", "full.atom", "full.site"]); store.close()
     assert np.array_equal(ps.expand({k.split(".")[1]: v for k, v in got.items()}, "atom16"), dense["x2"]["full"])
     assert [f["id"] for f in json.loads((base / "store" / "metadata.json").read_text())["excluded"]] == ["x3"]
+
+
+def test_sc_flags_preserve_atom_and_amino_acid_features():
+    """A real atom classifier must separate N/O backbone neighbours from NZ/OG side chains."""
+    from types import SimpleNamespace
+    ps.native()
+    from atom import Atom
+    from residue import Residue
+    def protein():
+        query = Residue(None, "A", "ASP", 1)
+        query.atoms["OD1"] = Atom("OD1", 1, 0, 0, 0, query)
+        neighbours = []
+        for number, (group, name, distance) in enumerate((("ALA", "N", 2), ("ALA", "O", 3),
+                                                        ("LYS", "NZ", 4), ("SER", "OG", 5)), 2):
+            residue = Residue(None, "A", group, number)
+            neighbours.append(Atom(name, number, distance, 0, 0, residue))
+        return SimpleNamespace(iter_atoms=lambda: iter([*query.atoms.values(), *neighbours]),
+                               iter_residues=lambda titrable_only=False: iter([query]))
+    _, old = ps.feature_matrix(protein(), "atom16aa20")
+    _, new = ps.feature_matrix(protein(), "atom16aa20sc")
+    blocks = new[:, :ps.SLOTS * 38].reshape(1, ps.SLOTS, 38)
+    assert np.array_equal(blocks[..., :36].reshape(1, -1), old[:, :ps.SLOTS * 36])
+    expected = np.asarray([[1/4, 0], [1/9, 0], [0, 1/16], [0, 1/25]], np.float32)
+    assert np.array_equal(blocks[0, :4, 36:], expected)
+    assert not blocks[0, 4:].any()
+    assert np.array_equal(new[:, -8:], old[:, -8:])
+    assert np.array_equal(ps.expand(ps.compact(new, "atom16aa20sc"), "atom16aa20sc"), new)

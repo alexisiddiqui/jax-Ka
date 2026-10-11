@@ -894,9 +894,9 @@ def export(root, run, destination=None):
     mode = manifest["mode"]
     if mode not in MODES or (CUTOFF, SLOTS) not in ((15.0, 250), (20.0, 540)):
         raise ValueError("released pKAI exports require full/backbone with 15 A / 250 or 20 A / 540 slots")
-    if ENCODING not in ("atom16", "atom16aa20"):
-        raise ValueError("released pKAI supports atom16 and atom16aa20 exports")
-    name = "pKAI-joint" if ENCODING == "atom16" else "pKAI-joint-aa20"
+    if ENCODING not in ("atom16", "atom16aa20", "atom16aa20sc"):
+        raise ValueError("released pKAI supports atom16, atom16aa20 and atom16aa20sc exports")
+    name = {"atom16": "pKAI-joint", "atom16aa20": "pKAI-joint-aa20", "atom16aa20sc": "pKAI-joint-aa20-sc"}[ENCODING]
     if mode == "backbone": name += "-backbone"
     name += GEOMETRY
     destination = Path(destination) if destination else run / f"{name}_model.pt"
@@ -1116,16 +1116,17 @@ def _validation_component(task):
         ids = np.flatnonzero(np.asarray([a.residue is not residue for a in atoms]) & (distance < CUTOFF))
         if np.any(distance[ids] == 0): raise ValueError((record["complex_id"], key, "coincident backbone atom"))
         bb = np.zeros(feature_width(encoding), np.float32)
-        if encoding in ("atom16", "atom16aa20"):
+        if encoding in ("atom16", "atom16aa20", "atom16aa20sc"):
             residue.env_anames = [atoms[j].aname for j in ids]; residue.env_resnames = [atoms[j].residue.resname for j in ids]
             residue.env_oheclasses = []; residue.encode_atoms()
-            aa = [aa20_index(atoms[j].residue.resname) for j in ids] if encoding == "atom16aa20" else [None] * len(ids)
+            aa = [aa20_index(atoms[j].residue.resname) for j in ids] if encoding.startswith("atom16aa20") else [None] * len(ids)
             ordered = [(d, ATOM_OHE.index(c), a) for d, c, a in sorted(zip(distance[ids], residue.env_oheclasses, aa), key=lambda v: (v[0], v[1]))[:SLOTS]]
         else:
             ordered = [(d, a, None) for d, a in sorted(zip(distance[ids], [aa20_index(atoms[j].residue.resname) for j in ids]))[:SLOTS]]
         for position, (value, cls, a) in enumerate(ordered):
             bb[position * slot + cls] = 1 / float(value) ** 2
             if a is not None: bb[position * slot + 16 + a] = 1 / float(value) ** 2
+            if encoding == "atom16aa20sc": bb[position * slot + 36] = 1 / float(value) ** 2
         bb[SLOTS * slot + RES_OHE.index(residue.resname)] = 1.0
         out[key] = (full[index], bb)
     return record["complex_id"], out
