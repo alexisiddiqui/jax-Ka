@@ -89,6 +89,8 @@ def test_import_run_archive(tmp_path, monkeypatch):
     pytest.importorskip("zstandard")
     import tarfile
     from pkatrain import pkai_joint_scale as js
+    monkeypatch.setattr(js, "ENCODING", "atom16")
+    monkeypatch.setattr(js, "WIDTH", ps.feature_width("atom16"))
     base = js.feature_root(tmp_path, "pkpdb"); base.mkdir(parents=True)
     ids = [["x1", "train"], ["x2", "train"], ["x3", "train"]]
     (base / "ids.json").write_text(json.dumps({"encoding": "atom16", "ids": ids}))
