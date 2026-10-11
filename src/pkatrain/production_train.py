@@ -32,6 +32,10 @@ valid structures, so the full-batch value and gradient are the chunk values and 
 structures in chunk / valid in batch); the chunk size changes only float summation order. Chunks that
 are pure padding are skipped. One optimizer step per batch, as before.
 
+Crops (2026-10-11, pkatrain.production_crop): --crop-radius R [--crop-inner 5] [--crop-probability 0.25] crops that
+share of training draws to a site's R A C-alpha neighbourhood and supervises the sites within the inner radius;
+validation is never cropped. Combines with every engine (the crop is applied by the training sources).
+
   python -m pkatrain.production_train train RUN [--fraction 0.1] [--batch 16] [--smoke]
 """
 from __future__ import annotations
@@ -546,7 +550,7 @@ def code_hashes():
     src = Path(__file__).parents[1]
     paths = [Path(__file__), src / "pkatrain/production_loading.py", src / "pkatrain/production_graphs.py",
              src / "pkatrain/loading.py", src / "pkatrain/gqt_multitask_replay.py", src / "pkatrain/gqt_paired_pinder.py",
-             src / "pkatrain/site_graph_data.py", src / "pkanet/ogqt.py", src / "pkanet/model.py", src / "pkanet/triton_attention.py"]
+             src / "pkatrain/site_graph_data.py", src / "pkatrain/production_crop.py", src / "pkanet/ogqt.py", src / "pkanet/model.py", src / "pkanet/triton_attention.py"]
     return {str(p.relative_to(src)): digest(p) for p in paths}
 
 
@@ -719,13 +723,16 @@ def validate(engine, predict, params, sources, manifests, config, out=None, epoc
 
 
 def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none", seed=SEED, query_norm="shared", reduction="structure",
-          mask_pmin=None, dropout=0.0, aux_weight=None, aux_loss="ce", aux_interface_branch="bound", aux_heads="both", width=None):
+          mask_pmin=None, dropout=0.0, aux_weight=None, aux_loss="ce", aux_interface_branch="bound", aux_heads="both", width=None,
+          crop_radius=None, crop_inner=5.0, crop_probability=0.25):
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
     from .gqt_crop_radius import EPOCHS, MIN_DELTA, PATIENCE, learning_rate
     from .gqt_multitask_replay import JointEngine
     from .trainer import load_checkpoint, save_checkpoint
+    from .production_crop import CroppedSource, check_config as check_crop, describe as describe_crop
+    if crop_radius is not None: check_crop(crop_radius, crop_inner, crop_probability)
     root = Path(root); out = run_dir(root, run); out.mkdir(parents=True, exist_ok=True)
     jax.config.update("jax_compilation_cache_dir", str(out.parent / "compilation-cache"))
     manifests = {d: read(output(root, d) / MANIFEST) for d in ("pinder", "pkpdb", "benchmark-val")}
@@ -766,6 +773,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
                           f"PINDER {aux_interface_branch} branch); one-logit heads aux_burial/aux_interface on the final site embedding (pkatrain.production_aux)"),
             ("rsa_bound_verification_sha256" if aux_heads == "burial-siamese" else "contacts_verification_sha256"):
                 ContactTable(root, RSA_BOUND_TABLE if aux_heads == "burial-siamese" else CONTACTS_TABLE).verification_sha256} if aux_weight is not None else {}),
+        **({"crop": describe_crop(crop_radius, crop_inner, crop_probability)} if crop_radius is not None else {}),
         "pinder_weight_normalization": norms, "smoke": smoke, "test_data_included": False,
         "manifests": {d: digest(output(root, d) / MANIFEST) for d in manifests}, "code": code_hashes()}
     if (out / "protocol.json").exists():
@@ -775,10 +783,15 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     else: atomic_json(out / "protocol.json", protocol)
     config = LoaderConfig()
     contacts = ContactTable(root, RSA_BOUND_TABLE if aux_heads == "burial-siamese" else CONTACTS_TABLE) if aux_weight is not None else None
-    train_pinder = AuxPinderSource(_with_policy(manifests["pinder"], batch), contacts, config=config, norms=norms) if contacts else \
-        PinderSource(_with_policy(manifests["pinder"], batch), config=config, norms=norms)
-    sources = {"train": JointSource(train_pinder, PkpdbSource(_with_policy(manifests["pkpdb"], batch), config=config,
-                                    weights=reduction != "structure" or mask_pmin is not None, aux=contacts is not None)),
+    spread = crop_radius is None  # a crop must precede the padding spread (CroppedSource applies it)
+    train_pinder = AuxPinderSource(_with_policy(manifests["pinder"], batch), contacts, config=config, norms=norms, spread=spread) if contacts else \
+        PinderSource(_with_policy(manifests["pinder"], batch), config=config, norms=norms, spread=spread)
+    train_pkpdb = PkpdbSource(_with_policy(manifests["pkpdb"], batch), config=config, weights=reduction != "structure" or mask_pmin is not None,
+                              aux=contacts is not None, spread=spread)
+    if crop_radius is not None:
+        train_pinder = CroppedSource(train_pinder, "pinder", crop_radius, crop_inner, crop_probability, seed)
+        train_pkpdb = CroppedSource(train_pkpdb, "pkpdb", crop_radius, crop_inner, crop_probability, seed)
+    sources = {"train": JointSource(train_pinder, train_pkpdb),
                "pinder-val": PinderSource(_with_policy(manifests["pinder"]), config=config, norms=norms),
                "benchmark": PkpdbSource(_with_policy(manifests["benchmark-val"]), config=config, mask="eval_mask"),
                **({"pkpdb-val": PkpdbSource(_with_policy(manifests["pkpdb"]), config=config, mask="train_mask")} if select(manifests["pkpdb"], "val") else {})}
@@ -817,6 +830,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
         pair, pk = epoch_plans(manifests, fraction, epoch, batch, seed)
         if smoke: pair, pk = pair[:5], pk[:5]
         specs = list(zip(pair, pk)); deferred = DeferredScalars(every=50); began = time.time()
+        if crop_radius is not None: train_pinder.set_epoch(epoch); train_pkpdb.set_epoch(epoch)
         prefetcher = Prefetcher(sources["train"], specs, config, to_device if not chunked(batch) else host_chunks)
         for number, (_, (pair_batch, pk_batch)) in enumerate(prefetcher, 1):
             rate = jnp.asarray(scale * learning_rate(epoch, number, len(specs)), jnp.float32)
@@ -843,7 +857,8 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
         row = {"epoch": epoch, "updates": len(specs), "learning_rate_end": scale * learning_rate(epoch, len(specs), len(specs)),
                "train_loss": {name: float(values[:, i].mean()) for i, name in enumerate(("total", "pkpdb", "pinder_state", "pinder_paired"))},
                "validation": validation, "train_seconds": round(train_seconds, 1), "validation_seconds": round(val_seconds, 1),
-               "loader_wait_fraction": telemetry.get("wait_fraction")}
+               "loader_wait_fraction": telemetry.get("wait_fraction"),
+               **({"crop": {"pinder": train_pinder.stats(), "pkpdb": train_pkpdb.stats()}} if crop_radius is not None else {})}
         history.append(row)
         with open(out / "history.jsonl", "a") as handle: handle.write(json.dumps(row) + "\n")
         improved = best is None or validation["selection"] < best["validation"]["selection"] - MIN_DELTA
@@ -982,6 +997,8 @@ def main(argv=None):
     p.add_argument("--aux-interface-branch", choices=("bound", "free"), default="bound")
     p.add_argument("--aux-heads", choices=("both", "burial", "burial-siamese"), default="both")
     p.add_argument("--width", type=int, default=None, help="model width (ff = 2 x width); default ARCHITECTURE")
+    p.add_argument("--crop-radius", type=float, default=None, help="inner-radius site crops (pkatrain.production_crop), radius <= 20 A")
+    p.add_argument("--crop-inner", type=float, default=5.0); p.add_argument("--crop-probability", type=float, default=0.25)
     p = sub.add_parser("count"); p.add_argument("widths", type=int, nargs="+")
     p = sub.add_parser("export"); p.add_argument("run"); p.add_argument("destination")
     p = sub.add_parser("rescore"); p.add_argument("runs", nargs="+")
@@ -1006,7 +1023,7 @@ def main(argv=None):
     if args.action == "train":
         result = train(root, args.run, args.fraction, args.smoke, args.batch, args.paired_weight, args.seed, args.query_norm, args.loss_reduction, args.site_mask_pmin,
                        args.dropout, args.aux_weight, args.aux_loss, args.aux_interface_branch,
-                       args.aux_heads, args.width)
+                       args.aux_heads, args.width, args.crop_radius, args.crop_inner, args.crop_probability)
         print(json.dumps({"selected_epoch": result["selected_epoch"], "selection": result["validation"]["selection"]}))
 
 
