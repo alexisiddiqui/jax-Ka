@@ -56,7 +56,7 @@ def crop(graph, supervised, centre_query, radius, inner, branched=False):
     view = {name: value[0] for name, value in graph.items()} if branched else graph
     supervised = np.asarray(supervised, bool)
     if not supervised[centre_query]: raise ValueError("crop centre is not a supervised site")
-    centre = int(view["query_residue"][centre_query]); node_mask = np.asarray(view["node_mask"], bool)
+    centre = int(view["query_residue"][centre_query]); node_mask = np.array(view["node_mask"], bool)  # a copy: masked below
     row = np.asarray(view["edge_mask"][centre], bool); neighbors = np.asarray(view["neighbors"][centre][row], np.int64)
     distance = np.full(len(node_mask), np.inf); distance[neighbors] = decode_rbf_distance(view["edge"][centre][row][:, :16])
     distance[centre] = 0.0

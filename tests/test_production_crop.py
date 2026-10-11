@@ -34,7 +34,8 @@ def test_crop_matches_true_distances(radius, inner):
     graph, ca, _ = _structure(seed=int(radius))
     original = {k: v.copy() for k, v in graph.items()}; supervised = np.ones(len(graph["query_residue"]), bool); supervised[3] = False
     q = 5; centre = graph["query_residue"][q]; true = np.linalg.norm(ca - ca[centre], axis=-1)
-    assert not np.any(np.abs(true - radius) < 1e-3) and not np.any(np.abs(true - inner) < 1e-3)
+    other = np.arange(len(true)) != centre
+    assert not np.any(np.abs(true[other] - radius) < 1e-3) and not np.any(np.abs(true[other] - inner) < 1e-3)
     result, stats = pc.crop(graph, supervised, q, radius, inner)
     keep = np.asarray(graph["node_mask"], bool)
     assert np.array_equal(keep, true <= radius)
@@ -51,7 +52,8 @@ def test_crop_matches_true_distances(radius, inner):
         assert keep[near].all()
         row = original["edge_mask"][r]; reached = set(original["neighbors"][r][row & (np.linalg.norm(ca[original["neighbors"][r]] - ca[r], axis=-1) <= radius - inner)])
         assert reached <= set(graph["neighbors"][r][graph["edge_mask"][r]])
-    assert stats["kept_nodes"] == keep.sum() and stats["kept_supervised"] == result.sum() and stats["supervised"] == supervised.sum()
+    assert stats["kept_nodes"] == keep.sum() and stats["nodes"] == len(keep) and stats["kept_supervised"] == result.sum()
+    assert stats["supervised"] == supervised.sum()
 
 
 def test_branches_share_one_crop():
