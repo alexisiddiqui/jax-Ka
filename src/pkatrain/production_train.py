@@ -291,7 +291,7 @@ def initialize_aux(params, seed, mode="ce", heads="both"):
     import jax
     import jax.numpy as jnp
     from .production_aux import BURIAL_RSA_CUTS, INTERFACE_THRESHOLDS
-    width = ARCHITECTURE["width"]; kb, ki = jax.random.split(jax.random.fold_in(jax.random.PRNGKey(seed), 27183))
+    width = params["head"]["w"].shape[0]; kb, ki = jax.random.split(jax.random.fold_in(jax.random.PRNGKey(seed), 27183))
     nb, ni = (len(BURIAL_RSA_CUTS), len(INTERFACE_THRESHOLDS)) if mode == "ordinal" else (1, 1)
     head = lambda key, out: {"w": jax.random.normal(key, (width, out), jnp.float32) / jnp.sqrt(float(width)), "b": jnp.zeros(out, jnp.float32)}
     return {**params, "aux_burial": head(kb, nb), **({"aux_interface": head(ki, ni)} if heads == "both" else {})}
@@ -472,13 +472,25 @@ def auxiliary_metrics(engine, params, pinder_source, pinder_records, pkpdb_sourc
     return out
 
 
-def make_model(seed, query_norm="shared", paired_weight="none", reduction="structure"):
+def architecture(width=None):
+    """ARCHITECTURE, or width W with ff = 2W (the size-sweep tiers; W divisible by the 4 attention heads)."""
+    if width is None: return ARCHITECTURE
+    if width % 4: raise ValueError("width must be divisible by the 4 attention heads")
+    return {"width": int(width), "ff": 2 * int(width)}
+
+
+def parameter_count(params):
+    import jax
+    return int(sum(np.size(x) for x in jax.tree.leaves(params)))
+
+
+def make_model(seed, query_norm="shared", paired_weight="none", reduction="structure", width=None):
     """(params, engine, predict): scratch oGQT and its engine; separate query norm starts as a copy of query norm1."""
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
     from .gqt_multitask_replay import JointEngine
-    params = initialize_ogqt(jax.random.PRNGKey(seed), **ARCHITECTURE)
+    params = initialize_ogqt(jax.random.PRNGKey(seed), **architecture(width))
     if query_norm == "separate":
         params = {**params, "query_context_norm": jnp.array(params["query"]["norm1"])}
         return params, VariantEngine(params, predict_shift_separate, paired_weight, reduction), jax.jit(jax.vmap(predict_shift_separate, in_axes=(None, 0)))
@@ -707,7 +719,7 @@ def validate(engine, predict, params, sources, manifests, config, out=None, epoc
 
 
 def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none", seed=SEED, query_norm="shared", reduction="structure",
-          mask_pmin=None, dropout=0.0, aux_weight=None, aux_loss="ce", aux_interface_branch="bound", aux_heads="both"):
+          mask_pmin=None, dropout=0.0, aux_weight=None, aux_loss="ce", aux_interface_branch="bound", aux_heads="both", width=None):
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
@@ -719,7 +731,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     manifests = {d: read(output(root, d) / MANIFEST) for d in ("pinder", "pkpdb", "benchmark-val")}
     norms = normalization(manifests["pinder"], fraction); scale = lr_scale(batch)
     protocol = {"version": "gqt-production-joint-v1", "run": run, "fraction": fraction, "seed": seed, "batch": batch,
-        "architecture": ARCHITECTURE, "initialization": f"scratch (pkanet.ogqt.initialize, PRNGKey({seed}))",
+        "architecture": architecture(width), "initialization": f"scratch (pkanet.ogqt.initialize, PRNGKey({seed}))",
         "objective": "gqt_multitask_replay.JointEngine: pKPDB state-shift MSE (train_mask) + PINDER AB/free state-shift MSE + binding-shift MSE; equal coefficients; no site weights",
         "optimizer": "AdamW weight decay 1e-4, global clip 1 after gradient summation",
         "schedule": f"gqt_crop_radius.learning_rate x {scale:.4f} (1e-3 hold to epoch 10, cosine to 1e-5 by epoch {EPOCHS}); patience {PATIENCE}, min delta {MIN_DELTA}",
@@ -771,7 +783,9 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
                "benchmark": PkpdbSource(_with_policy(manifests["benchmark-val"]), config=config, mask="eval_mask"),
                **({"pkpdb-val": PkpdbSource(_with_policy(manifests["pkpdb"]), config=config, mask="train_mask")} if select(manifests["pkpdb"], "val") else {})}
     if (reduction != "structure" or mask_pmin is not None) and chunked(batch): raise ValueError("this loss is not chunk-additive; use batch <= 64")
-    params, engine, predict = make_model(seed, query_norm, paired_weight, reduction); state = engine.optimizer.init(params)
+    if width is not None and (query_norm != "shared" or paired_weight != "none" or reduction != "structure"):
+        raise ValueError("--width combines with the default objective, dropout and auxiliaries only")
+    params, engine, predict = make_model(seed, query_norm, paired_weight, reduction, width); state = engine.optimizer.init(params)
     step_key = None
     if aux_weight is not None:
         if query_norm != "shared" or paired_weight != "none" or reduction != "structure" or mask_pmin is not None:
@@ -851,7 +865,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
         for source in aux_sources:
             if source is not None: source.close()
     for source in sources.values(): source.close()
-    atomic_json(out / "selection.json", {"selected_epoch": selected, "epochs_run": len(history), "validation": final,
+    atomic_json(out / "selection.json", {"selected_epoch": selected, "epochs_run": len(history), "parameter_count": parameter_count(params), "validation": final,
                 "checkpoint_sha256": digest(out / "checkpoints" / f"epoch-{selected:03d}" / "state.npz"), "test_data_included": False})
     return read(out / "selection.json")
 
@@ -900,7 +914,7 @@ def aux_rescore(root, run):
     manifests = {d: read(output(root, d) / MANIFEST) for d in ("pinder", "pkpdb")}
     config = LoaderConfig(); norms = protocol["pinder_weight_normalization"]
     contacts = ContactTable(root, RSA_BOUND_TABLE if heads == "burial-siamese" else CONTACTS_TABLE)
-    params, _, _ = make_model(protocol["seed"]); params = initialize_aux(params, protocol["seed"], mode, heads)
+    params, _, _ = make_model(protocol["seed"], width=protocol["architecture"]["width"]); params = initialize_aux(params, protocol["seed"], mode, heads)
     engine = AuxEngine(params, weight, dropout, mode, branch, heads); state = engine.optimizer.init(params)
     params, state, _ = load_checkpoint(out / "checkpoints" / f"epoch-{selection['selected_epoch']:03d}", (params, state))
     sources = (AuxPinderSource(_with_policy(manifests["pinder"]), contacts, config=config, norms=norms),
@@ -922,11 +936,19 @@ def main(argv=None):
     p.add_argument("--aux-weight", type=float, default=None); p.add_argument("--aux-loss", choices=("ce", "ordinal"), default="ce")
     p.add_argument("--aux-interface-branch", choices=("bound", "free"), default="bound")
     p.add_argument("--aux-heads", choices=("both", "burial", "burial-siamese"), default="both")
+    p.add_argument("--width", type=int, default=None, help="model width (ff = 2 x width); default ARCHITECTURE")
+    p = sub.add_parser("count"); p.add_argument("widths", type=int, nargs="+")
     p = sub.add_parser("rescore"); p.add_argument("runs", nargs="+")
     p = sub.add_parser("aux-rescore"); p.add_argument("runs", nargs="+")
     args = parser.parse_args(argv); root = Path(os.environ["PKABENCH_RUNTIME"])
     if args.action == "rescore":
         for run in args.runs: rescore(root, run)
+        return
+    if args.action == "count":
+        for w in args.widths:
+            params = make_model(SEED, width=w)[0]
+            print(json.dumps({"width": w, "ff": 2 * w, "parameters": parameter_count(params),
+                              "with_burial_head": parameter_count(initialize_aux(params, SEED, "ce", "burial"))}))
         return
     if args.action == "aux-rescore":
         for run in args.runs:
@@ -936,7 +958,7 @@ def main(argv=None):
     if args.action == "train":
         result = train(root, args.run, args.fraction, args.smoke, args.batch, args.paired_weight, args.seed, args.query_norm, args.loss_reduction, args.site_mask_pmin,
                        args.dropout, args.aux_weight, args.aux_loss, args.aux_interface_branch,
-                       args.aux_heads)
+                       args.aux_heads, args.width)
         print(json.dumps({"selected_epoch": result["selected_epoch"], "selection": result["validation"]["selection"]}))
 
 
