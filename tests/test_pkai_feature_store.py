@@ -11,7 +11,7 @@ def _dense(encoding, n, seed):
     site one-hot; some rows with no environment at all."""
     rng = np.random.default_rng(seed); slot = ps.SLOT_WIDTH[encoding]; x = np.zeros((n, ps.feature_width(encoding)), np.float32)
     for i in range(n):
-        m = 0 if i % 7 == 3 else int(rng.integers(1, 251))
+        m = 0 if i % 7 == 3 else int(rng.integers(1, ps.SLOTS + 1))
         value = np.sort(1 / rng.uniform(1, 15, m) ** 2)[::-1].astype(np.float32)
         value[1:3] = value[1] if m > 2 else value[1:3]  # ties
         atom = rng.integers(0, 16, m); aa = rng.integers(0, 20, m); j = np.arange(m) * slot
@@ -19,7 +19,7 @@ def _dense(encoding, n, seed):
         if encoding != "atom16": x[i, j + (16 if encoding.startswith("atom16aa20") else 0) + aa] = value
         if encoding == "atom16aa20sc": x[i, j + 36 + rng.integers(0, 2, m)] = value
         if encoding == "atom16aa20ori": x[i, j[:, None] + np.arange(36, 39)] = (rng.uniform(-1, 1, (m, 3)) * value[:, None]).astype(np.float32)
-        x[i, 250 * slot + rng.integers(0, 8)] = 1
+        x[i, ps.SLOTS * slot + rng.integers(0, 8)] = 1
     return x
 
 
