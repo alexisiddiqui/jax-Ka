@@ -722,3 +722,30 @@ free; site counts, rsa_free and targets checked against the store). All W = 1, d
 The 10% gain of burial W 1 does not hold at 50%: selection is unchanged (state MAE still slightly better, -0.003).
 W 0.1 does nothing at either size. Like dropout's interface gain at 10%, it looks like a small-pool regulariser.
 Production default unchanged (dropout 0.1 is the only change that held at both pool sizes).
+
+### Model size and side chains, 50% pool (2026-10-11)
+
+Fixed config: dropout 0.1, burial auxiliary W 1 (`--aux-heads burial`), batch 16, seed 17, one seed per arm. Widths
+32 / 44 / 64 / 92 (ff = 2 x width; `--width`). Side chains (`--sidechains`): the 32 named side-chain heavy-atom slots
+of `pkanet.graph.sidechain_features` appended to the node features (24 -> 152), from `<dataset>/sidechains-v1`
+(`pkatrain.production_sidechains`; 28,733 PINDER, 56,991 pKPDB and 142 benchmark structures; node count and residue
+identity checked against each store; 7% of residues have no side-chain atoms: glycine and truncated side chains).
+The backbone width-44 arm is `pilot-50pct-drop10-bur1`. Absolute validation values at the selected epoch:
+
+| Input | Width | Params | Epoch | Selection | State MAE / MSE | Paired MAE | Interface paired MAE / MSE | pKPDB val MAE / MSE | Benchmark MAE / RMSE / Spearman | s / epoch |
+|---|---:|---:|---:|---:|---|---:|---|---|---|---:|
+| backbone | 32 | 37,158 | 17 | 0.6700 | 0.4294 / 0.4495 | 0.0700 | 0.2406 / 0.2189 | 0.5215 / 0.6421 | 0.5386 / 0.7748 / 0.790 | 57 |
+| backbone | 44 | 67,770 | 17 | 0.6777 | 0.4311 / 0.4504 | 0.0715 | 0.2466 / 0.2250 | 0.5234 / 0.6459 | 0.5379 / 0.7742 / 0.780 | 63 |
+| backbone | 64 | 139,270 | 17 | 0.6736 | 0.4292 / 0.4522 | 0.0722 | 0.2445 / 0.2215 | 0.5196 / 0.6396 | 0.5357 / 0.7710 / 0.789 | 59 |
+| backbone | 92 | 282,378 | 14 | 0.6629 | 0.4235 / 0.4423 | 0.0696 | 0.2394 / 0.2199 | 0.5155 / 0.6372 | 0.5363 / 0.7746 / 0.789 | 91 |
+| side chains | 32 | 41,254 | 18 | 0.5589 | 0.3526 / 0.3022 | 0.0601 | 0.2063 / 0.1559 | 0.4408 / 0.4719 | 0.4758 / 0.7019 / 0.798 | 53 |
+| side chains | 44 | 73,402 | 18 | 0.5365 | 0.3374 / 0.2850 | 0.0586 | 0.1991 / 0.1425 | 0.4181 / 0.4280 | 0.4557 / 0.6716 / 0.813 | 64 |
+| side chains | 64 | 147,462 | 18 | **0.5264** | **0.3273 / 0.2739** | 0.0587 | **0.1991 / 0.1457** | **0.4123 / 0.4272** | **0.4525 / 0.6736 / 0.832** | 63 |
+| side chains | 92 | 294,154 | 17 | 0.5531 | 0.3428 / 0.2936 | 0.0618 | 0.2104 / 0.1606 | 0.4308 / 0.4524 | 0.4678 / 0.7015 / 0.798 | 93 |
+
+- Side chains are the largest change measured on the production pool: at width 44 selection 0.678 -> 0.537,
+  PINDER state MSE 0.450 -> 0.285, interface paired MSE 0.225 -> 0.143, pKPDB val MSE 0.646 -> 0.428, benchmark MAE
+  0.538 -> 0.456, at every width (single seed, but 20-30x the seed spread measured on these pools).
+- Size barely matters with backbone input (selection 0.663-0.678 across 37K-282K parameters). With side chains
+  width 64 is best (0.526) and width 92 is worse than 44; one seed each, so the 44 vs 64 ordering is not established.
+- Cost: side chains add under 10% per epoch; width 92 is about 1.5x slower.
