@@ -18,6 +18,7 @@ def _dense(encoding, n, seed):
         if encoding != "aa20": x[i, j + atom] = value
         if encoding != "atom16": x[i, j + (16 if encoding.startswith("atom16aa20") else 0) + aa] = value
         if encoding == "atom16aa20sc": x[i, j + 36 + rng.integers(0, 2, m)] = value
+        if encoding == "atom16aa20ori": x[i, j[:, None] + np.arange(36, 39)] = (rng.uniform(-1, 1, (m, 3)) * value[:, None]).astype(np.float32)
         x[i, 250 * slot + rng.integers(0, 8)] = 1
     return x
 
@@ -26,7 +27,7 @@ def _dense(encoding, n, seed):
 def test_compact_round_trip(encoding):
     x = _dense(encoding, 40, 1); slots = ps.compact(x, encoding)
     assert tuple(slots) == ps.compact_fields(encoding)
-    assert slots["value"].dtype == np.float32 and all(slots[k].dtype == np.uint8 for k in slots if k != "value")
+    assert slots["value"].dtype == np.float32 and all(slots[k].dtype == np.uint8 for k in slots if k not in ("value", "orientation"))
     assert np.array_equal(ps.expand(slots, encoding), x)
 
 

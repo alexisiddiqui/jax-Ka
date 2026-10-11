@@ -202,7 +202,7 @@ def _full_features(root, cid, state, keys):
         import sys
         sys.path.insert(0, str(package))
         from protein import Protein
-        residues, matrix = feature_matrix(Protein(path), ENCODING)
+        residues, matrix = feature_matrix(Protein(path), "atom16aa20" if ENCODING == "atom16aa20ori" else ENCODING)
     lookup = {}
     for index, residue in enumerate(residues):
         original = mapping[(str(residue.chain), int(residue.resnumb))]
@@ -211,7 +211,7 @@ def _full_features(root, cid, state, keys):
             raise AssertionError((cid, state, key, "duplicate pKAI site"))
         lookup[key] = index
     retained = np.asarray([key in lookup for key in keys], bool)
-    result = np.zeros((len(keys), WIDTH), np.float32)
+    result = np.zeros((len(keys), matrix.shape[1]), np.float32)
     for index, key in enumerate(keys):
         if retained[index]:
             result[index] = matrix[lookup[key]]
@@ -300,7 +300,7 @@ def _native_features_for_atoms(atoms, keys):
         path = Path(directory) / "input.pdb"; mapping = _export_pdb(atoms, path)
         _, package = native(); import sys
         sys.path.insert(0, str(package)); from protein import Protein
-        residues, matrix = feature_matrix(Protein(path), ENCODING)
+        residues, matrix = feature_matrix(Protein(path), "atom16aa20" if ENCODING == "atom16aa20ori" else ENCODING)
     lookup = {}
     for index, residue in enumerate(residues):
         original = mapping[(str(residue.chain), int(residue.resnumb))]
@@ -308,7 +308,7 @@ def _native_features_for_atoms(atoms, keys):
         if key in lookup: raise AssertionError((key, "duplicate pKAI site"))
         lookup[key] = index
     retained = np.asarray([key in lookup for key in keys], bool)
-    result = np.zeros((len(keys), WIDTH), np.float32)
+    result = np.zeros((len(keys), matrix.shape[1]), np.float32)
     for i, key in enumerate(keys):
         if retained[i]: result[i] = matrix[lookup[key]]
     return result, retained
@@ -326,7 +326,9 @@ def _pkpdb_feature_record(root, cid):
     from protein import PK_MODS
     target = np.asarray([s["pka"] - PK_MODS[s["group"]] for s in sites], np.float32)
     weight = np.asarray([env[key]["w_burial"] for key in keys], np.float32)
-    return {"full": full[keep], "backbone": bb[keep], "target": target[keep], "weight": weight[keep]}
+    result = {"backbone": bb[keep], "target": target[keep], "weight": weight[keep]}
+    if ENCODING != "atom16aa20ori": result["full"] = full[keep]
+    return result
 
 
 def _pinder_feature_record(root, cid, split):
@@ -353,7 +355,8 @@ def _pinder_feature_record(root, cid, split):
                   w_interface=np.asarray([r["w_interface"] for r in rows], np.float32),
                   interface=np.asarray([bool(r.get("interface")) for r in rows], bool))  # not stored; see build_interface
     if not retained.any(): raise ValueError((cid, "no sites mapped in both representations"))
-    return {key: value[retained] for key, value in arrays.items()}
+    return {key: value[retained] for key, value in arrays.items()
+            if ENCODING != "atom16aa20ori" or not key.startswith("full_")}
 
 
 # ---------------------------------------------------------------- feature store
@@ -371,6 +374,7 @@ def _pinder_feature_record(root, cid, split):
 STORE_VERSION = "pkai-features-v2"
 ZSTD_LEVEL = 3
 KINDS = {"pkpdb": ("full", "backbone"), "pinder": ("full_ab", "full_free", "backbone_ab", "backbone_free")}
+if ENCODING == "atom16aa20ori": KINDS = {"pkpdb": ("backbone",), "pinder": ("backbone_ab", "backbone_free")}
 SCALARS = {"pkpdb": ("target", "weight"), "pinder": ("target_ab", "target_free", "w_burial", "w_interface")}
 
 
@@ -789,6 +793,7 @@ def train_scale(root, mode, objective, batch_size=None, max_epochs=100, learning
     """batch_size/max_epochs other than the registered 256/100 (batch-size sweep, 2026-10-10) use the sqrt learning-rate
     rule and write to runs/<mode>-<objective>-b<batch>-e<epochs>/; the defaults keep the registered run paths."""
     global BATCH_SIZE, LEARNING_RATE
+    if ENCODING == "atom16aa20ori" and mode != "backbone": raise ValueError("orientation encoding is backbone-only")
     tag = ""
     if (batch_size or BATCH_SIZE) != BATCH_SIZE or max_epochs != 100:
         BATCH_SIZE = int(batch_size or BATCH_SIZE); LEARNING_RATE = REFERENCE_LR * math.sqrt(BATCH_SIZE / REFERENCE_BATCH)
@@ -894,9 +899,9 @@ def export(root, run, destination=None):
     mode = manifest["mode"]
     if mode not in MODES or (CUTOFF, SLOTS) not in ((15.0, 250), (20.0, 540)):
         raise ValueError("released pKAI exports require full/backbone with 15 A / 250 or 20 A / 540 slots")
-    if ENCODING not in ("atom16", "atom16aa20", "atom16aa20sc"):
+    if ENCODING not in ("atom16", "atom16aa20", "atom16aa20sc", "atom16aa20ori"):
         raise ValueError("released pKAI supports atom16, atom16aa20 and atom16aa20sc exports")
-    name = {"atom16": "pKAI-joint", "atom16aa20": "pKAI-joint-aa20", "atom16aa20sc": "pKAI-joint-aa20-sc"}[ENCODING]
+    name = {"atom16": "pKAI-joint", "atom16aa20": "pKAI-joint-aa20", "atom16aa20sc": "pKAI-joint-aa20-sc", "atom16aa20ori": "pKAI-joint-aa20-ori"}[ENCODING]
     if mode == "backbone": name += "-backbone"
     name += GEOMETRY
     destination = Path(destination) if destination else run / f"{name}_model.pt"
@@ -1099,6 +1104,19 @@ def _validation_component(task):
     if digest(path / "input.pdb") != record["pdb_sha256"] or digest(path / "rows.json") != record["rows_sha256"]:
         raise AssertionError((record["complex_id"], "validation input changed"))
     request = read(path / "request.json"); protein = Protein(path / "input.pdb")
+    if encoding == "atom16aa20ori":
+        from types import SimpleNamespace
+        records = [protein.read_pdb_line(line) for line in (path / "input.pdb").read_text().splitlines()
+                   if line.startswith("ATOM ") and line[16] in (" ", "A") and line[26] == " "]
+        atoms = SimpleNamespace(hetero=np.zeros(len(records), bool), atom_name=np.asarray([r[0] for r in records]),
+            res_name=np.asarray([r[3] for r in records]), chain_id=np.asarray([r[4] for r in records]),
+            res_id=np.asarray([r[5] for r in records]), ins_code=np.full(len(records), ""),
+            coord=np.asarray([r[6:9] for r in records], np.float64))
+        residues = list(protein.iter_residues(titrable_only=True))
+        lookup = {(*request["mapping"][str(r.resnumb)], r.resname): i for i, r in enumerate(residues)}
+        bb, retained = backbone_features(atoms, [(r.chain, r.resnumb, "", r.resname) for r in residues], encoding)
+        if any(not retained[lookup[key]] for key in wanted): raise ValueError("validation site missing query C-alpha")
+        return record["complex_id"], {key: (None, bb[lookup[key]]) for key in wanted}
     residues, full = feature_matrix(protein, encoding)
     lookup = {(*request["mapping"][str(r.resnumb)], r.resname): i for i, r in enumerate(residues)}
     if len(lookup) != len(residues): raise AssertionError((record["complex_id"], "ambiguous residue map"))
@@ -1116,7 +1134,7 @@ def _validation_component(task):
         ids = np.flatnonzero(np.asarray([a.residue is not residue for a in atoms]) & (distance < CUTOFF))
         if np.any(distance[ids] == 0): raise ValueError((record["complex_id"], key, "coincident backbone atom"))
         bb = np.zeros(feature_width(encoding), np.float32)
-        if encoding in ("atom16", "atom16aa20", "atom16aa20sc"):
+        if encoding in ("atom16", "atom16aa20", "atom16aa20sc", "atom16aa20ori"):
             residue.env_anames = [atoms[j].aname for j in ids]; residue.env_resnames = [atoms[j].residue.resname for j in ids]
             residue.env_oheclasses = []; residue.encode_atoms()
             aa = [aa20_index(atoms[j].residue.resname) for j in ids] if encoding.startswith("atom16aa20") else [None] * len(ids)
@@ -1148,10 +1166,12 @@ def build_validation(root, encoding, workers=1):
         computed = dict(pool.map(_validation_component, [(records[c], encoding, keys) for c, keys in sorted(wanted.items())]))
     full = np.zeros((len(rows), feature_width(encoding)), np.float32); bb = np.zeros_like(full)
     for i, r in enumerate(rows):
-        f, b = computed[r["complex_id"]][(r["chain"], r["resnum"], r["icode"], r["group"])]; full[i] = f; bb[i] = b
+        f, b = computed[r["complex_id"]][(r["chain"], r["resnum"], r["icode"], r["group"])]; bb[i] = b
+        if encoding != "atom16aa20ori": full[i] = f
     dest = validation_package(root, encoding); pending = dest.parent / f".{dest.name}.pending-{os.getpid()}"
     pending.mkdir(parents=True, exist_ok=True)
-    np.save(pending / "full.npy", full); np.save(pending / "backbone.npy", bb)
+    if encoding != "atom16aa20ori": np.save(pending / "full.npy", full)
+    np.save(pending / "backbone.npy", bb)
     for name in ("target.npy", "source_rows.npy", "rows.json"): (pending / name).write_bytes((base / name).read_bytes())
     check = None
     if encoding == "atom16" and not GEOMETRY:

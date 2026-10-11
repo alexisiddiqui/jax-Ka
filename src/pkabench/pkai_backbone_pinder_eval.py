@@ -74,6 +74,9 @@ def _features(atoms, keys, encoding="atom16"):
     its origin.  Context consists of N/O atoms from other residues within 15 A;
     the native 4008-wide pKAI schema is otherwise unchanged.
     """
+    if encoding == "atom16aa20ori":
+        from pkatrain.pkai_orientation import orientation_features
+        return orientation_features(atoms, keys)
     protein = ~np.asarray(atoms.hetero)
     atom_name = np.asarray(atoms.atom_name).astype(str)
     context = protein & np.isin(atom_name, ("N", "O"))
