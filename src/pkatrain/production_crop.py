@@ -191,7 +191,7 @@ def _run_rows(out, epoch):
     return dict(pinder), dict(pkpdb)
 
 
-def report(root, arms=("crop20i5", "crop20i10"), baseline="drop10-bur1", pools=(10, 50), seeds=((17, ""), (29, "-s29")), resamples=2000, seed=0):
+def report(root, arms=("drop10-bur1-crop20i5", "drop10-bur1-crop20i10"), baseline="drop10-bur1", pools=(10, 50), seeds=((17, ""), (29, "-s29")), resamples=2000, seed=0):
     """Per-run selected-epoch metrics and contrasts (arm seed mean - baseline seed mean) with 95% paired bootstrap
     intervals over the PINDER validation complexes (selection, state MAE, interface paired MAE) and the pKPDB
     validation structures (pKPDB val MAE / MSE); one common resample per draw across all runs."""
