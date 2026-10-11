@@ -926,6 +926,51 @@ def aux_rescore(root, run):
     atomic_json(out / "aux-rescore.json", result); return result
 
 
+def export_model(root, run, destination):
+    """Write a run's selected parameters (no optimizer state) to `destination`: params.npz (one array per parameter,
+    keyed by its tree path, e.g. "blocks/0/q/w") and model.json (architecture, parameter count, the run's protocol and
+    selection metrics, checkpoint and params sha256). Load with load_exported."""
+    import jax
+    from .trainer import load_checkpoint
+    root = Path(root); out = run_dir(root, run); protocol = read(out / "protocol.json"); selection = read(out / "selection.json")
+    width = protocol["architecture"]["width"]; params, _, _ = make_model(protocol["seed"], width=width)
+    if "auxiliary" in protocol:
+        text = protocol["auxiliary"]; mode = "ce" if text.startswith("AuxEngine ce") else "ordinal"
+        heads = "burial" if text.startswith("AuxEngine ce burial-only") else "burial-siamese" if text.startswith("AuxEngine ce burial-siamese") else "both"
+        params = initialize_aux(params, protocol["seed"], mode, heads)
+    import optax
+    from .gqt_regularization import decay_mask
+    # the engines' optimizer (JointEngine / DropoutEngine / AuxEngine), only for the checkpoint's tree structure
+    state = optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(1.0, weight_decay=1e-4, mask=decay_mask(params))).init(params)
+    folder = out / "checkpoints" / f"epoch-{selection['selected_epoch']:03d}"
+    params, _, _ = load_checkpoint(folder, (params, state))
+    flat = {"/".join(str(getattr(k, "key", getattr(k, "idx", k))) for k in path): np.asarray(v) for path, v in jax.tree_util.tree_flatten_with_path(params)[0]}
+    destination = Path(destination); destination.mkdir(parents=True, exist_ok=True)
+    np.savez(destination / "params.npz", **flat)
+    atomic_json(destination / "model.json", {"run": run, "model": "oGQT (pkanet.ogqt), shift head predicts pKa - PKPDB_PK_MOD[group]",
+        "architecture": protocol["architecture"], "parameter_count": parameter_count(params),
+        "selected_epoch": selection["selected_epoch"], "epochs_run": selection["epochs_run"], "validation": selection["validation"],
+        "protocol": {k: v for k, v in protocol.items() if k != "code"}, "code": protocol["code"],
+        "checkpoint_sha256": selection["checkpoint_sha256"], "params_sha256": digest(destination / "params.npz")})
+    return destination
+
+
+def load_exported(path):
+    """Parameter tree from export_model's params.npz (nested dicts; integer path parts become list indices)."""
+    import jax.numpy as jnp
+    tree = {}
+    with np.load(Path(path) / "params.npz", allow_pickle=False) as f:
+        for name in f.files:
+            node = tree; parts = name.split("/")
+            for part in parts[:-1]: node = node.setdefault(part, {})
+            node[parts[-1]] = jnp.asarray(f[name])
+    def lists(node):
+        if not isinstance(node, dict): return node
+        if node and all(k.isdigit() for k in node): return [lists(node[str(i)]) for i in range(len(node))]
+        return {k: lists(v) for k, v in node.items()}
+    return lists(tree)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="pkatrain.production_train"); sub = parser.add_subparsers(dest="action", required=True)
     p = sub.add_parser("train"); p.add_argument("run"); p.add_argument("--fraction", type=float, default=0.1); p.add_argument("--batch", type=int, default=BATCH)
@@ -938,12 +983,15 @@ def main(argv=None):
     p.add_argument("--aux-heads", choices=("both", "burial", "burial-siamese"), default="both")
     p.add_argument("--width", type=int, default=None, help="model width (ff = 2 x width); default ARCHITECTURE")
     p = sub.add_parser("count"); p.add_argument("widths", type=int, nargs="+")
+    p = sub.add_parser("export"); p.add_argument("run"); p.add_argument("destination")
     p = sub.add_parser("rescore"); p.add_argument("runs", nargs="+")
     p = sub.add_parser("aux-rescore"); p.add_argument("runs", nargs="+")
     args = parser.parse_args(argv); root = Path(os.environ["PKABENCH_RUNTIME"])
     if args.action == "rescore":
         for run in args.runs: rescore(root, run)
         return
+    if args.action == "export":
+        print(export_model(root, args.run, args.destination)); return
     if args.action == "count":
         for w in args.widths:
             params = make_model(SEED, width=w)[0]
