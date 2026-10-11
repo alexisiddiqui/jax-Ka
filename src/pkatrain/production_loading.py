@@ -126,8 +126,10 @@ def _stack(items, batch_size, clear):
 
 
 class _Source:
-    def __init__(self, manifest, store_path=None, config: LoaderConfig | None = None, spread=True):
-        self.manifest = manifest; self.config = config or LoaderConfig(); self.spread = spread
+    def __init__(self, manifest, store_path=None, config: LoaderConfig | None = None, spread=True, sidechains=None):
+        """sidechains: production_sidechains.SidechainTable; its per-residue features are appended to the node
+        features (24 -> 152) for the side-chain model variant (2026-10-11)."""
+        self.manifest = manifest; self.config = config or LoaderConfig(); self.spread = spread; self.sidechains = sidechains
         self.policy = BucketPolicy.from_json(manifest["bucket_policy"])
         self.store = ProductionStore(store_path or os.environ.get(f"PKATRAIN_{manifest['dataset'].upper().replace('-', '_')}_STORE") or manifest["store"])
         if digest(self.store.path / "verification.json") != manifest["store_verification_sha256"]: raise AssertionError("store differs from manifest")
@@ -140,23 +142,32 @@ class _Source:
         if len(rows) > self.policy.batch_size(bucket): raise AssertionError("batch larger than the bucket's batch size")
         return rows, bucket, self.manifest["capacities"][bucket]
 
+    def _side(self, graph, cid, n):
+        if self.sidechains is None: return graph
+        features = self.sidechains(cid)
+        if len(features) != self.by_id[cid]["n"]: raise AssertionError((cid, "side-chain table does not match the store"))
+        nodes = graph["nodes"]; extra = _pad(features, (n, features.shape[1]))
+        if nodes.ndim == 3: extra = np.broadcast_to(extra, (nodes.shape[0],) + extra.shape)
+        graph["nodes"] = np.concatenate((nodes, extra), axis=-1).astype(np.float32); return graph
+
     def close(self):
         self.pool.shutdown(wait=True); self.store.close()
 
     def provenance(self):
         return {"source": self.__class__.__name__, "store": str(self.store.path),
-                "workers": self.config.workers, "buckets": self.policy.to_json(), "spread_padding": self.spread}
+                "workers": self.config.workers, "buckets": self.policy.to_json(), "spread_padding": self.spread,
+                **({"sidechains_verification_sha256": self.sidechains.verification_sha256} if self.sidechains is not None else {})}
 
 
 class PinderSource(_Source):
-    def __init__(self, manifest, store_path=None, config=None, fraction=1.0, norms=None, spread=True):
-        super().__init__(manifest, store_path, config, spread); self.norms = norms or normalization(manifest, fraction)
+    def __init__(self, manifest, store_path=None, config=None, fraction=1.0, norms=None, spread=True, sidechains=None):
+        super().__init__(manifest, store_path, config, spread, sidechains); self.norms = norms or normalization(manifest, fraction)
 
     def load(self, ids):
         from .gqt_paired_pinder import _load_one
         rows, bucket, capacity = self._bucket(ids)
         def one(row):
-            graph, *rest = _load_one(self.store.raw(row["id"]), row, capacity, self.norms)
+            graph, *rest = _load_one(self.store.raw(row["id"]), row, capacity, self.norms); graph = self._side(graph, row["id"], capacity[0])
             return (spread_padding(graph) if self.spread else graph, *rest)
         items = list(self.pool.map(one, rows))
         # clear: targets(1), mask(2), burial(3), interface(4); graphs/metadata stay as copies of a real structure
@@ -169,14 +180,15 @@ class AuxPinderSource(PinderSource):
     the normalised w_burial / w_interface, which the auxiliary objectives do not use. `contacts` is any per-site
     production_aux.ContactTable (the rsa-bound-v1 table for Siamese burial); NaN -> -1 (masked)."""
 
-    def __init__(self, manifest, contacts, store_path=None, config=None, fraction=1.0, norms=None, spread=True):
-        super().__init__(manifest, store_path, config, fraction, norms, spread); self.contacts = contacts
+    def __init__(self, manifest, contacts, store_path=None, config=None, fraction=1.0, norms=None, spread=True, sidechains=None):
+        super().__init__(manifest, store_path, config, fraction, norms, spread, sidechains); self.contacts = contacts
 
     def load(self, ids):
         from .gqt_paired_pinder import _load_one
         rows, bucket, capacity = self._bucket(ids); q = capacity[2]
         def one(row):
             raw = self.store.raw(row["id"]); graph, target, mask, _, _, metadata = _load_one(raw, row, capacity, self.norms)
+            graph = self._side(graph, row["id"], capacity[0])
             score = self.contacts(row["id"])
             if len(score) != len(raw["rsa_free"]): raise AssertionError((row["id"], "contact table does not match the store"))
             rsa = _pad(np.nan_to_num(raw["rsa_free"].astype(np.float32), nan=-1.0), (q,))
@@ -188,10 +200,10 @@ class AuxPinderSource(PinderSource):
 
 
 class PkpdbSource(_Source):
-    def __init__(self, manifest, store_path=None, config=None, mask="train_mask", spread=True, weights=False, aux=False):
+    def __init__(self, manifest, store_path=None, config=None, mask="train_mask", spread=True, weights=False, aux=False, sidechains=None):
         """aux=True (production_aux): slot 3 holds the site RSA (NaN -> -1, masked) instead of w_burial."""
         if mask not in ("train_mask", "eval_mask"): raise ValueError(mask)
-        super().__init__(manifest, store_path, config, spread); self.mask = mask; self.weights = weights or aux; self.aux = aux
+        super().__init__(manifest, store_path, config, spread, sidechains); self.mask = mask; self.weights = weights or aux; self.aux = aux
 
     def _one(self, row, capacity):
         n, k, q, s, sk = capacity; raw = self.store.raw(row["id"])
@@ -200,7 +212,7 @@ class PkpdbSource(_Source):
                   "site_mask": (s,), "site_neighbors": (s, sk), "site_edge": (s, sk, 34), "site_edge_mask": (s, sk),
                   "site_switch": (s, sk), "query_site": (q,)}
         graph = {name: _pad(raw[name], shapes[name]) for name in RESIDUE_FIELDS + SITE_FIELDS}
-        graph["query_site"] = np.maximum(graph["query_site"], 0)
+        graph["query_site"] = np.maximum(graph["query_site"], 0); graph = self._side(graph, row["id"], n)
         if self.spread: graph = spread_padding(graph)
         if self.aux: return graph, _pad(raw["labels"], (q,)), _pad(raw[self.mask], (q,)), _pad(np.nan_to_num(raw["rsa"].astype(np.float32), nan=-1.0), (q,))
         if self.weights: return graph, _pad(raw["labels"], (q,)), _pad(raw[self.mask], (q,)), _pad(np.nan_to_num(raw["w_burial"].astype(np.float32), nan=0.0), (q,))
