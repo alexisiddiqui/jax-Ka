@@ -749,3 +749,20 @@ The backbone width-44 arm is `pilot-50pct-drop10-bur1`. Absolute validation valu
 - Size barely matters with backbone input (selection 0.663-0.678 across 37K-282K parameters). With side chains
   width 64 is best (0.526) and width 92 is worse than 44; one seed each, so the 44 vs 64 ordering is not established.
 - Cost: side chains add under 10% per epoch; width 92 is about 1.5x slower.
+
+### Model size, 100% pool, backbone input (2026-10-11)
+
+Same fixed config (dropout 0.1, burial W 1, batch 16, seed 17), full pool-v4 training sets; runs
+`prod-100pct-w{32,44,64,92}-drop10-bur1`. Width 44 is the saved `models/ogqt-production-50k`.
+
+| Width | Params | Epoch | Selection | State MAE / MSE | Paired MAE | Interface paired MAE / MSE | pKPDB val MAE / MSE | Benchmark MAE / RMSE / Spearman | s / epoch |
+|---:|---:|---:|---:|---|---:|---|---|---|---:|
+| 32 | 37,158 | 20 | 0.6570 | 0.4190 / 0.4223 | 0.0692 | 0.2380 / 0.2107 | 0.5085 / 0.6042 | 0.5264 / 0.7572 / 0.770 | 119 |
+| 44 | 67,770 | 20 | 0.6632 | 0.4219 / 0.4265 | 0.0709 | 0.2413 / 0.2174 | 0.5072 / 0.5999 | 0.5328 / 0.7669 / 0.770 | 132 |
+| 64 | 139,270 | 20 | **0.6520** | **0.4130 / 0.4081** | 0.0696 | 0.2390 / **0.2066** | **0.4995 / 0.5878** | **0.5212 / 0.7502 / 0.796** | 143 |
+| 92 | 282,378 | 18 | 0.6584 | 0.4170 / 0.4193 | 0.0701 | 0.2414 / 0.2188 | 0.5039 / 0.5977 | 0.5225 / 0.7548 / 0.795 | 181 |
+
+- With backbone input, size moves selection by about 0.01 over an 8x range (single seed each; the 50% seed spread is
+  about 0.005-0.007). Width 64 is best on every metric here, as with side chains at 50%.
+- Every width selects epoch 18-20, still improving: the 20-epoch schedule is short for the full pool.
+- 100% vs 50% at width 44: selection 0.678 -> 0.663; side chains at 50% (0.537) remain far ahead.
