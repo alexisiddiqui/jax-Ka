@@ -51,6 +51,7 @@ from .loading import PRODUCTION_BOUNDS, BucketPolicy, DeferredScalars, LoaderCon
 from .production_graphs import VERSION, output, read
 from .production_aux import BURIAL_RSA_CUTS, INTERFACE_CAP, INTERFACE_THRESHOLDS, RSA_BOUND_TABLE, ContactTable
 from .production_aux import TABLE as CONTACTS_TABLE
+from .production_depth import INJECT_SCALE, add_injection, deepen, model_functions
 from .production_sidechains import WIDTH as SIDECHAIN_WIDTH, SidechainTable
 from .production_loading import MANIFEST, AuxPinderSource, PinderSource, PkpdbSource, normalization, select
 
@@ -234,12 +235,12 @@ class DropoutEngine:
     One key per complex is shared by its AB and free branches (coordinated dropout, gqt_diagnostic_campaign's layout);
     pKPDB structures draw their own keys. Validation and predictions are deterministic (no dropout)."""
 
-    def __init__(self, params, rate):
+    def __init__(self, params, rate, predict_shift=None):
         import jax
         import jax.numpy as jnp
         import optax
         from pkanet.model import PKPDB_PK_MOD
-        from pkanet.ogqt import predict_shift
+        if predict_shift is None: from pkanet.ogqt import predict_shift
         from .gqt_regularization import decay_mask
         self.optimizer = optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(1.0, weight_decay=1e-4, mask=decay_mask(params)))
         reference = jnp.asarray(PKPDB_PK_MOD, jnp.float32); rate = float(rate)
@@ -314,12 +315,13 @@ class AuxEngine:
     clip(RSA_free) - clip(RSA_bound), mirroring the pKa state + Siamese losses; slot 4 then holds RSA_bound
     (production_aux rsa-bound-v1, < 0 masked)."""
 
-    def __init__(self, params, weight, rate=0.0, mode="ce", interface_branch="bound", heads="both"):
+    def __init__(self, params, weight, rate=0.0, mode="ce", interface_branch="bound", heads="both", site_embeddings=None):
         import jax
         import jax.numpy as jnp
         import optax
         from pkanet.model import PKPDB_PK_MOD, linear
-        from pkanet.site_model import site_embeddings_indexed
+        site_embeddings_indexed = site_embeddings
+        if site_embeddings_indexed is None: from pkanet.site_model import site_embeddings_indexed
         from .gqt_regularization import decay_mask
         from .production_aux import BURIAL_RSA_CUTS, INTERFACE_CAP, INTERFACE_THRESHOLDS
         if mode not in ("ce", "ordinal"): raise ValueError(mode)
@@ -473,12 +475,16 @@ def auxiliary_metrics(engine, params, pinder_source, pinder_records, pkpdb_sourc
     return out
 
 
-def architecture(width=None, sidechains=False):
+def architecture(width=None, sidechains=False, depth=2, loops=1):
     """ARCHITECTURE, or width W with ff = 2W (the size-sweep tiers; W divisible by the 4 attention heads); with
-    sidechains, node_dim 152 (24 backbone + 128 side-chain features, production_sidechains)."""
+    sidechains, node_dim 152 (24 backbone + 128 side-chain features, production_sidechains); depth D residue blocks
+    (default 2) or the 2 blocks tied and looped r times (production_depth). Defaults add no keys."""
     if width is not None and width % 4: raise ValueError("width must be divisible by the 4 attention heads")
+    if depth != 2 and loops != 1: raise ValueError("--depth and --loops are separate variants")
     base = ARCHITECTURE if width is None else {"width": int(width), "ff": 2 * int(width)}
-    return {**base, "node_dim": 24 + SIDECHAIN_WIDTH} if sidechains else base
+    return {**base, **({"node_dim": 24 + SIDECHAIN_WIDTH} if sidechains else {}), **({"depth": int(depth)} if depth != 2 else {}),
+            **({"loops": int(loops), "injection": f"encoded input re-injected before loops >= 1, W_inject at {INJECT_SCALE} x default scale"}
+               if loops != 1 else {})}
 
 
 def parameter_count(params):
@@ -486,13 +492,23 @@ def parameter_count(params):
     return int(sum(np.size(x) for x in jax.tree.leaves(params)))
 
 
-def make_model(seed, query_norm="shared", paired_weight="none", reduction="structure", width=None, sidechains=False):
-    """(params, engine, predict): scratch oGQT and its engine; separate query norm starts as a copy of query norm1."""
+def make_model(seed, query_norm="shared", paired_weight="none", reduction="structure", width=None, sidechains=False, depth=2, loops=1):
+    """(params, engine, predict): scratch oGQT and its engine; separate query norm starts as a copy of query norm1.
+    depth / loops (production_depth): the engine returned is JointEngine, valid for depth; looped models take
+    DropoutEngine / AuxEngine with model_functions(loops) (train())."""
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
     from .gqt_multitask_replay import JointEngine
-    params = initialize_ogqt(jax.random.PRNGKey(seed), **architecture(width, sidechains))
+    shape = architecture(width, sidechains)
+    params = initialize_ogqt(jax.random.PRNGKey(seed), **shape)
+    if depth != 2 or loops != 1:
+        architecture(width, sidechains, depth, loops)  # validates the combination
+        if query_norm != "shared" or paired_weight != "none" or reduction != "structure": raise ValueError("depth / loops combine with the default objective only")
+        if depth != 2: params = deepen(params, seed, depth, shape["width"], shape["ff"], shape.get("node_dim", 24))
+        if loops != 1: params = add_injection(params, seed)
+        predict_shift = model_functions(loops)[1]
+        return params, JointEngine(params), jax.jit(jax.vmap(predict_shift, in_axes=(None, 0)))
     if query_norm == "separate":
         params = {**params, "query_context_norm": jnp.array(params["query"]["norm1"])}
         return params, VariantEngine(params, predict_shift_separate, paired_weight, reduction), jax.jit(jax.vmap(predict_shift_separate, in_axes=(None, 0)))
@@ -547,7 +563,7 @@ def run_dir(root, run): return Path(root) / "training" / VERSION / "runs" / run
 def code_hashes():
     src = Path(__file__).parents[1]
     paths = [Path(__file__), src / "pkatrain/production_loading.py", src / "pkatrain/production_graphs.py",
-             src / "pkatrain/loading.py", src / "pkatrain/gqt_multitask_replay.py", src / "pkatrain/gqt_paired_pinder.py",
+             src / "pkatrain/loading.py", src / "pkatrain/production_depth.py", src / "pkatrain/gqt_multitask_replay.py", src / "pkatrain/gqt_paired_pinder.py",
              src / "pkatrain/site_graph_data.py", src / "pkanet/ogqt.py", src / "pkanet/model.py", src / "pkanet/triton_attention.py"]
     return {str(p.relative_to(src)): digest(p) for p in paths}
 
@@ -722,7 +738,7 @@ def validate(engine, predict, params, sources, manifests, config, out=None, epoc
 
 def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none", seed=SEED, query_norm="shared", reduction="structure",
           mask_pmin=None, dropout=0.0, aux_weight=None, aux_loss="ce", aux_interface_branch="bound", aux_heads="both", width=None,
-          sidechains=False):
+          sidechains=False, depth=2, loops=1):
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
@@ -734,7 +750,8 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     manifests = {d: read(output(root, d) / MANIFEST) for d in ("pinder", "pkpdb", "benchmark-val")}
     norms = normalization(manifests["pinder"], fraction); scale = lr_scale(batch)
     protocol = {"version": "gqt-production-joint-v1", "run": run, "fraction": fraction, "seed": seed, "batch": batch,
-        "architecture": architecture(width, sidechains), "initialization": f"scratch (pkanet.ogqt.initialize, PRNGKey({seed}))",
+        "architecture": architecture(width, sidechains, depth, loops), "initialization": f"scratch (pkanet.ogqt.initialize, PRNGKey({seed}))"
+        + (f"; residue blocks 3-{depth} and/or W_inject from production_depth (fold_in salts)" if depth != 2 or loops != 1 else ""),
         "objective": "gqt_multitask_replay.JointEngine: pKPDB state-shift MSE (train_mask) + PINDER AB/free state-shift MSE + binding-shift MSE; equal coefficients; no site weights",
         "optimizer": "AdamW weight decay 1e-4, global clip 1 after gradient summation",
         "schedule": f"gqt_crop_radius.learning_rate x {scale:.4f} (1e-3 hold to epoch 10, cosine to 1e-5 by epoch {EPOCHS}); patience {PATIENCE}, min delta {MIN_DELTA}",
@@ -793,7 +810,10 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     if (reduction != "structure" or mask_pmin is not None) and chunked(batch): raise ValueError("this loss is not chunk-additive; use batch <= 64")
     if (width is not None or sidechains) and (query_norm != "shared" or paired_weight != "none" or reduction != "structure"):
         raise ValueError("--width / --sidechains combine with the default objective, dropout and auxiliaries only")
-    params, engine, predict = make_model(seed, query_norm, paired_weight, reduction, width, sidechains); state = engine.optimizer.init(params)
+    params, engine, predict = make_model(seed, query_norm, paired_weight, reduction, width, sidechains, depth, loops); state = engine.optimizer.init(params)
+    if loops != 1 and aux_weight is None and not dropout: raise ValueError("--loops runs through DropoutEngine / AuxEngine (use --dropout or --aux-weight)")
+    if (depth != 2 or loops != 1) and mask_pmin is not None: raise ValueError("depth / loops do not combine with site masking")
+    embeddings_fn, shift_fn = model_functions(loops)
     step_key = None
     if aux_weight is not None:
         if query_norm != "shared" or paired_weight != "none" or reduction != "structure" or mask_pmin is not None:
@@ -801,13 +821,13 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
         if chunked(batch): raise ValueError("the auxiliary objective runs the unchunked path; use batch <= 64")
         if aux_heads != "both" and aux_loss != "ce": raise ValueError("burial-only auxiliaries are implemented for --aux-loss ce")
         params = initialize_aux(params, seed, aux_loss, aux_heads)
-        engine = AuxEngine(params, aux_weight, dropout, aux_loss, aux_interface_branch, aux_heads); state = engine.optimizer.init(params)
+        engine = AuxEngine(params, aux_weight, dropout, aux_loss, aux_interface_branch, aux_heads, embeddings_fn); state = engine.optimizer.init(params)
         step_key = jax.random.PRNGKey(seed + 200003)
     elif dropout:
         if query_norm != "shared" or paired_weight != "none" or reduction != "structure" or mask_pmin is not None:
             raise ValueError("dropout combines with the defaults only")
         if chunked(batch): raise ValueError("dropout runs the unchunked path; use batch <= 64")
-        engine = DropoutEngine(params, dropout); state = engine.optimizer.init(params); step_key = jax.random.PRNGKey(seed + 200003)
+        engine = DropoutEngine(params, dropout, shift_fn); state = engine.optimizer.init(params); step_key = jax.random.PRNGKey(seed + 200003)
     if mask_pmin is not None:
         if query_norm != "shared" or paired_weight != "none" or reduction != "structure": raise ValueError("site masking combines with the defaults only")
         tables = site_weight_tables(manifests, norms, fraction)
@@ -924,8 +944,9 @@ def aux_rescore(root, run):
     config = LoaderConfig(); norms = protocol["pinder_weight_normalization"]
     contacts = ContactTable(root, RSA_BOUND_TABLE if heads == "burial-siamese" else CONTACTS_TABLE)
     if "sidechains" in protocol: raise NotImplementedError("aux-rescore does not load side-chain tables")
-    params, _, _ = make_model(protocol["seed"], width=protocol["architecture"]["width"]); params = initialize_aux(params, protocol["seed"], mode, heads)
-    engine = AuxEngine(params, weight, dropout, mode, branch, heads); state = engine.optimizer.init(params)
+    arch = protocol["architecture"]; loops = arch.get("loops", 1)
+    params, _, _ = make_model(protocol["seed"], width=arch["width"], depth=arch.get("depth", 2), loops=loops); params = initialize_aux(params, protocol["seed"], mode, heads)
+    engine = AuxEngine(params, weight, dropout, mode, branch, heads, model_functions(loops)[0]); state = engine.optimizer.init(params)
     params, state, _ = load_checkpoint(out / "checkpoints" / f"epoch-{selection['selected_epoch']:03d}", (params, state))
     sources = (AuxPinderSource(_with_policy(manifests["pinder"]), contacts, config=config, norms=norms),
                PkpdbSource(_with_policy(manifests["pkpdb"]), config=config, mask="train_mask", aux=True))
@@ -943,7 +964,8 @@ def export_model(root, run, destination):
     import jax
     from .trainer import load_checkpoint
     root = Path(root); out = run_dir(root, run); protocol = read(out / "protocol.json"); selection = read(out / "selection.json")
-    width = protocol["architecture"]["width"]; params, _, _ = make_model(protocol["seed"], width=width, sidechains="sidechains" in protocol)
+    arch = protocol["architecture"]; params, _, _ = make_model(protocol["seed"], width=arch["width"], sidechains="sidechains" in protocol,
+                                                                depth=arch.get("depth", 2), loops=arch.get("loops", 1))
     if "auxiliary" in protocol:
         text = protocol["auxiliary"]; mode = "ce" if text.startswith("AuxEngine ce") else "ordinal"
         heads = "burial" if text.startswith("AuxEngine ce burial-only") else "burial-siamese" if text.startswith("AuxEngine ce burial-siamese") else "both"
@@ -993,7 +1015,10 @@ def main(argv=None):
     p.add_argument("--aux-heads", choices=("both", "burial", "burial-siamese"), default="both")
     p.add_argument("--width", type=int, default=None, help="model width (ff = 2 x width); default ARCHITECTURE")
     p.add_argument("--sidechains", action="store_true", help="append side-chain node features (production_sidechains)")
-    p = sub.add_parser("count"); p.add_argument("widths", type=int, nargs="+")
+    p.add_argument("--depth", type=int, default=2, help="untied residue-encoder blocks (production_depth); default 2")
+    p.add_argument("--loops", type=int, default=1, help="tie the 2 residue blocks and loop them r times with input re-injection (production_depth)")
+    p = sub.add_parser("count"); p.add_argument("widths", type=int, nargs="+"); p.add_argument("--sidechains", action="store_true")
+    p.add_argument("--depth", type=int, default=2); p.add_argument("--loops", type=int, default=1)
     p = sub.add_parser("export"); p.add_argument("run"); p.add_argument("destination")
     p = sub.add_parser("rescore"); p.add_argument("runs", nargs="+")
     p = sub.add_parser("aux-rescore"); p.add_argument("runs", nargs="+")
@@ -1005,8 +1030,8 @@ def main(argv=None):
         print(export_model(root, args.run, args.destination)); return
     if args.action == "count":
         for w in args.widths:
-            params = make_model(SEED, width=w)[0]
-            print(json.dumps({"width": w, "ff": 2 * w, "parameters": parameter_count(params),
+            params = make_model(SEED, width=w, sidechains=args.sidechains, depth=args.depth, loops=args.loops)[0]
+            print(json.dumps({"width": w, "ff": 2 * w, "sidechains": args.sidechains, "depth": args.depth, "loops": args.loops, "parameters": parameter_count(params),
                               "with_burial_head": parameter_count(initialize_aux(params, SEED, "ce", "burial"))}))
         return
     if args.action == "aux-rescore":
@@ -1017,7 +1042,7 @@ def main(argv=None):
     if args.action == "train":
         result = train(root, args.run, args.fraction, args.smoke, args.batch, args.paired_weight, args.seed, args.query_norm, args.loss_reduction, args.site_mask_pmin,
                        args.dropout, args.aux_weight, args.aux_loss, args.aux_interface_branch,
-                       args.aux_heads, args.width, args.sidechains)
+                       args.aux_heads, args.width, args.sidechains, args.depth, args.loops)
         print(json.dumps({"selected_epoch": result["selected_epoch"], "selection": result["validation"]["selection"]}))
 
 
