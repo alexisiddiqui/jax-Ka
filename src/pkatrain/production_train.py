@@ -298,16 +298,16 @@ def initialize_aux(params, seed, mode="ce"):
 
 class AuxEngine:
     """--aux-weight W (2026-10-11): JointEngine's pKa objectives plus W x (burial + interface) auxiliary losses
-    (production_aux). Burial on the PINDER free branch and pKPDB train_mask sites; interface on the PINDER free branch
-    (default, 2026-10-11: predict the bound-state contact score from the unbound structure, where no partner is visible)
-    or, with interface_branch="bound", the bound branch (the first runs; there the partner is in the graph).
+    (production_aux). Burial on the PINDER free branch and pKPDB train_mask sites; interface trained on the PINDER bound
+    branch (default) or, with interface_branch="free", the free branch. Validation scores the interface head on both
+    branches (auxiliary_metrics), the free branch testing it without the partner in the graph.
     mode "ce" (--aux-loss ce, default): one logit per head, cross-entropy against the soft targets 1 - clip(RSA) and
     log(1 + min(c, 8)) / log 9. mode "ordinal": mean BCE over the cumulative targets [RSA < cut] / [c > t]. Each
     auxiliary is averaged per site, then per structure, then over structures with at least one target (JointEngine's
     reduction). Optional residual dropout as DropoutEngine (one key per complex shared by AB and free). Batches from
     AuxPinderSource / PkpdbSource(aux=True): slot 3 = RSA (< 0 masked), slot 4 = contact score."""
 
-    def __init__(self, params, weight, rate=0.0, mode="ce", interface_branch="free"):
+    def __init__(self, params, weight, rate=0.0, mode="ce", interface_branch="bound"):
         import jax
         import jax.numpy as jnp
         import optax
@@ -405,21 +405,21 @@ def _recall_at_fpr(score, label, fpr=0.1):
 
 
 def auxiliary_metrics(engine, params, pinder_source, pinder_records, pkpdb_source, pkpdb_records, config):
-    """Validation discrimination of the auxiliary heads, pooled over sites: interface (the trained PINDER branch;
-    "interface_other_branch" scores the same head on the other branch, for reference), burial
+    """Validation discrimination of the auxiliary heads, pooled over sites: the interface head on the PINDER bound
+    branch ("interface_bound", partner in the graph) and on the free branch ("interface_free", no partner: the test of
+    interface prediction from the unbound structure), against the same bound-state contact score; burial
     (PINDER free branch; pKPDB val train_mask sites). For every head and each class boundary (contact score > 0 / 0.5 /
     1 / 2 / 4 / 8; RSA < 0.1 / 0.25 / 0.5): AUROC and recall at a 10% false-positive rate, scored by the head's output
     (mode "ce") or the boundary's own logit ("ordinal"). Mode "ce" adds the mean cross-entropy against the soft target
     and the Spearman correlation with it; "ordinal" the mean BCE."""
     from scipy.stats import spearmanr
     from .production_aux import BURIAL_RSA_CUTS, INTERFACE_THRESHOLDS, burial_soft, interface_soft
-    collected = {"interface": ([], []), "interface_other_branch": ([], []), "pinder_burial": ([], []), "pkpdb_burial": ([], [])}
-    trained = engine.interface_branch
+    collected = {"interface_bound": ([], []), "interface_free": ([], []), "pinder_burial": ([], []), "pkpdb_burial": ([], [])}
     for ids, batch in Prefetcher(pinder_source, pinder_source.policy.plans(pinder_records, np.random.default_rng(0)), config):
         graphs, _, mask, rsa, contacts, _, valid = batch
         burial, interface = map(np.asarray, engine.paired_auxiliary(params, graphs)); keep = mask & valid[:, None]
-        collected["interface"][0].append(interface[:, trained][keep]); collected["interface"][1].append(contacts[keep])
-        collected["interface_other_branch"][0].append(interface[:, 1 - trained][keep]); collected["interface_other_branch"][1].append(contacts[keep])
+        for branch, name in ((0, "interface_bound"), (1, "interface_free")):
+            collected[name][0].append(interface[:, branch][keep]); collected[name][1].append(contacts[keep])
         b = keep & (rsa >= 0); collected["pinder_burial"][0].append(burial[:, 1][b]); collected["pinder_burial"][1].append(rsa[b])
     if pkpdb_source is not None:
         for ids, batch in Prefetcher(pkpdb_source, pkpdb_source.policy.plans(pkpdb_records, np.random.default_rng(0)), config):
@@ -682,7 +682,7 @@ def validate(engine, predict, params, sources, manifests, config, out=None, epoc
 
 
 def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none", seed=SEED, query_norm="shared", reduction="structure",
-          mask_pmin=None, dropout=0.0, aux_weight=None, aux_loss="ce", aux_interface_branch="free"):
+          mask_pmin=None, dropout=0.0, aux_weight=None, aux_loss="ce", aux_interface_branch="bound"):
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
@@ -853,6 +853,29 @@ def rescore(root, run, epochs=None):
     return rows
 
 
+def aux_rescore(root, run):
+    """Re-score an auxiliary-head run's selected checkpoint with the current auxiliary_metrics (both interface branches);
+    writes aux-rescore.json, leaves selection.json untouched."""
+    import jax
+    from .trainer import load_checkpoint
+    root = Path(root); out = run_dir(root, run); protocol = read(out / "protocol.json"); selection = read(out / "selection.json")
+    text = protocol["auxiliary"]; mode = "ce" if text.startswith("AuxEngine ce:") else "ordinal"
+    weight = float(text.split("+ ")[1].split(" x")[0]); branch = "free" if "PINDER free branch); " in text.split("interface")[1] else "bound"
+    dropout = float(protocol["dropout"].split("dropout ")[1].split(" ")[0]) if "dropout" in protocol else 0.0
+    manifests = {d: read(output(root, d) / MANIFEST) for d in ("pinder", "pkpdb")}
+    config = LoaderConfig(); norms = protocol["pinder_weight_normalization"]; contacts = ContactTable(root)
+    params, _, _ = make_model(protocol["seed"]); params = initialize_aux(params, protocol["seed"], mode)
+    engine = AuxEngine(params, weight, dropout, mode, branch); state = engine.optimizer.init(params)
+    params, state, _ = load_checkpoint(out / "checkpoints" / f"epoch-{selection['selected_epoch']:03d}", (params, state))
+    sources = (AuxPinderSource(_with_policy(manifests["pinder"]), contacts, config=config, norms=norms),
+               PkpdbSource(_with_policy(manifests["pkpdb"]), config=config, mask="train_mask", aux=True))
+    metrics = auxiliary_metrics(engine, params, sources[0], select(manifests["pinder"], "val"), sources[1], select(manifests["pkpdb"], "val"), config)
+    for source in sources: source.close()
+    result = {"run": run, "selected_epoch": selection["selected_epoch"], "mode": mode, "weight": weight, "interface_trained_branch": branch,
+              "contacts_verification_sha256": contacts.verification_sha256, "auxiliary": metrics}
+    atomic_json(out / "aux-rescore.json", result); return result
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="pkatrain.production_train"); sub = parser.add_subparsers(dest="action", required=True)
     p = sub.add_parser("train"); p.add_argument("run"); p.add_argument("--fraction", type=float, default=0.1); p.add_argument("--batch", type=int, default=BATCH)
@@ -861,11 +884,17 @@ def main(argv=None):
     p.add_argument("--loss-reduction", choices=("structure", "site", "pkai"), default="structure")
     p.add_argument("--site-mask-pmin", type=float, default=None); p.add_argument("--dropout", type=float, default=0.0)
     p.add_argument("--aux-weight", type=float, default=None); p.add_argument("--aux-loss", choices=("ce", "ordinal"), default="ce")
-    p.add_argument("--aux-interface-branch", choices=("free", "bound"), default="free")
+    p.add_argument("--aux-interface-branch", choices=("bound", "free"), default="bound")
     p = sub.add_parser("rescore"); p.add_argument("runs", nargs="+")
+    p = sub.add_parser("aux-rescore"); p.add_argument("runs", nargs="+")
     args = parser.parse_args(argv); root = Path(os.environ["PKABENCH_RUNTIME"])
     if args.action == "rescore":
         for run in args.runs: rescore(root, run)
+        return
+    if args.action == "aux-rescore":
+        for run in args.runs:
+            r = aux_rescore(root, run)
+            print(json.dumps({"run": run, **{n: [round(b["auroc"], 3) for b in v["boundaries"]] for n, v in r["auxiliary"].items()}}), flush=True)
         return
     if args.action == "train":
         result = train(root, args.run, args.fraction, args.smoke, args.batch, args.paired_weight, args.seed, args.query_norm, args.loss_reduction, args.site_mask_pmin,
