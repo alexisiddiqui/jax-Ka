@@ -49,7 +49,8 @@ import numpy as np
 from pkabench.runtime import atomic_json, digest
 from .loading import PRODUCTION_BOUNDS, BucketPolicy, DeferredScalars, LoaderConfig, Prefetcher
 from .production_graphs import VERSION, output, read
-from .production_aux import BURIAL_RSA_CUTS, INTERFACE_CAP, INTERFACE_THRESHOLDS, ContactTable
+from .production_aux import BURIAL_RSA_CUTS, INTERFACE_CAP, INTERFACE_THRESHOLDS, RSA_BOUND_TABLE, ContactTable
+from .production_aux import TABLE as CONTACTS_TABLE
 from .production_loading import MANIFEST, AuxPinderSource, PinderSource, PkpdbSource, normalization, select
 
 SEED = 17
@@ -305,7 +306,12 @@ class AuxEngine:
     log(1 + min(c, 8)) / log 9. mode "ordinal": mean BCE over the cumulative targets [RSA < cut] / [c > t]. Each
     auxiliary is averaged per site, then per structure, then over structures with at least one target (JointEngine's
     reduction). Optional residual dropout as DropoutEngine (one key per complex shared by AB and free). Batches from
-    AuxPinderSource / PkpdbSource(aux=True): slot 3 = RSA (< 0 masked), slot 4 = contact score."""
+    AuxPinderSource / PkpdbSource(aux=True): slot 3 = RSA (< 0 masked), slot 4 = contact score.
+    heads "burial" (--aux-heads burial): burial only. heads "burial-siamese" (2026-10-11): no interface head; the burial
+    head learns each state on its own branch (bound 1 - clip(RSA_bound), free 1 - clip(RSA_free); cross-entropy, the
+    two averaged) plus a paired squared error on the predicted bound - free burial (sigmoid outputs) against
+    clip(RSA_free) - clip(RSA_bound), mirroring the pKa state + Siamese losses; slot 4 then holds RSA_bound
+    (production_aux rsa-bound-v1, < 0 masked)."""
 
     def __init__(self, params, weight, rate=0.0, mode="ce", interface_branch="bound", heads="both"):
         import jax
@@ -317,8 +323,9 @@ class AuxEngine:
         from .production_aux import BURIAL_RSA_CUTS, INTERFACE_CAP, INTERFACE_THRESHOLDS
         if mode not in ("ce", "ordinal"): raise ValueError(mode)
         if interface_branch not in ("free", "bound"): raise ValueError(interface_branch)
-        if heads not in ("both", "burial"): raise ValueError(heads)
-        self.heads = heads; use_interface = heads == "both"
+        if heads not in ("both", "burial", "burial-siamese"): raise ValueError(heads)
+        if heads == "burial-siamese" and mode != "ce": raise ValueError("Siamese burial is implemented for mode ce")
+        self.heads = heads; use_interface = heads == "both"; siamese = heads == "burial-siamese"
         self.mode = mode; self.interface_branch = branch = 1 if interface_branch == "free" else 0
         self.optimizer = optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(1.0, weight_decay=1e-4, mask=decay_mask(params)))
         reference = jnp.asarray(PKPDB_PK_MOD, jnp.float32); rate = float(rate); weight = float(weight)
@@ -366,7 +373,13 @@ class AuxEngine:
             state_loss = jnp.sum(jnp.where(valid, state_loss, 0.0)) / denominator
             pair_loss = jnp.sum(jnp.where(valid, pair_loss, 0.0)) / denominator
             sites = mask.astype(jnp.float32)
-            burial = burial_loss(burial_logits[:, 1], rsa, sites, valid)
+            if siamese:
+                rsa_bound = contacts; both = sites * (rsa >= 0) * (rsa_bound >= 0)
+                states = (burial_loss(burial_logits[:, 0], rsa_bound, sites, valid) + burial_loss(burial_logits[:, 1], rsa, sites, valid)) / 2
+                change = jax.nn.sigmoid(burial_logits[:, 0, :, 0]) - jax.nn.sigmoid(burial_logits[:, 1, :, 0])
+                expected_change = jnp.clip(rsa, 0.0, 1.0) - jnp.clip(rsa_bound, 0.0, 1.0)
+                burial = states + structure_mean(jnp.square(change - expected_change), both, valid)
+            else: burial = burial_loss(burial_logits[:, 1], rsa, sites, valid)
             interface = structure_mean(cross_entropy(interface_logits[:, branch], interface_labels(contacts)), sites, valid) if use_interface else 0.0
             return state_loss + pair_loss + weight * (burial + interface), (state_loss, pair_loss)
 
@@ -416,13 +429,18 @@ def auxiliary_metrics(engine, params, pinder_source, pinder_records, pkpdb_sourc
     and the Spearman correlation with it; "ordinal" the mean BCE."""
     from scipy.stats import spearmanr
     from .production_aux import BURIAL_RSA_CUTS, INTERFACE_THRESHOLDS, burial_soft, interface_soft
-    collected = {"interface_bound": ([], []), "interface_free": ([], []), "pinder_burial": ([], []), "pkpdb_burial": ([], [])}
+    collected = {"interface_bound": ([], []), "interface_free": ([], []), "pinder_burial": ([], []), "pkpdb_burial": ([], []),
+                 "pinder_burial_bound": ([], [])}; change = ([], [])
     for ids, batch in Prefetcher(pinder_source, pinder_source.policy.plans(pinder_records, np.random.default_rng(0)), config):
         graphs, _, mask, rsa, contacts, _, valid = batch
         burial, interface = map(np.asarray, engine.paired_auxiliary(params, graphs)); keep = mask & valid[:, None]
         for branch, name in ((0, "interface_bound"), (1, "interface_free")) if engine.heads == "both" else ():
             collected[name][0].append(interface[:, branch][keep]); collected[name][1].append(contacts[keep])
         b = keep & (rsa >= 0); collected["pinder_burial"][0].append(burial[:, 1][b]); collected["pinder_burial"][1].append(rsa[b])
+        if engine.heads == "burial-siamese":
+            bb = keep & (contacts >= 0); collected["pinder_burial_bound"][0].append(burial[:, 0][bb]); collected["pinder_burial_bound"][1].append(contacts[bb])
+            both = b & (contacts >= 0); sig = lambda x: 1 / (1 + np.exp(-x.astype(float)))
+            change[0].append(sig(burial[:, 0, :, 0][both]) - sig(burial[:, 1, :, 0][both])); change[1].append(np.clip(rsa[both], 0, 1) - np.clip(contacts[both], 0, 1))
     if pkpdb_source is not None:
         for ids, batch in Prefetcher(pkpdb_source, pkpdb_source.policy.plans(pkpdb_records, np.random.default_rng(0)), config):
             graphs, _, eligible, rsa, valid = batch; burial = np.asarray(engine.site_auxiliary(params, graphs))
@@ -446,6 +464,11 @@ def auxiliary_metrics(engine, params, pinder_source, pinder_records, pkpdb_sourc
         entry["boundaries"] = [{"boundary": c, "positive_fraction": float(labels[:, j].mean()), "auroc": _auroc(scores[j], labels[:, j]),
                                 "recall_at_fpr_0.1": _recall_at_fpr(scores[j], labels[:, j])} for j, c in enumerate(boundaries)]
         out[name] = {"sites": int(len(logits)), **entry}
+    if change[0]:
+        predicted, expected = np.concatenate(change[0]), np.concatenate(change[1]); buried = expected > 0.1
+        out["burial_change"] = {"sites": int(len(expected)), "mae": float(np.mean(np.abs(predicted - expected))),
+            "spearman": float(spearmanr(predicted, expected)[0]), "fraction_change_gt_0.1": float(buried.mean()),
+            "auroc_change_gt_0.1": _auroc(predicted, buried), "recall_at_fpr_0.1_change_gt_0.1": _recall_at_fpr(predicted, buried)}
     return out
 
 
@@ -717,7 +740,11 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
            if query_norm == "separate" else {}),
         **({"dropout": f"oGQT residual dropout {dropout} on attention and feed-forward outputs during training (DropoutEngine); "
                        "one key per complex shared by its AB and free branches"} if dropout else {}),
-        **({"auxiliary": (f"AuxEngine ce burial-only: + {aux_weight} x burial cross-entropy vs soft target 1 - clip(RSA, 0, 1), PINDER free "
+        **({"auxiliary": (f"AuxEngine ce burial-siamese: + {aux_weight} x (mean of bound-branch cross-entropy vs 1 - clip(RSA_bound) and "
+                          "free-branch cross-entropy vs 1 - clip(RSA_free), + squared error of predicted bound - free burial vs clip(RSA_free) - "
+                          "clip(RSA_bound); PINDER, rsa-bound-v1) + burial cross-entropy on pKPDB train_mask sites; one-logit head aux_burial "
+                          "(pkatrain.production_aux)") if aux_heads == "burial-siamese" else
+                          (f"AuxEngine ce burial-only: + {aux_weight} x burial cross-entropy vs soft target 1 - clip(RSA, 0, 1), PINDER free "
                           "branch and pKPDB train_mask sites; one-logit head aux_burial on the final site embedding (pkatrain.production_aux)")
                          if aux_heads == "burial" else (f"AuxEngine: + {aux_weight} x (ordinal burial BCE, RSA cuts {list(BURIAL_RSA_CUTS)}, PINDER free branch and pKPDB "
                           f"train_mask sites; ordinal interface BCE, contact-score thresholds {list(INTERFACE_THRESHOLDS)}, PINDER {aux_interface_branch} branch); "
@@ -725,7 +752,8 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
                          (f"AuxEngine ce: + {aux_weight} x (burial cross-entropy vs soft target 1 - clip(RSA, 0, 1), PINDER free branch and pKPDB "
                           f"train_mask sites; interface cross-entropy vs soft target log(1 + min(c, {INTERFACE_CAP:g})) / log({INTERFACE_CAP + 1:g}), "
                           f"PINDER {aux_interface_branch} branch); one-logit heads aux_burial/aux_interface on the final site embedding (pkatrain.production_aux)"),
-            "contacts_verification_sha256": ContactTable(root).verification_sha256} if aux_weight is not None else {}),
+            ("rsa_bound_verification_sha256" if aux_heads == "burial-siamese" else "contacts_verification_sha256"):
+                ContactTable(root, RSA_BOUND_TABLE if aux_heads == "burial-siamese" else CONTACTS_TABLE).verification_sha256} if aux_weight is not None else {}),
         "pinder_weight_normalization": norms, "smoke": smoke, "test_data_included": False,
         "manifests": {d: digest(output(root, d) / MANIFEST) for d in manifests}, "code": code_hashes()}
     if (out / "protocol.json").exists():
@@ -733,7 +761,8 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
         if {k: v for k, v in stored.items() if k != "code"} != json.loads(json.dumps({k: v for k, v in protocol.items() if k != "code"})):
             raise AssertionError(f"{out} was registered with a different protocol")
     else: atomic_json(out / "protocol.json", protocol)
-    config = LoaderConfig(); contacts = ContactTable(root) if aux_weight is not None else None
+    config = LoaderConfig()
+    contacts = ContactTable(root, RSA_BOUND_TABLE if aux_heads == "burial-siamese" else CONTACTS_TABLE) if aux_weight is not None else None
     train_pinder = AuxPinderSource(_with_policy(manifests["pinder"], batch), contacts, config=config, norms=norms) if contacts else \
         PinderSource(_with_policy(manifests["pinder"], batch), config=config, norms=norms)
     sources = {"train": JointSource(train_pinder, PkpdbSource(_with_policy(manifests["pkpdb"], batch), config=config,
@@ -748,7 +777,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
         if query_norm != "shared" or paired_weight != "none" or reduction != "structure" or mask_pmin is not None:
             raise ValueError("auxiliary heads combine with the defaults and dropout only")
         if chunked(batch): raise ValueError("the auxiliary objective runs the unchunked path; use batch <= 64")
-        if aux_heads == "burial" and aux_loss != "ce": raise ValueError("burial-only auxiliary is implemented for --aux-loss ce")
+        if aux_heads != "both" and aux_loss != "ce": raise ValueError("burial-only auxiliaries are implemented for --aux-loss ce")
         params = initialize_aux(params, seed, aux_loss, aux_heads)
         engine = AuxEngine(params, aux_weight, dropout, aux_loss, aux_interface_branch, aux_heads); state = engine.optimizer.init(params)
         step_key = jax.random.PRNGKey(seed + 200003)
@@ -865,11 +894,12 @@ def aux_rescore(root, run):
     import jax
     from .trainer import load_checkpoint
     root = Path(root); out = run_dir(root, run); protocol = read(out / "protocol.json"); selection = read(out / "selection.json")
-    text = protocol["auxiliary"]; mode = "ce" if text.startswith("AuxEngine ce") else "ordinal"; heads = "burial" if text.startswith("AuxEngine ce burial-only") else "both"
+    text = protocol["auxiliary"]; mode = "ce" if text.startswith("AuxEngine ce") else "ordinal"; heads = "burial" if text.startswith("AuxEngine ce burial-only") else "burial-siamese" if text.startswith("AuxEngine ce burial-siamese") else "both"
     weight = float(text.split("+ ")[1].split(" x")[0]); branch = "free" if heads == "both" and "PINDER free branch); " in text.split("interface")[1] else "bound"
     dropout = float(protocol["dropout"].split("dropout ")[1].split(" ")[0]) if "dropout" in protocol else 0.0
     manifests = {d: read(output(root, d) / MANIFEST) for d in ("pinder", "pkpdb")}
-    config = LoaderConfig(); norms = protocol["pinder_weight_normalization"]; contacts = ContactTable(root)
+    config = LoaderConfig(); norms = protocol["pinder_weight_normalization"]
+    contacts = ContactTable(root, RSA_BOUND_TABLE if heads == "burial-siamese" else CONTACTS_TABLE)
     params, _, _ = make_model(protocol["seed"]); params = initialize_aux(params, protocol["seed"], mode, heads)
     engine = AuxEngine(params, weight, dropout, mode, branch, heads); state = engine.optimizer.init(params)
     params, state, _ = load_checkpoint(out / "checkpoints" / f"epoch-{selection['selected_epoch']:03d}", (params, state))
@@ -891,7 +921,7 @@ def main(argv=None):
     p.add_argument("--site-mask-pmin", type=float, default=None); p.add_argument("--dropout", type=float, default=0.0)
     p.add_argument("--aux-weight", type=float, default=None); p.add_argument("--aux-loss", choices=("ce", "ordinal"), default="ce")
     p.add_argument("--aux-interface-branch", choices=("bound", "free"), default="bound")
-    p.add_argument("--aux-heads", choices=("both", "burial"), default="both")
+    p.add_argument("--aux-heads", choices=("both", "burial", "burial-siamese"), default="both")
     p = sub.add_parser("rescore"); p.add_argument("runs", nargs="+")
     p = sub.add_parser("aux-rescore"); p.add_argument("runs", nargs="+")
     args = parser.parse_args(argv); root = Path(os.environ["PKABENCH_RUNTIME"])

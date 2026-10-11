@@ -166,7 +166,8 @@ class PinderSource(_Source):
 class AuxPinderSource(PinderSource):
     """PinderSource for the ordinal auxiliary heads (pkatrain.production_aux, 2026-10-11): same tuple, but slot 3 holds
     the free-state RSA (NaN -> -1, masked) and slot 4 the partner-contact score (production_aux.ContactTable) in place of
-    the normalised w_burial / w_interface, which the auxiliary objectives do not use."""
+    the normalised w_burial / w_interface, which the auxiliary objectives do not use. `contacts` is any per-site
+    production_aux.ContactTable (the rsa-bound-v1 table for Siamese burial); NaN -> -1 (masked)."""
 
     def __init__(self, manifest, contacts, store_path=None, config=None, fraction=1.0, norms=None, spread=True):
         super().__init__(manifest, store_path, config, fraction, norms, spread); self.contacts = contacts
@@ -179,7 +180,7 @@ class AuxPinderSource(PinderSource):
             score = self.contacts(row["id"])
             if len(score) != len(raw["rsa_free"]): raise AssertionError((row["id"], "contact table does not match the store"))
             rsa = _pad(np.nan_to_num(raw["rsa_free"].astype(np.float32), nan=-1.0), (q,))
-            return (spread_padding(graph) if self.spread else graph, target, mask, rsa, _pad(score.astype(np.float32), (q,)), metadata)
+            return (spread_padding(graph) if self.spread else graph, target, mask, rsa, _pad(np.nan_to_num(score.astype(np.float32), nan=-1.0), (q,)), metadata)
         items = list(self.pool.map(one, rows))
         return _stack(items, self.policy.batch_size(bucket), clear=(1, 2, 3, 4))
 
