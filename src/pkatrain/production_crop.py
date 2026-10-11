@@ -255,8 +255,8 @@ def main(argv=None):
         return
     if argv[0] != "audit": raise ValueError(argv[0])
     radius, inner = (float(argv[1]), float(argv[2])) if len(argv) > 2 else (20.0, 5.0)
-    report = audit(root, radius=radius, inner=inner)
-    atomic_json(root / "training" / VERSION / f"crop-audit-r{radius:g}-i{inner:g}.json", report); print(json.dumps(report, indent=1))
+    audited = audit(root, radius=radius, inner=inner)
+    atomic_json(root / "training" / VERSION / f"crop-audit-r{radius:g}-i{inner:g}.json", audited); print(json.dumps(audited, indent=1))
 
 
 if __name__ == "__main__":
