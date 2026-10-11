@@ -33,3 +33,8 @@ Submitted 2026-10-08 after the geometry/provenance gate passed:
 | Four-arm Triton smoke | 744281 |
 | 12-run GPU array (maximum four concurrent) | 744284 |
 | Dependent aggregate report | 744285 |
+
+**Follow-up (2026-10-11):** `experiments/4_backbone/08_gqt_production_crops.md` retested crops on the production
+oGQT recipe (dropout 0.1 plus burial auxiliary). Those crops supervise every site within an inner radius rather than
+only the centre. They hurt at the 10% pool, and at 50% they improved interface paired MAE at a cost to pKPDB
+validation MSE, so they were not adopted.
