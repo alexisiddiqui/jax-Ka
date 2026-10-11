@@ -766,3 +766,50 @@ Same fixed config (dropout 0.1, burial W 1, batch 16, seed 17), full pool-v4 tra
   about 0.005-0.007). Width 64 is best on every metric here, as with side chains at 50%.
 - Every width selects epoch 18-20, still improving: the 20-epoch schedule is short for the full pool.
 - 100% vs 50% at width 44: selection 0.678 -> 0.663; side chains at 50% (0.537) remain far ahead.
+
+### Seed spread, width and depth at 100% (2026-10-12)
+
+Plan: measure the seed spread first, then test width and residue-encoder depth against it. A difference counts as
+real only if the selection difference exceeds 2 sigma and at least 3 of the 4 other metrics (PINDER state MAE,
+interface paired MAE, pKPDB val MAE, benchmark MAE) move in the same direction. Fixed config: dropout 0.1, burial
+auxiliary W 1, batch 16, 20 epochs, full pool-v4 training sets, seeds 17 / 29 / 43. Depth (`--depth 4`): 4 untied
+residue blocks instead of 2 (`pkatrain.production_depth`; site query and site-site blocks unchanged). Training FLOPs
+per epoch: `scripts/ogqt_flops.py`, an analytic count over the padded batches (6 x forward MACs), because the Triton
+attention kernel is invisible to XLA's cost analysis.
+
+Pooled seed sigma of selection: **0.0037** (12 df over the six 3-seed groups below; 2 sigma = 0.0074). That is
+about 0.6% of selection, below the 1% at which the width sweep would be a null result.
+
+Means over seeds (selection per seed in brackets):
+
+| Input | Width | Depth | Params | Seeds | Selection | State MAE | Interface paired MAE | pKPDB val MAE | Benchmark MAE | PFLOP / epoch | s / epoch |
+|---|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|
+| backbone | 32 | 2 | 37,158 | 3 | 0.6575 (0.6570 / 0.6588 / 0.6567) | 0.4204 | 0.2371 | 0.5075 | 0.5247 | 0.051 | 120 |
+| backbone | 64 | 2 | 139,270 | 3 | **0.6503** (0.6520 / 0.6514 / 0.6475) | **0.4143** | 0.2360 | **0.5020** | **0.5220** | 0.101 | 127 |
+| backbone | 64 | 4 | 206,382 | 3 | 0.6515 (0.6498 / 0.6573 / 0.6474) | 0.4174 | 0.2341 | 0.5099 | 0.5275 | 0.150 | 112 |
+| backbone | 168 | 2 | 923,742 | 1 | 0.6701 (epoch 7; early stop at 15) | 0.4305 | 0.2396 | 0.5218 | 0.5384 | 0.363 | 199 |
+| side chains | 32 | 2 | 41,254 | 3 | 0.5228 (0.5195 / 0.5295 / 0.5193) | 0.3272 | 0.1955 | 0.4068 | 0.4399 | 0.052 | 131 |
+| side chains | 64 | 2 | 147,462 | 3 | 0.5028 (0.4997 / 0.5042 / 0.5044) | 0.3120 | 0.1908 | 0.3877 | 0.4241 | 0.104 | 131 |
+| side chains | 64 | 4 | 214,574 | 3 | **0.4883** (0.4870 / 0.4867 / 0.4913) | **0.3014** | **0.1869** | **0.3819** | **0.4176** | 0.152 | 136 |
+| side chains | 168 | 2 | 945,246 | 1 | 0.5003 (epoch 20) | 0.3059 | 0.1943 | 0.3822 | 0.4217 | 0.369 | 202 |
+
+Contrasts (selection difference; real = beyond 2 sigma with at least 3 of 4 metrics agreeing):
+
+| Contrast | Selection change | Metrics agreeing | Verdict |
+|---|---:|---:|---|
+| backbone width 64 vs 32 | -0.0072 | 4 / 4 | not real (just under 2 sigma) |
+| backbone depth 4 vs 2 (width 64) | +0.0012 | 3 / 4 | not real |
+| backbone width 168 vs 64 (1 seed) | +0.0198 | 4 / 4 | worse |
+| side chains width 64 vs 32 | -0.0200 | 4 / 4 | real |
+| side chains depth 4 vs 2 (width 64) | -0.0144 | 4 / 4 | real |
+| side chains width 168 vs 64 (1 seed) | -0.0025 | | not real |
+| side chains vs backbone (width 64) | -0.1475 | 4 / 4 | real |
+
+- Backbone input: neither width (32 -> 168) nor depth (2 -> 4 blocks) helps beyond the seed spread; width 168 peaks
+  at epoch 7 and degrades. The backbone-only model looks limited by its inputs, not its capacity. Per the plan's
+  gate, the weight-tied recurrence step was not run.
+- Side chains: width 32 -> 64 and depth 2 -> 4 both help (5.7 and 4.4 sigma); width 168 adds nothing over 64.
+- Width 300 (about 3M parameters) took 2,536 s (backbone) and 2,567 s (side chains) for epoch 1, about 7x width 168
+  for 2.5x its FLOPs; both runs were cancelled after one epoch. Wall-clock tracks FLOPs poorly: width 32 -> 168 is
+  7x the FLOPs for 1.6x the time, and depth 4 costs the same time per epoch as depth 2.
+- Most runs select epoch 17-20, so the 20-epoch schedule is still short for the full pool (affects all arms alike).
