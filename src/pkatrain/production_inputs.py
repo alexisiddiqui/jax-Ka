@@ -16,6 +16,14 @@
    and the site query block's edge projections gain 13 rows (drawn N(0, 1) / sqrt(33)); the rest of the forward pass
    is pkanet.site_model's.
 
+3. Titratable side-chain geometry auxiliary (--geometry-weight W, with --sidechains and --sidechain-view dropout):
+   the hidden side chains become targets for two heads on the final site embedding, for each D/E/H/C/Y/K/R query
+   site (termini excluded): aux_geom_pos, the centroid of its functional atoms (D OD1/OD2, E OE1/OE2, H ND1/NE2,
+   C SG, Y OH, K NZ, R NE/NH1/NH2) in its own backbone frame (A / 10; mean squared error), and aux_partner, a
+   salt-bridge score clip(exp(-(d - 4) / 2), 0, 1) with d the distance to the nearest functional centroid of opposite
+   charge (D/E/C/Y -1, H/K/R +1) among its residue-graph neighbours in that branch (cross-entropy). Needs the
+   backbone-v1 table (global centroids), loaded with or without --orientation.
+
   python -m pkatrain.production_inputs build-backbone {pinder,pkpdb,benchmark-val} [--workers 72] [--limit N]
 """
 from __future__ import annotations
@@ -38,6 +46,10 @@ ORIENTATION_EDGE = 13
 ORIENTATION_SALT = 6151
 DROP_SALT = 5381
 VIEWS = ("all", "titratable", "non-titratable", "dropout")
+GEOMETRY_SALT = 8191
+FUNCTIONAL = {"D": ("OD1", "OD2"), "E": ("OE1", "OE2"), "H": ("ND1", "NE2"), "C": ("SG",), "Y": ("OH",), "K": ("NZ",), "R": ("NE", "NH1", "NH2")}
+ACIDS = "DECY"
+PARTNER_CONTACT_A, PARTNER_DECAY_A = 4.0, 2.0
 
 
 # ---- backbone table ----------------------------------------------------------------------------------------------
@@ -183,6 +195,49 @@ def orientation_edges(table, neighbors, rows=None, xp=None):
     return xp.concatenate((direction_j, rotation, separation[..., None]), axis=-1)
 
 
+def _functional():
+    """(20, 32) functional-atom slot weights per residue type, (20,) charge class."""
+    from jaxpropka.parameters import ALPHABET
+    from pkanet.graph import SIDECHAIN_ATOMS
+    weights = np.zeros((20, len(SIDECHAIN_ATOMS)), np.float32); charge = np.zeros(20, np.float32)
+    for aa, names in FUNCTIONAL.items():
+        for name in names: weights[ALPHABET.index(aa), SIDECHAIN_ATOMS.index(name)] = 1.0
+        charge[ALPHABET.index(aa)] = -1.0 if aa in ACIDS else 1.0
+    return weights, charge
+
+
+def geometry_targets(graph, xp=None):
+    """Per query site of a loader graph with nodes [24 backbone | 128 side chain | backbone-v1]: (position target (Q, 3),
+    position mask (Q,), partner score (Q,), partner mask (Q,)). Masks exclude termini sites, degenerate frames and
+    residues without functional atoms."""
+    if xp is None: import jax.numpy as xp
+    weights, charge = (xp.asarray(x) for x in _functional())
+    nodes = graph["nodes"]; table = nodes[:, -BACKBONE_WIDTH:]; side = nodes[:, 24:152].reshape(nodes.shape[0], -1, 4)
+    aa = xp.argmax(nodes[:, :20], axis=1); w = weights[aa] * side[..., 3]; count = w.sum(-1)
+    local = (w[..., None] * side[..., :3]).sum(1) * 10.0 / xp.maximum(count, 1.0)[:, None]
+    n, ca, c = table[:, 0:3], table[:, 3:6], table[:, 6:9]
+    x = c - ca; xn = xp.linalg.norm(x, axis=-1, keepdims=True); x = x / xp.maximum(xn, 1e-6)
+    y = n - ca; y = y - (y * x).sum(-1, keepdims=True) * x; yn = xp.linalg.norm(y, axis=-1, keepdims=True); y = y / xp.maximum(yn, 1e-6)
+    valid = (xn[:, 0] > 1e-5) & (yn[:, 0] > 1e-5); frames = xp.stack((x, y, xp.cross(x, y)), axis=-1)
+    has = (count > 0) & valid; centroid = ca + xp.einsum("nij,nj->ni", frames, local)
+    query = graph["query_site"]; q = graph["site_residue"][query]; titratable = graph["site_type"][query] < 7
+    mask = has[q] & titratable
+    neighbors = graph["neighbors"][q]; edge = graph["edge_mask"][q]
+    distance = xp.sqrt(((centroid[neighbors] - centroid[q][:, None]) ** 2).sum(-1) + 1e-8)
+    partner = edge & has[neighbors] & (charge[aa[neighbors]] * charge[aa[q]][:, None] < 0) & (neighbors != q[:, None])
+    nearest = xp.min(xp.where(partner, distance, 1e4), axis=1)
+    score = xp.clip(xp.exp(-(nearest - PARTNER_CONTACT_A) / PARTNER_DECAY_A), 0.0, 1.0)
+    return local[q] / 10.0, mask, score, mask
+
+
+def add_geometry_heads(params, seed):
+    import jax
+    import jax.numpy as jnp
+    width = params["head"]["w"].shape[0]; kp, ks = jax.random.split(jax.random.fold_in(jax.random.PRNGKey(seed), GEOMETRY_SALT))
+    head = lambda key, out: {"w": jax.random.normal(key, (width, out), jnp.float32) / jnp.sqrt(float(width)), "b": jnp.zeros(out, jnp.float32)}
+    return {**params, "aux_geom_pos": head(kp, 3), "aux_partner": head(ks, 1)}
+
+
 def add_orientation(params, seed):
     """Residue blocks' and the site query block's edge projections: 20 -> 33 input rows (first 20 unchanged)."""
     import jax
@@ -196,23 +251,25 @@ def add_orientation(params, seed):
     return {**params, "blocks": [extend(b, k) for b, k in zip(params["blocks"], keys[:-1])], "query": extend(params["query"], keys[-1])}
 
 
-def input_functions(functions, sidechain_view="all", drop=0.0, orientation=False):
-    """Wrap (site_embeddings, predict_shift) so each graph is transformed first: orientation strips the backbone table
-    (the last BACKBONE_WIDTH node columns) into 13 extra edge features; the side-chain view masks node columns 24:.
-    The defaults return `functions` unchanged."""
+def input_functions(functions, sidechain_view="all", drop=0.0, orientation=False, table=None):
+    """Wrap (site_embeddings, predict_shift) so each graph is transformed first: a loaded backbone table (the last
+    BACKBONE_WIDTH node columns; table defaults to orientation) is stripped, and with orientation turned into 13 extra
+    edge features; the side-chain view masks node columns 24:. The defaults return `functions` unchanged."""
     import jax
     import jax.numpy as jnp
     from jaxpropka.parameters import GROUP_AA
     from pkanet.model import linear
     if sidechain_view not in VIEWS: raise ValueError(sidechain_view)
-    if sidechain_view == "all" and not orientation: return functions
+    table = orientation if table is None else table
+    if orientation and not table: raise ValueError("orientation needs the backbone table")
+    if sidechain_view == "all" and not table: return functions
     embeddings = functions[0]; titratable = jnp.zeros(20, bool).at[jnp.asarray(GROUP_AA)].set(True)
 
     def transform(graph, key):
         nodes = graph["nodes"]
         if orientation:
             graph = {**graph, "edge": jnp.concatenate((graph["edge"], orientation_edges(nodes[:, -BACKBONE_WIDTH:], graph["neighbors"])), axis=-1)}
-            nodes = nodes[:, :-BACKBONE_WIDTH]
+        if table: nodes = nodes[:, :-BACKBONE_WIDTH]
         if sidechain_view != "all":
             if sidechain_view == "dropout":
                 keep = jnp.zeros(()) if key is None else jax.random.bernoulli(jax.random.fold_in(key, DROP_SALT), 1.0 - drop).astype(jnp.float32)
