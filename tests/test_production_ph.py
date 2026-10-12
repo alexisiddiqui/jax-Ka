@@ -57,3 +57,28 @@ def test_table_requires_complete_coverage_and_matching_split(monkeypatch):
         ph.PhTable("root", {**manifests, "pkpdb": manifest([("k1", "train"), ("k2", "train")])}, 1.0)
     with pytest.raises(ValueError):
         ph.PhTable("root", {**manifests, "pinder": manifest([("p1", "train"), ("v1", "train")])}, 1.0)
+
+
+def test_crystal_sources_mask_em_targets(monkeypatch):
+    em = {**row("p2", 7.5, sources=("em_buffer",))}
+    monkeypatch.setattr(ph, "load_v4", lambda root, d: {"p1": row("p1", 6.0), "p2": em} if d == "pinder" else {"k1": row("k1", 5.0)})
+    monkeypatch.setattr(ph, "load_validation", lambda root, c: {})
+    manifests = {"pinder": {"records": [{"id": i, "split": "train", "min_fraction": 0.0} for i in ("p1", "p2")]},
+                 "pkpdb": {"records": [{"id": "k1", "split": "train", "min_fraction": 0.0}]}}
+    table = ph.PhTable("root", manifests, 1.0, "crystal")
+    assert table.arrays("pinder", ["p1", "p2"], 2)[1].tolist() == [1, 0]
+    assert table.stats["structures"] == 2 and table.stats["mean"] == pytest.approx(5.5) and table.provenance["sources"] == "crystal"
+    assert ph.PhTable("root", manifests, 1.0).stats["structures"] == 3
+
+
+def test_separate_optimizer_keeps_trunk_update_independent_of_probe():
+    import jax.numpy as jnp
+    import optax
+    params = {"head": {"w": jnp.ones((2, 2))}, "aux_ph": {"w": jnp.ones((2, 2))}}
+    make = lambda tree: optax.chain(optax.clip_by_global_norm(1.0), optax.sgd(1.0))
+    opt = ph.separate_optimizer(params, make); state = opt.init(params)
+    small = {"head": {"w": jnp.full((2, 2), 0.1)}, "aux_ph": {"w": jnp.zeros((2, 2))}}
+    large = {**small, "aux_ph": {"w": jnp.full((2, 2), 100.0)}}
+    a, _ = opt.update(small, state, params); b, _ = opt.update(large, state, params)
+    assert np.allclose(a["head"]["w"], b["head"]["w"]) and np.allclose(a["head"]["w"], -0.1)
+    assert float(optax.global_norm(b["aux_ph"])) == pytest.approx(1.0, rel=1e-5)
