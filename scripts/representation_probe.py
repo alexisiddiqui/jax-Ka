@@ -7,6 +7,9 @@ For a trained production run (selected checkpoint), on the PINDER (AB branch) an
 2. Residual test: does the feature explain the model's errors (predicted - teacher shift)? Ridge on the feature x
    titratable-group interactions (with squares), held-out R^2 gain over group means alone. Only a feature the probe
    cannot recover and that explains residuals is worth a training run.
+3. Burial reference: the model's own burial head (sigmoid of aux_burial on the site embedding) against the true
+   target 1 - clip(RSA) (PINDER: bound-state RSA of the AB branch, rsa-bound-v1; pKPDB: store RSA), and, per feature,
+   the held-out R^2 from predicted burial alone next to the full-embedding probe (how much of the feature is burial).
 
 Features per query site, from backbone-v1 (numpy, no side chains):
 - dihedrals: sin/cos phi, psi of the site residue (production_inputs.backbone_dihedrals).
@@ -81,6 +84,7 @@ def collect(root, run, dataset):
     from pkatrain.production_inputs import BACKBONE_WIDTH, BackboneTable, ConcatTable
     from pkatrain.production_loading import MANIFEST, PinderSource, PkpdbSource, select
     from pkatrain.production_sidechains import SidechainTable
+    from pkatrain.production_aux import RSA_BOUND_TABLE, ContactTable
     from pkatrain.production_train import _with_policy, run_dir, selected_model
     params, (embeddings, _) = selected_model(root, run); protocol = read(run_dir(root, run) / "protocol.json")
     sidechains = "sidechains" in protocol; arch = protocol["architecture"]
@@ -88,15 +92,15 @@ def collect(root, run, dataset):
     manifest = read(output(root, dataset) / MANIFEST); tables = ([SidechainTable(root, dataset)] if sidechains else []) + [BackboneTable(root, dataset)]
     side = tables[0] if len(tables) == 1 else ConcatTable(*tables); config = LoaderConfig()
     source = PinderSource(_with_policy(manifest), config=config, norms=protocol["pinder_weight_normalization"], sidechains=side) if dataset == "pinder" \
-        else PkpdbSource(_with_policy(manifest), config=config, mask="train_mask", sidechains=side)
-    reference = np.asarray(PKPDB_PK_MOD)
+        else PkpdbSource(_with_policy(manifest), config=config, mask="train_mask", sidechains=side, aux=True)
+    reference = np.asarray(PKPDB_PK_MOD); rsa_bound = ContactTable(root, RSA_BOUND_TABLE) if dataset == "pinder" else None
 
     @jax.jit
     def forward(graphs):
         def one(graph):
             if not table: graph = {**graph, "nodes": graph["nodes"][:, :-BACKBONE_WIDTH]}
             tokens, query = embeddings(params, graph); site = tokens[query]
-            return site, 8 * jax.numpy.tanh(linear(params["head"], site)[:, 0])
+            return site, 8 * jax.numpy.tanh(linear(params["head"], site)[:, 0]), jax.nn.sigmoid(linear(params["aux_burial"], site)[:, 0])
         return jax.vmap(one)(graphs)
 
     records = select(manifest, "val"); plans = source.policy.plans(records, np.random.default_rng(0)); out = []
@@ -106,14 +110,19 @@ def collect(root, run, dataset):
             graphs, targets, mask = batch[0], batch[1], batch[2]
             graphs = jax.tree.map(lambda x: x[:, 0], graphs); targets = targets[:, 0]
         else:
-            graphs, targets, mask = batch[0], batch[1], batch[2]
-        tokens, shift = (np.asarray(x) for x in forward(graphs))
+            graphs, targets, mask, rsa = batch[0], batch[1], batch[2], batch[3]
+        tokens, shift, burial = (np.asarray(x) for x in forward(graphs))
         for slot, cid in enumerate(ids):
             graph = {k: np.asarray(v[slot]) for k, v in graphs.items()}; real = graph["node_mask"]
             active = np.asarray(mask[slot], bool); query = graph["query_site"]; residues = graph["site_residue"][query][active]
             group = graph["query_group"][active]; expected = targets[slot][active] - reference[group]
             feats = site_features(graph["nodes"][real][:, -BACKBONE_WIDTH:], graph["nodes"][real][:, :20].argmax(1), residues)
+            if dataset == "pinder":
+                values = rsa_bound(cid); site_rsa = np.full(len(active), np.nan); site_rsa[:len(values)] = values; site_rsa = site_rsa[active]
+            else: site_rsa = np.where(np.asarray(rsa[slot]) >= 0, rsa[slot], np.nan)[active]
             for k in range(len(residues)):
+                feats[k]["burial_true"] = float(1 - np.clip(site_rsa[k], 0, 1)) if np.isfinite(site_rsa[k]) else np.nan
+                feats[k]["burial_pred"] = float(burial[slot][active][k])
                 out.append((cid, int(group[k]), float(shift[slot][active][k] - expected[k]), tokens[slot][active][k], feats[k]))
     source.close(); return out
 
@@ -134,11 +143,18 @@ def analyse(rows):
     feats = {k: np.asarray([f[k] for *_, f in rows], float) for k in rows[0][4]}
     onehot = np.eye(9)[group]; base = ridge_r2(onehot, residual, folds)
     result = {"sites": len(rows), "residual_mae": float(np.mean(np.abs(residual))), "residual_r2_group_means": base, "groups": {}}
+    from scipy.stats import spearmanr
+    known = np.isfinite(feats["burial_true"]); pred = feats["burial_pred"][:, None]
+    result["burial"] = {"sites_with_rsa": int(known.sum()), "probe_r2_true_burial": round(ridge_r2(emb[known], feats["burial_true"][known], folds[known]), 3),
+                        "head_r2_true_burial": round(ridge_r2(pred[known], feats["burial_true"][known], folds[known]), 3),
+                        "head_spearman_true_burial": round(float(spearmanr(pred[known, 0], feats["burial_true"][known])[0]), 3)}
     for name, keys in GROUPS.items():
         x = np.stack([feats[k] for k in keys], axis=1)
         probe = {k: ridge_r2(emb, feats[k], folds) for k in keys}
+        from_burial = {k: ridge_r2(pred, feats[k], folds) for k in keys}
         design = np.concatenate([onehot] + [onehot * x[:, [i]] for i in range(x.shape[1])] + [onehot * x[:, [i]] ** 2 for i in range(x.shape[1])], axis=1)
         result["groups"][name] = {"probe_r2": {k: round(v, 3) for k, v in probe.items()}, "probe_r2_mean": round(float(np.mean(list(probe.values()))), 3),
+                                  "burial_r2": {k: round(v, 3) for k, v in from_burial.items()}, "burial_r2_mean": round(float(np.mean(list(from_burial.values()))), 3),
                                   "residual_r2_gain": round(ridge_r2(design, residual, folds) - base, 4),
                                   "feature_means": {k: round(float(feats[k].mean()), 3) for k in keys}}
     return result
@@ -150,8 +166,10 @@ def main():
         report[run] = {}
         for dataset in ("pinder", "pkpdb"):
             report[run][dataset] = analyse(collect(root, run, dataset))
-            print(json.dumps({"run": run, "dataset": dataset, **{k: v for k, v in report[run][dataset].items() if k != "groups"},
-                              **{g: [v["probe_r2_mean"], v["residual_r2_gain"]] for g, v in report[run][dataset]["groups"].items()}}), flush=True)
+            r = report[run][dataset]
+            print(json.dumps({"run": run, "dataset": dataset, "burial": r["burial"],
+                              **{g: {"probe": v["probe_r2_mean"], "from_pred_burial": v["burial_r2_mean"], "probe_each": v["probe_r2"], "burial_each": v["burial_r2"]}
+                                 for g, v in r["groups"].items()}}), flush=True)
     out.write_text(json.dumps(report, indent=1))
 
 
