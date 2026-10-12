@@ -51,6 +51,7 @@ from .loading import PRODUCTION_BOUNDS, BucketPolicy, DeferredScalars, LoaderCon
 from .production_graphs import VERSION, output, read
 from .production_aux import BURIAL_RSA_CUTS, INTERFACE_CAP, INTERFACE_THRESHOLDS, RSA_BOUND_TABLE, ContactTable
 from .production_aux import TABLE as CONTACTS_TABLE
+from .production_ph import THRESHOLDS as PH_THRESHOLDS
 from .production_depth import INJECT_SCALE, add_injection, deepen, model_functions
 from .production_inputs import BACKBONE_WIDTH, ORIENTATION_EDGE, BackboneTable, ConcatTable, add_chi_head, add_dihedral_inputs, add_geometry_heads, add_hbond_inputs, add_orientation, chi1_targets, geometry_targets, \
     input_functions, DIHEDRAL_FEATURES, HBOND_FEATURES
@@ -325,9 +326,13 @@ class AuxEngine:
     head learns each state on its own branch (bound 1 - clip(RSA_bound), free 1 - clip(RSA_free); cross-entropy, the
     two averaged) plus a paired squared error on the predicted bound - free burial (sigmoid outputs) against
     clip(RSA_free) - clip(RSA_bound), mirroring the pKa state + Siamese losses; slot 4 then holds RSA_bound
-    (production_aux rsa-bound-v1, < 0 masked)."""
+    (production_aux rsa-bound-v1, < 0 masked).
+    ph_weight (--ph-weight, 2026-10-12): + ph_weight x structure-level experimental-pH cumulative BCE from the pooled
+    head aux_ph (production_ph); PINDER AB branch and pKPDB, each structure weighted by eligibility x parent weight.
+    The objectives then take ph=(target, weight) per structure (production_ph.PhTable.arrays)."""
 
-    def __init__(self, params, weight, rate=0.0, mode="ce", interface_branch="bound", heads="both", site_embeddings=None, geometry_weight=0.0, chi_weight=0.0):
+    def __init__(self, params, weight, rate=0.0, mode="ce", interface_branch="bound", heads="both", site_embeddings=None, geometry_weight=0.0, chi_weight=0.0,
+                 ph_weight=0.0):
         import jax
         import jax.numpy as jnp
         import optax
@@ -354,6 +359,8 @@ class AuxEngine:
                 (jnp.log1p(jnp.minimum(score, INTERFACE_CAP)) / jnp.log1p(INTERFACE_CAP))[..., None]
 
         geometry_weight = float(geometry_weight); chi_weight = float(chi_weight); structural = bool(geometry_weight or chi_weight)
+        self.ph_weight = ph_weight = float(ph_weight)
+        from . import production_ph
 
         def predict_all(p, graph, key=None):
             tokens, query_site = site_embeddings_indexed(p, graph, key=key, dropout_rate=rate if key is not None else 0.0)
@@ -364,8 +371,9 @@ class AuxEngine:
                                     (linear(p["aux_geom_pos"], tokens)[query_site], linear(p["aux_partner"], tokens)[query_site, 0], *geometry_targets(graph))))
             if chi_weight:
                 geometry.update(zip(("chi", "chi_class", "chi_mask"), (linear(p["aux_chi"], tokens)[query_site], *chi1_targets(graph))))
+            ph = production_ph.pooled_logits(p["aux_ph"], tokens, graph["site_mask"]) if ph_weight else jnp.zeros((len(production_ph.THRESHOLDS),), jnp.float32)
             return (8 * jnp.tanh(linear(p["head"], tokens)[:, 0]))[query_site], linear(p["aux_burial"], tokens)[query_site], \
-                (linear(p["aux_interface"], tokens)[query_site] if use_interface else jnp.zeros((query_site.shape[0], 1), jnp.float32)), geometry
+                (linear(p["aux_interface"], tokens)[query_site] if use_interface else jnp.zeros((query_site.shape[0], 1), jnp.float32)), geometry, ph
 
         def geometry_loss(g, sites, valid):
             """Weighted side-chain auxiliaries, each averaged per structure over sites with a target: geometry =
@@ -398,8 +406,8 @@ class AuxEngine:
         def burial_loss(logits, rsa, sites, valid):
             return structure_mean(cross_entropy(logits, burial_labels(rsa)), sites * (rsa >= 0), valid)
 
-        def paired_objective(p, graphs, targets, mask, rsa, contacts, valid, key):
-            predicted, burial_logits, interface_logits, geometry = paired_all(p, graphs, key)
+        def paired_objective(p, graphs, targets, mask, rsa, contacts, valid, key, ph=None):
+            predicted, burial_logits, interface_logits, geometry, ph_logits = paired_all(p, graphs, key)
             expected = targets - reference[graphs["query_group"][:, 0]][:, None, :]
             state_error = jnp.square(predicted - expected) * mask[:, None, :]
             pair_error = jnp.square((predicted[:, 0] - predicted[:, 1]) - (expected[:, 0] - expected[:, 1])) * mask
@@ -420,16 +428,19 @@ class AuxEngine:
             # geometry auxiliary on both branches (the free branch's partner score sees only its own edges)
             geometric = (geometry_loss(jax.tree.map(lambda x: x[:, 0], geometry), sites, valid)
                          + geometry_loss(jax.tree.map(lambda x: x[:, 1], geometry), sites, valid)) / 2 if structural else 0.0
-            return state_loss + pair_loss + weight * (burial + interface) + geometric, (state_loss, pair_loss)
+            # experimental pH on the AB branch (the deposited structure), one term per structure
+            ph_loss = production_ph.loss(ph_logits[:, 0], ph[0], ph[1] * valid) if ph_weight else 0.0
+            return state_loss + pair_loss + weight * (burial + interface) + geometric + ph_weight * ph_loss, (state_loss, pair_loss, ph_loss)
 
-        def pkpdb_objective(p, graphs, targets, eligible, rsa, valid, key):
+        def pkpdb_objective(p, graphs, targets, eligible, rsa, valid, key, ph=None):
             keys = jax.random.split(key, graphs["nodes"].shape[0])
-            predicted, burial_logits, _, geometry = jax.vmap(lambda graph, k: predict_all(p, graph, k))(graphs, keys)
+            predicted, burial_logits, _, geometry, ph_logits = jax.vmap(lambda graph, k: predict_all(p, graph, k))(graphs, keys)
             expected = targets - reference[graphs["query_group"]]
             per_structure = jnp.sum(jnp.square(predicted - expected) * eligible, axis=1) / jnp.maximum(jnp.sum(eligible, axis=1), 1)
             primary = jnp.sum(jnp.where(valid, per_structure, 0.0)) / jnp.maximum(jnp.sum(valid), 1)
             return primary + weight * burial_loss(burial_logits, rsa, eligible.astype(jnp.float32), valid) + \
-                (geometry_loss(geometry, eligible.astype(jnp.float32), valid) if structural else 0.0)
+                (geometry_loss(geometry, eligible.astype(jnp.float32), valid) if structural else 0.0) + \
+                (ph_weight * production_ph.loss(ph_logits, ph[0], ph[1] * valid) if ph_weight else 0.0)
 
         def apply(p, state, pair_gradient, pk_gradient, rate_):
             gradient = jax.tree.map(lambda a, b: a + b, pair_gradient, pk_gradient)
@@ -440,6 +451,8 @@ class AuxEngine:
         self.predictions = jax.jit(lambda p, graphs: paired_all(p, graphs)[0])
         self.paired_auxiliary = jax.jit(lambda p, graphs: paired_all(p, graphs)[1:3])
         self.site_auxiliary = jax.jit(jax.vmap(lambda p, graph: predict_all(p, graph)[1], in_axes=(None, 0)))
+        self.ph_paired = jax.jit(lambda p, graphs: paired_all(p, graphs)[4][:, 0])
+        self.ph_single = jax.jit(jax.vmap(lambda p, graph: predict_all(p, graph)[4], in_axes=(None, 0)))
         self.paired_value_grad = jax.jit(jax.value_and_grad(paired_objective, has_aux=True))
         self.pkpdb_value_grad = jax.jit(jax.value_and_grad(pkpdb_objective))
         self.apply = jax.jit(apply)
@@ -612,7 +625,8 @@ def code_hashes():
     src = Path(__file__).parents[1]
     paths = [Path(__file__), src / "pkatrain/production_loading.py", src / "pkatrain/production_graphs.py",
              src / "pkatrain/loading.py", src / "pkatrain/production_depth.py", src / "pkatrain/production_inputs.py", src / "pkatrain/gqt_multitask_replay.py", src / "pkatrain/gqt_paired_pinder.py",
-             src / "pkatrain/site_graph_data.py", src / "pkanet/ogqt.py", src / "pkanet/model.py", src / "pkanet/triton_attention.py"]
+             src / "pkatrain/site_graph_data.py", src / "pkanet/ogqt.py", src / "pkanet/model.py", src / "pkanet/triton_attention.py",
+             src / "pkatrain/production_ph.py", src / "pkabench/experimental_ph.py"]
     return {str(p.relative_to(src)): digest(p) for p in paths}
 
 
@@ -780,14 +794,18 @@ def validate(engine, predict, params, sources, manifests, config, out=None, epoc
         if out is not None: _write(out / f"predictions-pkpdb-epoch-{epoch:03d}.csv", pk_rows)
     if out is not None:
         _write(out / f"predictions-pinder-epoch-{epoch:03d}.csv", pair_rows); _write(out / f"predictions-benchmark-epoch-{epoch:03d}.csv", bench_rows)
+    ph = None
+    if getattr(engine, "ph_weight", 0.0):
+        from .production_ph import evaluate as ph_evaluate
+        ph = ph_evaluate(engine, params, sources, manifests, engine.ph_table, config)
     return {"pinder": pinder, **({"pkpdb": pkpdb} if pkpdb else {}), "benchmark": {"overall": overall, "bins": bins, "equal_bin_mae": equal_bin, **bench_squared},
-            "selection": pinder["state_mae"] + pinder["interface_paired_mae"]}
+            **({"ph": ph} if ph else {}), "selection": pinder["state_mae"] + pinder["interface_paired_mae"]}
 
 
 def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none", seed=SEED, query_norm="shared", reduction="structure",
           mask_pmin=None, dropout=0.0, aux_weight=None, aux_loss="ce", aux_interface_branch="bound", aux_heads="both", width=None,
           sidechains=False, depth=2, loops=1, orientation=False, sidechain_view="all", sidechain_drop=0.0, geometry_weight=0.0,
-          dihedrals=False, chi_weight=0.0, hbonds=False, epochs=None):
+          dihedrals=False, chi_weight=0.0, hbonds=False, epochs=None, ph_weight=0.0):
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
@@ -856,6 +874,10 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
         **({"chi_auxiliary": f"+ {chi_weight} x chi1-class softmax cross-entropy (g+ / t / g-; production_inputs.chi1_targets) for "
                              "D/E/H/C/Y/K/R query sites from the hidden side chains and backbone-v1; head aux_chi; PINDER both branches, pKPDB train_mask sites"}
            if chi_weight else {}),
+        **({"ph_auxiliary": f"+ {ph_weight} x structure-level experimental pH (production_ph): gated attention pooling of the site tokens "
+                            f"(LayerNorm, sigmoid gate x value, per-channel normalised) -> cumulative BCE over [pH > t], t in {list(PH_THRESHOLDS)}; "
+                            "PINDER AB branch and pKPDB; structure weight = eligibility x parent weight; no per-residue repetition"}
+           if ph_weight else {}),
         **({"hbonds": "production_inputs.backbone_hbonds: DSSP backbone H-bond energies (best donor / acceptor / 9.9, bonded flags, has-H / has-O) "
                        "from backbone-v1 over the residue-graph edges appended to the node features (6); embedding +6 rows"} if hbonds else {}),
         **({"dihedrals": "production_inputs.backbone_dihedrals: sin/cos phi, psi, omega from backbone-v1 appended to the node features (6); embedding +6 rows"}
@@ -875,6 +897,13 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
             raise AssertionError(f"{out} was registered with a different protocol")
     else: atomic_json(out / "protocol.json", protocol)
     config = LoaderConfig()
+    ph_table = None
+    if ph_weight:
+        from .production_ph import PhTable
+        ph_table = PhTable(root, manifests, fraction)
+        stored = read(out / "ph-annotations.json") if (out / "ph-annotations.json").exists() else None
+        if stored is not None and stored != json.loads(json.dumps(ph_table.provenance)): raise AssertionError(f"{out}: pH annotations changed")
+        atomic_json(out / "ph-annotations.json", ph_table.provenance)
     side = {}
     for d in ("pinder", "pkpdb", "benchmark-val"):
         tables = ([SidechainTable(root, d)] if sidechains else []) + ([BackboneTable(root, d)] if orientation or geometry_weight or chi_weight or dihedrals or hbonds else [])
@@ -893,6 +922,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
         raise ValueError("--width / --sidechains combine with the default objective, dropout and auxiliaries only")
     if sidechain_view != "all" and not sidechains: raise ValueError("--sidechain-view needs --sidechains")
     if (sidechain_view == "dropout") != (sidechain_drop > 0): raise ValueError("--sidechain-drop goes with --sidechain-view dropout")
+    if ph_weight and aux_weight is None: raise ValueError("--ph-weight runs through AuxEngine (use --aux-weight, e.g. with --aux-heads burial)")
     if (geometry_weight or chi_weight) and (sidechain_view != "dropout" or aux_weight is None):
         raise ValueError("--geometry-weight / --chi-weight need --sidechains --sidechain-view dropout (side chains hidden from validation) and --aux-weight")
     table = bool(orientation or geometry_weight or chi_weight or dihedrals or hbonds)
@@ -912,7 +942,11 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
         params = initialize_aux(params, seed, aux_loss, aux_heads)
         if geometry_weight: params = add_geometry_heads(params, seed)
         if chi_weight: params = add_chi_head(params, seed)
-        engine = AuxEngine(params, aux_weight, dropout, aux_loss, aux_interface_branch, aux_heads, embeddings_fn, geometry_weight, chi_weight)
+        if ph_weight:
+            from .production_ph import initialize as initialize_ph
+            params = initialize_ph(params, seed)
+        engine = AuxEngine(params, aux_weight, dropout, aux_loss, aux_interface_branch, aux_heads, embeddings_fn, geometry_weight, chi_weight, ph_weight)
+        engine.ph_table = ph_table
         state = engine.optimizer.init(params)
         step_key = jax.random.PRNGKey(seed + 200003)
     elif dropout:
@@ -938,13 +972,20 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
         if smoke: pair, pk = pair[:5], pk[:5]
         specs = list(zip(pair, pk)); deferred = DeferredScalars(every=50); began = time.time()
         prefetcher = Prefetcher(sources["train"], specs, config, to_device if not chunked(batch) else host_chunks)
-        for number, (_, (pair_batch, pk_batch)) in enumerate(prefetcher, 1):
+        ph_losses = []
+        for number, ((pair_ids, pk_ids), (pair_batch, pk_batch)) in enumerate(prefetcher, 1):
             rate = jnp.asarray(scale * learning_rate(epoch, number, len(specs)), jnp.float32)
             if step_key is not None:
                 graphs, targets, mask, wb, wi, _, valid = pair_batch
                 k_pair, k_pk = jax.random.split(jax.random.fold_in(jax.random.fold_in(step_key, epoch), number))
-                (pair_total, (state_loss, pair_loss)), pair_gradient = engine.paired_value_grad(params, graphs, targets, mask, wb, wi, valid, k_pair)
-                pk_loss, pk_gradient = engine.pkpdb_value_grad(params, *pk_batch, k_pk)
+                if ph_table is not None:
+                    ph_pair = jax.device_put(ph_table.arrays("pinder", pair_ids, len(valid)))
+                    ph_pk = jax.device_put(ph_table.arrays("pkpdb", pk_ids, len(pk_batch[-1])))
+                    (pair_total, (state_loss, pair_loss, ph_loss)), pair_gradient = engine.paired_value_grad(params, graphs, targets, mask, wb, wi, valid, k_pair, ph_pair)
+                    pk_loss, pk_gradient = engine.pkpdb_value_grad(params, *pk_batch, k_pk, ph_pk); ph_losses.append(ph_loss)
+                else:
+                    (pair_total, (state_loss, pair_loss, *_)), pair_gradient = engine.paired_value_grad(params, graphs, targets, mask, wb, wi, valid, k_pair)
+                    pk_loss, pk_gradient = engine.pkpdb_value_grad(params, *pk_batch, k_pk)
             elif not chunked(batch):
                 graphs, targets, mask, wb, wi, _, valid = pair_batch
                 (pair_total, (state_loss, pair_loss)), pair_gradient = engine.paired_value_grad(params, graphs, targets, mask, wb, wi, valid)
@@ -961,7 +1002,8 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
         began = time.time(); validation = validate(engine, predict, params, sources, manifests, config); val_seconds = time.time() - began
         save_checkpoint(out / "checkpoints" / f"epoch-{epoch:03d}", params, state, {"epoch": epoch, "run": run})
         row = {"epoch": epoch, "updates": len(specs), "learning_rate_end": scale * learning_rate(epoch, len(specs), len(specs)),
-               "train_loss": {name: float(values[:, i].mean()) for i, name in enumerate(("total", "pkpdb", "pinder_state", "pinder_paired"))},
+               "train_loss": {**{name: float(values[:, i].mean()) for i, name in enumerate(("total", "pkpdb", "pinder_state", "pinder_paired"))},
+                              **({"pinder_ph_bce": float(np.mean(np.asarray(jnp.stack(ph_losses))))} if ph_losses else {})},
                "validation": validation, "train_seconds": round(train_seconds, 1), "validation_seconds": round(val_seconds, 1),
                "loader_wait_fraction": telemetry.get("wait_fraction")}
         history.append(row)
@@ -973,6 +1015,9 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
                           "interface_paired_mae": validation["pinder"]["interface_paired_mae"],
                           "benchmark_mae": validation["benchmark"]["overall"]["mae"], "pkpdb_val_mae": validation.get("pkpdb", {}).get("site_mae"),
                           "selection": validation["selection"],
+                          **({"ph_mae": {k: validation["ph"][k].get("mae") for k in ("pinder", "pkpdb", "benchmark") if k in validation["ph"]},
+                              "ph_baseline_mae": {k: validation["ph"][k].get("baseline_mae") for k in ("pinder", "pkpdb", "benchmark") if k in validation["ph"]}}
+                             if "ph" in validation else {}),
                           "train_s": row["train_seconds"], "val_s": row["validation_seconds"], "wait": row["loader_wait_fraction"]}), flush=True)
     selected = best["epoch"]
     params, state, _ = load_checkpoint(out / "checkpoints" / f"epoch-{selected:03d}", (params, state))
@@ -1134,6 +1179,7 @@ def main(argv=None):
     p.add_argument("--chi-weight", type=float, default=0.0, help="chi1 rotamer-class auxiliary weight (production_inputs)")
     p.add_argument("--hbonds", action="store_true", help="DSSP backbone H-bond node features from backbone-v1 (production_inputs)")
     p.add_argument("--epochs", type=int, default=None, help="schedule length (default 20; others stretch the schedule and patience)")
+    p.add_argument("--ph-weight", type=float, default=0.0, help="structure-level experimental pH auxiliary weight (production_ph; needs --aux-weight)")
     p = sub.add_parser("count"); p.add_argument("widths", type=int, nargs="+"); p.add_argument("--sidechains", action="store_true")
     p.add_argument("--depth", type=int, default=2); p.add_argument("--loops", type=int, default=1)
     p = sub.add_parser("export"); p.add_argument("run"); p.add_argument("destination")
@@ -1160,7 +1206,7 @@ def main(argv=None):
         result = train(root, args.run, args.fraction, args.smoke, args.batch, args.paired_weight, args.seed, args.query_norm, args.loss_reduction, args.site_mask_pmin,
                        args.dropout, args.aux_weight, args.aux_loss, args.aux_interface_branch,
                        args.aux_heads, args.width, args.sidechains, args.depth, args.loops, args.orientation, args.sidechain_view, args.sidechain_drop,
-                       args.geometry_weight, args.dihedrals, args.chi_weight, args.hbonds, args.epochs)
+                       args.geometry_weight, args.dihedrals, args.chi_weight, args.hbonds, args.epochs, args.ph_weight)
         print(json.dumps({"selected_epoch": result["selected_epoch"], "selection": result["validation"]["selection"]}))
 
 

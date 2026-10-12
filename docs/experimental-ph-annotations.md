@@ -84,3 +84,47 @@ eligible structures. No auxiliary head or loss is activated by this change.
 Definitions: [crystal growth pH](https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_exptl_crystal_grow.pH.html),
 [NMR collection pH](https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_pdbx_nmr_exptl_sample_conditions.pH.html),
 [EM buffer pH](https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_em_buffer.pH.html).
+
+## Pool-v4 training annotations (`experimental-ph-v2`, 2026-10-12)
+
+`experimental-ph-v1` was built for pool-v3. Pool-v4 moved PINDER's retired
+400-entry validation cohort into training and changed membership, so v1 covers
+27,120 of 27,933 PINDER and 55,374 of 56,191 pKPDB pool-v4 training entries.
+`experimental-ph-v2` re-annotates the pool-v4 training tables
+(`training/pool-v4/{pinder,pkpdb}.tsv`, split `train`) with the same
+`audit_record` / `quality_record` policy. Parent weights are recounted over pool-v4
+training membership. The pool-v4 validation sets keep their
+`annotations/validation-ph-v1` records.
+
+PDBs absent from the `audits/ph-coverage` snapshot (546) are fetched once into
+`audits/ph-coverage/pool-v4-metadata.json` (RCSB GraphQL in the snapshot's record
+format; EM buffer pH from the mmCIF header files). A PDB that RCSB does not serve
+is listed as unresolved and the build refuses it.
+
+```sh
+python -m pkabench.experimental_ph supplement-v4        # network, HTTP only
+python -m pkabench.experimental_ph build-v4 pinder      # Slurm
+python -m pkabench.experimental_ph build-v4 pkpdb
+python -m pkabench.experimental_ph verify-v4 pinder
+```
+
+## Training auxiliary (`pkatrain.production_ph`, `production_train --ph-weight`)
+
+`production_train train ... --aux-weight W --ph-weight P` adds a structure-level
+pH loss. `PhTable` joins v2 training and validation-ph-v1 records by structure ID
+and raises if any manifest record (training fraction or validation) lacks an
+annotation, or if its split differs. The head pools the site tokens with gated
+attention: LayerNorm, then a sigmoid gate times a value, normalised per channel.
+It predicts cumulative logits for [pH > t], t = 4.75 / 5.75 / 6.75 / 7.75 / 8.25,
+once per structure, on the PINDER AB branch and on pKPDB. The loss is the mean
+BCE over thresholds, weighted by eligibility x parent weight, and is 0 for a batch
+without eligible structures.
+
+Validation adds a `ph` section for PINDER val, pKPDB val and the 142-structure
+benchmark. The expected pH comes from the threshold-bin probabilities and the
+training bin means; the comparison baseline is the training-mean pH. Both are
+fitted on training labels only and stored in the run's `ph-annotations.json`.
+The section reports MAE / RMSE / Spearman, per-threshold AUROC and mean BCE,
+overall and split by source (crystal / EM buffer / NMR), because EM buffer pH is
+concentrated at 7-8. ATLAS (predicted structures) stays masked. PDBbind has no
+production graph store yet.
