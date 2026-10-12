@@ -1094,6 +1094,18 @@ def aux_rescore(root, run):
     atomic_json(out / "aux-rescore.json", result); return result
 
 
+def protocol_inputs(protocol):
+    """(sidechain_view, sidechain_drop, orientation, table, dihedrals, hbonds) as train() recorded them in protocol.json."""
+    arch = protocol["architecture"]; view, drop = "all", 0.0
+    if "sidechain_view" in protocol:
+        text = protocol["sidechain_view"]
+        view = "dropout" if text.startswith("side-chain features hidden") else "titratable" if text.startswith("side-chain features on D/E") else "non-titratable"
+        if view == "dropout": drop = float(text.split("probability ")[1].split(" ")[0])
+    orientation = "orientation_edges" in arch; dihedrals = "dihedral_features" in arch; hbonds = "hbond_features" in arch
+    table = bool(orientation or dihedrals or hbonds or "geometry_auxiliary" in protocol or "chi_auxiliary" in protocol)
+    return view, drop, orientation, table, dihedrals, hbonds
+
+
 def selected_model(root, run):
     """(params at the selected epoch, model_inputs functions (site_embeddings, predict_shift)) rebuilt from a run's
     protocol: architecture, input variants and auxiliary heads, as train() built them."""
@@ -1101,13 +1113,7 @@ def selected_model(root, run):
     from .gqt_regularization import decay_mask
     from .trainer import load_checkpoint
     out = run_dir(root, run); protocol = read(out / "protocol.json"); selection = read(out / "selection.json"); arch = protocol["architecture"]
-    view, drop = "all", 0.0
-    if "sidechain_view" in protocol:
-        text = protocol["sidechain_view"]
-        view = "dropout" if text.startswith("side-chain features hidden") else "titratable" if text.startswith("side-chain features on D/E") else "non-titratable"
-        if view == "dropout": drop = float(text.split("probability ")[1].split(" ")[0])
-    orientation = "orientation_edges" in arch; dihedrals = "dihedral_features" in arch; hbonds = "hbond_features" in arch
-    table = bool(orientation or dihedrals or hbonds or "geometry_auxiliary" in protocol or "chi_auxiliary" in protocol)
+    view, drop, orientation, table, dihedrals, hbonds = protocol_inputs(protocol)
     params, _, _ = make_model(protocol["seed"], width=arch["width"], sidechains="sidechains" in protocol, depth=arch.get("depth", 2),
                               loops=arch.get("loops", 1), orientation=orientation, sidechain_view=view, sidechain_drop=drop, table=table, dihedrals=dihedrals,
                               hbonds=hbonds)
@@ -1155,6 +1161,13 @@ def load_exported(path):
         if node and all(k.isdigit() for k in node): return [lists(node[str(i)]) for i in range(len(node))]
         return {k: lists(v) for k, v in node.items()}
     return lists(tree)
+
+
+def exported_functions(path):
+    """model_inputs functions (site_embeddings, predict_shift) for an exported model, rebuilt from its model.json; use
+    with load_exported's params on graphs carrying the node tables the model was trained with (model.json "protocol")."""
+    model = read(Path(path) / "model.json"); view, drop, orientation, table, dihedrals, hbonds = protocol_inputs(model["protocol"])
+    return model_inputs(model["architecture"].get("loops", 1), orientation, view, drop, table, dihedrals, hbonds)
 
 
 def main(argv=None):
