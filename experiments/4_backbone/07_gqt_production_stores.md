@@ -1029,9 +1029,38 @@ seeds):
   (Spearman at most 0.11, negative on the benchmark), and per-threshold AUROC on pKPDB is 0.48-0.68.
 - W 1 memorises: training pH BCE falls 0.455 -> 0.293 over the cosine phase while validation PINDER pH MAE rises
   from 0.89 (epoch 9) to 0.98; the trunk capacity spent on it is the likely source of the pKa cost.
-- Backbone-only input (base A, no side chains) may simply not carry the crystallisation pH signal. Untested: crystal
-  structures only (mask EM), with side chains (base B), or a stop-gradient probe to measure what the trunk encodes.
-  Production default unchanged.
+- Backbone-only input (base A, no side chains) may simply not carry the crystallisation pH signal. Production
+  default unchanged.
+
+Follow-up, crystal pH only and a stop-gradient probe (2026-10-12). `--ph-sources crystal` masks EM-buffer and NMR
+targets in training, the fit and validation (baseline = crystal training mean 6.78; PINDER 11,923 / 27,933 training
+structures eligible, pKPDB 42,095 / 56,191). `--ph-probe` puts the head on stop_gradient(site tokens) with its own
+optimizer and global clip (`production_ph.separate_optimizer`), so the trunk trains on pKa and burial alone. Base A,
+seeds 17 / 29 / 43 (`...-phx01[-s29,-s43]`: crystal W 0.1 joint; `...-phx-probe[-s29,-s43]`: crystal probe, W 1;
+jobs 7355706-7355711, ~46 min each).
+
+| Arm | Selection (seeds) | State MAE | Interface paired MAE | pKPDB val MAE | Benchmark MAE | Selection vs base A (seed-paired) |
+|---|---|---:|---:|---:|---:|---|
+| crystal W 0.1 | 0.6219 (0.6210 / 0.6173 / 0.6273) | 0.3943 | 0.2276 | 0.4781 | 0.4970 | +0.0006 (0.2 sigma), none |
+| crystal probe | 0.6231 (0.6226 / 0.6242 / 0.6223) | 0.3922 | 0.2308 | 0.4738 | 0.4982 | +0.0018 (0.5 sigma), none |
+
+pH on crystal structures at the selected epoch (ranges over seeds):
+
+| Arm | PINDER (420) | pKPDB (575) | Benchmark (83) |
+|---|---|---|---|
+| training mean | 1.044 | 1.032 | 1.140 |
+| crystal W 0.1 | 1.033-1.061, rho 0.07-0.12 | 1.035-1.043, rho 0.09-0.13 | 1.14-1.22, rho -0.07-0.23 |
+| crystal probe | 1.021-1.039, rho 0.06-0.18 | 1.024-1.033, rho 0.08-0.11 | 1.13-1.18, rho -0.04-0.07 |
+
+- Without EM the joint head is neutral on pKa (as all-source W 0.1) and gains nothing on pH: MAE skill over the
+  crystal mean is at most ~1% on PINDER / pKPDB and negative on the benchmark, Spearman about 0.1.
+- The probe gives the same: the pKa-trained backbone trunk carries almost no crystallisation-pH information (seed-mean
+  MAE skill 0.2-1.3% across epochs, Spearman 0.10-0.13 on PINDER / pKPDB, about 0 on the benchmark). Spearman is
+  already 0.13 after epoch 1, so the little there is is generic (size / composition), not learned from pKa.
+- The probe's trunk sees the same gradients as base A, yet its per-seed selection differs by +0.0043 / +0.0061 /
+  -0.0049: run-to-run GPU nondeterminism alone is on the scale of the pooled sigma.
+- Conclusion: deposited pH is not a useful target for backbone-only input, jointly or as a probe. Dropped; not tried
+  with side chains (base B).
 
 ### 40 epochs, seed ensembles and exported backbone-only models (2026-10-12)
 
