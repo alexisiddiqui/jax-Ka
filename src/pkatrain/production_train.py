@@ -65,6 +65,16 @@ ARCHITECTURE = {"width": 44, "ff": 88}
 def lr_scale(batch): return math.sqrt(batch / 8)
 
 
+def stretched_learning_rate(epoch, batch, batches, epochs, *, start=1e-3, end=1e-5):
+    """gqt_crop_radius.learning_rate's shape over `epochs`: hold `start` for the first half, cosine to `end` by the
+    last epoch (epochs = 20 reproduces it exactly)."""
+    hold = epochs // 2
+    if epoch <= hold: return float(start)
+    within = (batch - 1) / max(batches - 1, 1)
+    fraction = float(np.clip(((epoch - hold - 1) + within) / (epochs - hold - 1), 0.0, 1.0))
+    return float(end + 0.5 * (start - end) * (1 + np.cos(np.pi * fraction)))
+
+
 def predict_shift_separate(params, graph):
     """oGQT shift with separate query/context LayerNorm affine parameters in the site-token query attention
     (pkanet.site_query_norm's path, shift head only): the residue context uses params["query_context_norm"]."""
@@ -777,11 +787,17 @@ def validate(engine, predict, params, sources, manifests, config, out=None, epoc
 def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none", seed=SEED, query_norm="shared", reduction="structure",
           mask_pmin=None, dropout=0.0, aux_weight=None, aux_loss="ce", aux_interface_branch="bound", aux_heads="both", width=None,
           sidechains=False, depth=2, loops=1, orientation=False, sidechain_view="all", sidechain_drop=0.0, geometry_weight=0.0,
-          dihedrals=False, chi_weight=0.0, hbonds=False):
+          dihedrals=False, chi_weight=0.0, hbonds=False, epochs=None):
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
     from .gqt_crop_radius import EPOCHS, MIN_DELTA, PATIENCE, learning_rate
+    # --epochs N (2026-10-12): the schedule stretched over N epochs (hold to N / 2) and patience scaled to 8 N / 20;
+    # the default keeps gqt_crop_radius's 20-epoch schedule and patience 8
+    if epochs is not None and epochs != EPOCHS:
+        total = int(epochs); PATIENCE = PATIENCE * total // EPOCHS
+        learning_rate = lambda epoch, batch, batches: stretched_learning_rate(epoch, batch, batches, total)
+    else: total = EPOCHS
     from .gqt_multitask_replay import JointEngine
     from .trainer import load_checkpoint, save_checkpoint
     root = Path(root); out = run_dir(root, run); out.mkdir(parents=True, exist_ok=True)
@@ -795,7 +811,8 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
         + (f"; residue blocks 3-{depth} from production_depth.deepen" if depth != 2 else "") + ("; W_inject from production_depth.add_injection" if loops != 1 else ""),
         "objective": "gqt_multitask_replay.JointEngine: pKPDB state-shift MSE (train_mask) + PINDER AB/free state-shift MSE + binding-shift MSE; equal coefficients; no site weights",
         "optimizer": "AdamW weight decay 1e-4, global clip 1 after gradient summation",
-        "schedule": f"gqt_crop_radius.learning_rate x {scale:.4f} (1e-3 hold to epoch 10, cosine to 1e-5 by epoch {EPOCHS}); patience {PATIENCE}, min delta {MIN_DELTA}",
+        "schedule": f"gqt_crop_radius.learning_rate x {scale:.4f} (1e-3 hold to epoch 10, cosine to 1e-5 by epoch {EPOCHS}); patience {PATIENCE}, min delta {MIN_DELTA}"
+            if total == EPOCHS else f"stretched_learning_rate x {scale:.4f} (1e-3 hold to epoch {total // 2}, cosine to 1e-5 by epoch {total}); patience {PATIENCE}, min delta {MIN_DELTA}",
         "sampling": "full PINDER fraction per epoch; one pKPDB batch per PINDER batch from a continuing shuffled stream",
         "selection": "min PINDER validation state MAE + interface paired MAE", "validation": (["PINDER 400 (pKAI)", "benchmark-val 142 (PypKa)"] if VERSION == "gqt-production-v1" else
             ["PINDER pool-v4 validation (pKAI, eval_mask)", "pKPDB pool-v4 validation (pKPDB labels, train_mask)", "benchmark-val 142 (PypKa)"]),
@@ -914,7 +931,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     best = min(history, key=lambda h: h["validation"]["selection"]) if history else None; stale = 0
     if history:
         stale = max(0, history[-1]["epoch"] - best["epoch"])
-    epochs = 2 if smoke else EPOCHS
+    epochs = 2 if smoke else total
     for epoch in range(len(history) + 1, epochs + 1):
         if stale >= PATIENCE: break
         pair, pk = epoch_plans(manifests, fraction, epoch, batch, seed)
@@ -1116,6 +1133,7 @@ def main(argv=None):
     p.add_argument("--dihedrals", action="store_true", help="sin/cos phi, psi, omega node features from backbone-v1 (production_inputs)")
     p.add_argument("--chi-weight", type=float, default=0.0, help="chi1 rotamer-class auxiliary weight (production_inputs)")
     p.add_argument("--hbonds", action="store_true", help="DSSP backbone H-bond node features from backbone-v1 (production_inputs)")
+    p.add_argument("--epochs", type=int, default=None, help="schedule length (default 20; others stretch the schedule and patience)")
     p = sub.add_parser("count"); p.add_argument("widths", type=int, nargs="+"); p.add_argument("--sidechains", action="store_true")
     p.add_argument("--depth", type=int, default=2); p.add_argument("--loops", type=int, default=1)
     p = sub.add_parser("export"); p.add_argument("run"); p.add_argument("destination")
@@ -1142,7 +1160,7 @@ def main(argv=None):
         result = train(root, args.run, args.fraction, args.smoke, args.batch, args.paired_weight, args.seed, args.query_norm, args.loss_reduction, args.site_mask_pmin,
                        args.dropout, args.aux_weight, args.aux_loss, args.aux_interface_branch,
                        args.aux_heads, args.width, args.sidechains, args.depth, args.loops, args.orientation, args.sidechain_view, args.sidechain_drop,
-                       args.geometry_weight, args.dihedrals, args.chi_weight, args.hbonds)
+                       args.geometry_weight, args.dihedrals, args.chi_weight, args.hbonds, args.epochs)
         print(json.dumps({"selected_epoch": result["selected_epoch"], "selection": result["validation"]["selection"]}))
 
 
