@@ -967,3 +967,32 @@ PINDER, orientation + side-chain dropout checkpoint (no dihedrals); pKPDB agrees
   candidates for an explicit input.
 - A linear residual test (feature x group interactions on the site's own features) found nothing for any feature,
   including phi/psi, so it cannot detect the kind of gain dihedrals gave and is not used for decisions.
+
+### Backbone H-bond features (2026-10-12)
+
+`--hbonds` (`pkatrain.production_inputs.backbone_hbonds`): 6 node features per residue from backbone atoms only,
+computed on the device over the residue-graph edges: DSSP electrostatic H-bond energy of the residue's best backbone
+donor (its N-H) and best acceptor (its C=O) / 9.9, bonded flags (E < -0.5 kcal/mol), has-H and has-O flags (no H on
+proline, chain starts or after a missing O). Matches a full-matrix DSSP to 5e-7 kcal/mol on 200 validation
+structures per dataset; 62% of backbone N-H and 59% of C=O are H-bonded; O is missing for 2 of 80K pKPDB residues.
+Two arms, 3 seeds each, same fixed config, backbone-only validation. Pooled sigma 0.0038 (44 df; 2 sigma = 0.0076).
+
+| Arm | Selection (seeds) | State MAE | Interface paired MAE | pKPDB val MAE | Benchmark MAE | vs base |
+|---|---|---:|---:|---:|---:|---|
+| dihedrals + orientation (base A, no side chains anywhere) | 0.6212 | 0.3923 | 0.2289 | 0.4744 | 0.4971 | |
+| base A + H-bonds | 0.6221 (0.6193 / 0.6220 / 0.6250) | 0.3935 | 0.2286 | 0.4764 | 0.4949 | +0.0009, none |
+| dihedrals + orientation + side-chain dropout (base B) | 0.6080 | 0.3860 | 0.2219 | 0.4692 | 0.4902 | |
+| base B + H-bonds | 0.6050 (0.6102 / 0.5992 / 0.6055) | 0.3843 | 0.2206 | 0.4693 | 0.4901 | -0.0030, not real |
+
+Probe of the base A checkpoints (PINDER; pKPDB agrees within 0.04), R^2 from the site embedding:
+
+| Feature | base A | base A + H-bonds |
+|---|---:|---:|
+| own N-H / C=O H-bond energy | 0.25 / 0.23 | 0.60 / 0.58 |
+| free backbone N-H within 8 A | 0.24 | 0.40 |
+| free N-H pointing at the site | 0.23 | 0.36 |
+| free backbone C=O within 8 A | 0.24 | 0.41 |
+
+- A clean negative: with the H-bond inputs the model does encode backbone H-bond status (probe R^2 roughly doubles),
+  but pKa accuracy does not move in either base. Once dihedrals are given, which free backbone N-H / C=O groups
+  surround a site adds nothing the pKa head can use.
