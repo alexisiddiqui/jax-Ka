@@ -1092,3 +1092,13 @@ the runs. Pooled sigma over the four groups 0.0040 (8 df).
   - `models/ogqt-backbone-orient-dihed-scdrop50` (B, 40 epochs): 148,002 parameters, epoch 39, selection 0.6011,
     benchmark MAE 0.4900. It needs no side chains at inference (the 128 side-chain columns are zeroed without a key).
   - `pkatrain.production_train.exported_functions(path)` rebuilds the input transform from `model.json`.
+
+### Iteration base: backbone-only A (decision, 2026-10-12)
+
+The user's decision: iterate on **base A** (width 64, dropout 0.1, burial W 1, `--orientation --dihedrals`, no side
+chains, 20 epochs, seeds 17 / 29 / 43; `prod-100pct-w64-drop10-bur1-orient-dihed[-s29,-s43]`, selection 0.6212).
+Side-chain dropout (base B, -0.0133 vs A, real) goes back on as a final layer once the rest is settled. A is faster
+to iterate on: about 120 s per epoch against 136 s, with no side-chain table to load. 40 epochs and seed
+ensembling are also deferred to that final stage (above: 40 epochs not real; ensembles about -0.009). New arms are
+compared seed-paired against the three base-A runs with `scripts/seed_compare.py`. Handoff:
+`experiments/4_backbone/07_handoff.md`.
