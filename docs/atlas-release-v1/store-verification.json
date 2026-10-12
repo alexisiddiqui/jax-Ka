@@ -1,0 +1,11 @@
+{
+  "bytes": 580207045094,
+  "files": {
+    "index.npz": "90318946e59e2d6a5ed1105a986f579a24506cfa34746db6f9aaf6e5d5acacbe",
+    "metadata.json": "1d4a28fae2f1804f763eccd9edc372e0c5c59bb74b2068e2e654abde75de1dde",
+    "records.bin": "18217145390bb6500f6903f9f42669929363b0a7e3361a220780c16168c30e5f",
+    "records.json": "a1ca5353e3d45998b60e9dbd5567ba88cfd5002e85b2f868f5c3b8cb093812aa"
+  },
+  "passed": true,
+  "records_checked": 155580
+}

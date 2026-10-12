@@ -1,0 +1,65 @@
+{
+  "accepted": 155580,
+  "cohorts": {
+    "36_pathogens": 36369,
+    "additional_bacteria_or_archaea": 67665,
+    "arabidopsis": 5703,
+    "human": 25529,
+    "human-virus": 3332,
+    "mouse": 8079,
+    "virulence-factor": 8903
+  },
+  "component_overlap": 0,
+  "eligible_sites": 19443604,
+  "fractions": {
+    "10": {
+      "active": 15362,
+      "active_sha256": "0e23e234134183b713e201cf1df31fa88b210ccf5c8ab3a20a90c1f6168d4f3a",
+      "inactive": 5,
+      "membership_sha256": "05a34d13e95d26a17c49e254013eda26006ca64b6a0da20a4be0a9b9104c47fd",
+      "requested": 15367
+    },
+    "100": {
+      "active": 153584,
+      "active_sha256": "22469e8d5512de3ffcc28b054bb57a2337c76e640894c11d8f8ff3518a68053b",
+      "inactive": 93,
+      "membership_sha256": "9b8dbe25f81905eef9cb4bb28e18f558ee710d60e2f7bcf910a0ebc5410627fd",
+      "requested": 153677
+    },
+    "50": {
+      "active": 76798,
+      "active_sha256": "e6a333f0a5e61bf7f960d6fcc9c14553015a0a9f8083282e33ef21ca4d048168",
+      "inactive": 40,
+      "membership_sha256": "c7cf13321e1fc49a683a30aa559caf62d72405116e4ac686019349d076b58e55",
+      "requested": 76838
+    },
+    "75": {
+      "active": 115191,
+      "active_sha256": "67e27c8f32c8c9bfd27b2dd3008c8fea0669abb6d5ca036c4b73656aaf2aeb18",
+      "inactive": 66,
+      "membership_sha256": "e1626d9beac64bfba1a2c9144400db33fef9037b90be259a45b3e10f7753e3e3",
+      "requested": 115257
+    }
+  },
+  "graph_policy_sha256": "79a85ec238d5d4b57c8119ea15e36ebf7ebdf0e4687067ce059a3ffa6483f7f2",
+  "inactive": 97,
+  "inactive_reasons": {
+    "no_eligible_paired_interface_sites": 97
+  },
+  "nested": true,
+  "reused_graphs": 99014,
+  "scope": "original full ATLAS frozen split, all source cohorts",
+  "shared_validation": true,
+  "site_masks": {
+    "site_pLDDT_below_70_or_missing": 6285111,
+    "source_mask": 2240,
+    "teacher_unsupported_or_missing": 4447159
+  },
+  "source_count": 155677,
+  "source_inventory_sha256": "da776c931e1baa3b963881b082ccf98759adc35132480aa21e013beefaa5ea73",
+  "training_active": 153584,
+  "training_requested": 153677,
+  "training_started": false,
+  "validation_active": 1996,
+  "validation_requested": 2000
+}

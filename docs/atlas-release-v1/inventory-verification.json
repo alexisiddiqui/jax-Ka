@@ -1,0 +1,29 @@
+{
+  "source_count": 155677,
+  "train": 153677,
+  "validation": 2000,
+  "cohorts": {
+    "36_pathogens": 36422,
+    "virulence-factor": 8922,
+    "additional_bacteria_or_archaea": 67681,
+    "human": 25535,
+    "mouse": 8080,
+    "arabidopsis": 5704,
+    "human-virus": 3333
+  },
+  "pilot": 513,
+  "free_bytes": 3732442861568,
+  "source_hashes": {
+    "/scratch/u6xq/hussain.u6xq/_runtime/jax-Ka/pkabench/pretraining/atlas-prepared-v1/split-v1/train.tsv": "9b8dbe25f81905eef9cb4bb28e18f558ee710d60e2f7bcf910a0ebc5410627fd",
+    "/scratch/u6xq/hussain.u6xq/_runtime/jax-Ka/pkabench/pretraining/atlas-prepared-v1/split-v1/val.tsv": "8bbf578a789bfbd181bc9ce19e38cd467a67fb40a591c91010a206a2c08a84ae",
+    "/scratch/u6xq/hussain.u6xq/_runtime/jax-Ka/pkabench/pretraining/atlas-prepared-v1/split-v1/manifest.json": "049970e6be32adaa7843e8f656b095a3003569c99617f9c90da83c114d3656ad"
+  },
+  "code_hashes": {
+    "finalize.py": "9df108531c23bb39b9bc9f5b112b1452a466516c536be58bd8b9f4097652dbf7",
+    "inventory.py": "b7d32655c88c2299377ba302266278d3a45385e9f8d064f8143a59b26f79ee5f",
+    "build.py": "9501d5a0fe982e938f629eb6ea90d8d4b01fe395124a443f7b9996e68dc60df5",
+    "smoke.py": "1663836a37b327f06f488399684a18657be39ec530c51f206e9fabb2f53476c6",
+    "preflight.py": "bdf488a5f5a3855d1f7d147ae3abb2a4234ae3603ee2b48196e3fc5937e48fd6"
+  },
+  "training_started": false
+}

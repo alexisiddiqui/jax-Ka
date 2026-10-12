@@ -263,3 +263,7 @@ reports/            executed test logs and synthetic CPU benchmark data
 ```
 
 Upstream parameter and API references are recorded in [SOURCES.md](SOURCES.md). This project does not vendor PROPKA or Biotite source code. See each dependency's license separately.
+
+The [ATLAS preparation guide](tools/atlas/README.md) records the full-dataset
+Isambard pipeline, frozen validation split, nested 10%/50%/75% training portions,
+compressed graph release and completed GPU smoke checks.

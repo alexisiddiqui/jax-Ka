@@ -1,0 +1,33 @@
+{
+  "passed": true,
+  "requested_membership_unchanged": true,
+  "nested_active_portions": true,
+  "validation_evaluated_once": true,
+  "train_validation_id_overlap": 0,
+  "train_validation_component_overlap": 0,
+  "receipts_match_code": true,
+  "training_active": 153584,
+  "validation_active": 1996,
+  "files": {
+    "summary.json": "7f8c7e4cc6fef2da830235bcf96cb189b362f8ceab16ec620ec3fe891d377679",
+    "config-100.json": "c6a780ab03fe93027c5bf267322b160567cf41c39bda54ecb9d4a8d766dbb56e",
+    "train-075-active.tsv": "67e27c8f32c8c9bfd27b2dd3008c8fea0669abb6d5ca036c4b73656aaf2aeb18",
+    "validation-active.tsv": "42efcaf51c3195d5ec8db2cac956bffcb91b425722273a185305776223a0c300",
+    "train-075.tsv": "e1626d9beac64bfba1a2c9144400db33fef9037b90be259a45b3e10f7753e3e3",
+    "train-100.tsv": "9b8dbe25f81905eef9cb4bb28e18f558ee710d60e2f7bcf910a0ebc5410627fd",
+    "train-010.tsv": "05a34d13e95d26a17c49e254013eda26006ca64b6a0da20a4be0a9b9104c47fd",
+    "train-010-active.tsv": "0e23e234134183b713e201cf1df31fa88b210ccf5c8ab3a20a90c1f6168d4f3a",
+    "config-075.json": "e47dcb7524e7059c43e878d6c43fdadc5d4dd76da4525ee05450f9067cd5f38e",
+    "inactive-records.json": "c3c632ff8bebde7528c039239d802a7d0d6fff132f60c80732ad22215a5475e9",
+    "readiness.json": "e12469418a6d49d9c73f8a87dda919121eecaac6d043517c12483e1a11037e81",
+    "store-verification.json": "7963a5b3dee1a2c33f3982381467f77b746460844d961530786f0403d6f82734",
+    "smoke.json": "8592740c3b5efb13fb6b5805ce8ff10fc5fb7a5e07731f180ec47e5ef6a61841",
+    "train-100-active.tsv": "22469e8d5512de3ffcc28b054bb57a2337c76e640894c11d8f8ff3518a68053b",
+    "train-050.tsv": "c7cf13321e1fc49a683a30aa559caf62d72405116e4ac686019349d076b58e55",
+    "train-050-active.tsv": "e6a333f0a5e61bf7f960d6fcc9c14553015a0a9f8083282e33ef21ca4d048168",
+    "config-010.json": "4b255660e57795435c0a7ae7e919cfc1b18f5a4c3f43865138e43e4f133d2a70",
+    "validation.tsv": "8bbf578a789bfbd181bc9ce19e38cd467a67fb40a591c91010a206a2c08a84ae",
+    "config-050.json": "1ddcdaaf3d0f5a199e2dbfa9785496d75214119f6f33e8c8184a824ee4d4f0a2",
+    "inventory-verification.json": "ee0433293e32e88bec86ae150fa52ad38aad370bb44c02bcf8e3d8fd68ff55e3"
+  }
+}
