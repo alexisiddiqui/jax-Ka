@@ -1032,3 +1032,34 @@ seeds):
 - Backbone-only input (base A, no side chains) may simply not carry the crystallisation pH signal. Untested: crystal
   structures only (mask EM), with side chains (base B), or a stop-gradient probe to measure what the trunk encodes.
   Production default unchanged.
+
+### 40 epochs, seed ensembles and exported backbone-only models (2026-10-12)
+
+Bases A (orientation + dihedrals) and B (A + side-chain dropout 0.5), both width 64, dropout 0.1, burial W 1, 100%
+pool, retrained for 40 epochs with `--epochs 40` (`stretched_learning_rate`: 1e-3 held to epoch 20, cosine to 1e-5 by
+epoch 40; patience 16), seeds 17 / 29 / 43 (`prod-100pct-w64-drop10-bur1-{orient-dihed,orient-scdrop50-dihed}-e40[-s29,-s43]`,
+jobs 7345731, 7345733-7345737, 82-92 min each, ~125 s per epoch). Seed 17 was declared as the export seed before
+the runs. Pooled sigma over the four groups 0.0040 (8 df).
+
+| Arm | Selection (seeds) | Selected epochs | State MAE | Interface paired MAE | pKPDB val MAE | Benchmark MAE | 3-seed ensemble selection (benchmark MAE) |
+|---|---|---|---:|---:|---:|---:|---|
+| A, 20 epochs | 0.6212 (0.6183 / 0.6182 / 0.6272) | 17 / 17 / 18 | 0.3923 | 0.2289 | 0.4744 | 0.4971 | 0.5941 (0.4829) |
+| A, 40 epochs | 0.6174 (0.6217 / 0.6112 / 0.6194) | 37 / 33 / 32 | 0.3896 | 0.2278 | 0.4746 | 0.4973 | 0.5851 (0.4805) |
+| B, 20 epochs | 0.6080 (0.6079 / 0.6070 / 0.6090) | 20 / 17 / 18 | 0.3860 | 0.2219 | 0.4692 | 0.4902 | 0.5872 (0.4780) |
+| B, 40 epochs | 0.6035 (0.6011 / 0.6057 / 0.6036) | 39 / 33 / 32 | 0.3832 | 0.2203 | 0.4651 | 0.4901 | 0.5788 (0.4783) |
+
+- 40 vs 20 epochs is not a real difference by the 2-sigma rule for either base. A: -0.0038 (1.0 sigma), 2 of 4
+  metrics agree, seed 17 worse. B: -0.0045 (1.1 sigma), all four metrics lower and every seed better, but under the
+  bar. It costs twice the compute.
+- B is better than A at 40 epochs as at 20: -0.0139 selection (3.5 sigma), all four metrics agree. Side-chain
+  dropout stays in the backbone-only default.
+- Seed ensembling (averaging the three seeds' selected-epoch predictions, `scripts/ensemble_eval.py`) gains about
+  0.009 selection at either length, twice the 40-epoch gain. The best backbone-only number is the B 40-epoch
+  ensemble, 0.5788 (state MAE 0.3699, interface paired MAE 0.2089, pKPDB 0.4529). The benchmark MAE is flat at
+  0.478-0.483 across ensembles.
+- Exported (seed 17, selected checkpoint, reload checked parameter-identical):
+  - `models/ogqt-backbone-orient-dihed` (A, 40 epochs): 139,810 parameters, epoch 37, selection 0.6217, benchmark
+    MAE 0.4930.
+  - `models/ogqt-backbone-orient-dihed-scdrop50` (B, 40 epochs): 148,002 parameters, epoch 39, selection 0.6011,
+    benchmark MAE 0.4900. It needs no side chains at inference (the 128 side-chain columns are zeroed without a key).
+  - `pkatrain.production_train.exported_functions(path)` rebuilds the input transform from `model.json`.
