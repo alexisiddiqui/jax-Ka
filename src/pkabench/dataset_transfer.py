@@ -210,6 +210,13 @@ def dataset_files(root, dataset, scope="pool"):
         parts["core"] += [f"{PKAI_VALIDATION}/{p.name}" for p in sorted(folder.iterdir()) if p.is_file()]
     else:
         raise ValueError(dataset)
+    # Immutable annotations are loose sidecars outside the read-only dataset images.
+    if dataset in ("pinder", "pkpdb"):
+        from pkabench.experimental_ph import annotation_dir
+        folder = annotation_dir(root, dataset)
+        if folder.exists():
+            parts["core"] += [str((folder / name).relative_to(root)) for name in
+                              ("manifest.json", "records.jsonl", "pdb-evidence.jsonl")]
     missing = [rel for rels in parts.values() for rel in rels if not (root / rel).is_file()]
     if missing: raise FileNotFoundError(f"{len(missing)} missing files, e.g. {missing[:5]}")
     return {part: rels for part, rels in parts.items() if rels}
