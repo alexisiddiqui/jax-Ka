@@ -847,3 +847,33 @@ vs 32 (-0.0072, 4 / 4) just clears the bar.
 - Side-chain dropout and residue-edge orientation both move the backbone-only model in the right direction (all
   three seeds below every backbone seed in both arms; seed SDs 0.0014 and 0.0013) but each stays under 2 sigma.
 - Cost: no arm changes the time per epoch (127-131 s).
+
+### Combining orientation and side-chain dropout; titratable geometry auxiliary (2026-10-12)
+
+Same fixed config and seeds; backbone-only validation in every arm. Geometry auxiliary (`--geometry-weight 1`,
+`pkatrain.production_inputs.geometry_targets`): two heads on the final site embedding predict, for each D/E/H/C/Y/K/R
+query site, the centroid of its functional atoms in its own backbone frame (A / 10, squared error) and a salt-bridge
+score clip(exp(-(d - 4) / 2), 0, 1), d the distance to the nearest opposite-charge functional centroid among its
+residue-graph neighbours (cross-entropy); targets come from the hidden side-chain table and backbone-v1, on both
+PINDER branches and pKPDB. Target check on 400 validation structures per dataset: median centroid distance from CA
+D 3.1, E 4.2-4.4, H 3.8, K 5.7-5.8, R 5.2-6.3 A; partner score > 0.5 for 24% of PINDER and 38% of pKPDB titratable
+sites (lower in PINDER for every residue type; not yet explained). `geom1` never shows side chains to the model
+(`--sidechain-drop 1.0`).
+
+Pooled sigma over the thirteen 3-seed groups: 0.0038 (26 df; 2 sigma = 0.0076). Backbone width 64 vs 32 (-0.0072)
+falls back under the bar.
+
+| Arm | Selection (seeds) | State MAE | Interface paired MAE | pKPDB val MAE | Benchmark MAE | vs backbone 0.6503 |
+|---|---|---:|---:|---:|---:|---|
+| backbone (reference) | 0.6503 (0.6520 / 0.6514 / 0.6475) | 0.4143 | 0.2360 | 0.5020 | 0.5220 | |
+| orientation | 0.6459 | 0.4106 | 0.2353 | 0.4947 | 0.5167 | -0.0044, not real |
+| side-chain dropout 0.5 | 0.6443 | 0.4142 | 0.2301 | 0.5022 | 0.5199 | -0.0060, not real |
+| **orientation + side-chain dropout 0.5** | **0.6402** (0.6378 / 0.6339 / 0.6488) | **0.4080** | **0.2322** | **0.4946** | **0.5126** | **-0.0101 (2.7 sigma, 4 / 4), real** |
+| geometry auxiliary only | 0.6538 (0.6531 / 0.6518 / 0.6565) | 0.4163 | 0.2375 | 0.5033 | 0.5226 | +0.0035, not real |
+| geometry + orientation + dropout 0.5 | 0.6396 (0.6386 / 0.6369 / 0.6433) | 0.4077 | 0.2319 | 0.4957 | 0.5136 | -0.0107 (2.8 sigma, 4 / 4), real |
+
+- Orientation and side-chain dropout add up: together they are the first backbone-only change to clear 2 sigma
+  (-0.010 selection, -1.6%; benchmark MAE 0.522 -> 0.513), at the same time per epoch.
+- The geometry auxiliary does nothing: alone it is level with backbone, and on top of orientation + dropout it moves
+  selection by -0.0006. Predicting the functional-group position and salt-bridge partner from the backbone does not
+  transfer into the pKa head (whether the heads themselves learn their targets was not measured).
