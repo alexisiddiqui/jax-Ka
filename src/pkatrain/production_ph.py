@@ -19,6 +19,11 @@ once per structure: never one loss term per residue.
 - Evaluation (fit on training labels only, `fit`): expected pH = sum over the threshold bins of P(bin) x the training
   mean pH in that bin (P from the cumulative sigmoids, made monotone); compared with the training-mean baseline (MAE /
   RMSE), plus Spearman, per-threshold AUROC and mean BCE, overall and per source (crystal / EM buffer / NMR).
+- Variants (2026-10-12, after the first pilot's head learned EM vs crystal rather than pH):
+  sources "crystal" (--ph-sources crystal): only crystallisation-pH targets; EM-buffer and NMR structures are masked
+  everywhere (training loss, the fit, validation), so the baseline is the crystal training mean.
+  probe (--ph-probe): the head reads stop_gradient(tokens) and has its own optimizer (separate_optimizer: own global
+  clip), so the pH loss cannot change the trunk; it measures what the pKa-trained trunk already encodes.
 """
 from __future__ import annotations
 
@@ -28,6 +33,7 @@ from pkabench.experimental_ph import FORMAT_V4, VALIDATION_V1, load_v4, load_val
 
 THRESHOLDS = (4.75, 5.75, 6.75, 7.75, 8.25)
 SALT = 7_0_1_4  # fold_in salt for the head's key (initialisation independent of the other heads)
+SOURCES = ("all", "crystal")
 VALIDATION_COHORTS = {"pinder": "pinder-pool-v4", "pkpdb": "pkpdb-pool-v4", "benchmark-val": "benchmark_active_val142"}
 
 
@@ -42,12 +48,17 @@ def source_category(row):
 class PhTable:
     """Per-structure pH annotations for the production manifests, verified against their membership."""
 
-    def __init__(self, root, manifests, fraction):
+    def __init__(self, root, manifests, fraction, sources="all"):
+        if sources not in SOURCES: raise ValueError(sources)
         self.rows = {"pinder": dict(load_v4(root, "pinder")), "pkpdb": dict(load_v4(root, "pkpdb")), "benchmark-val": {}}
         for dataset, cohort in VALIDATION_COHORTS.items():
             for cid, row in load_validation(root, cohort).items():
                 if cid in self.rows[dataset]: raise ValueError(f"{dataset} {cid}: in both training and validation annotations")
                 self.rows[dataset][cid] = row
+        if sources == "crystal":
+            masked = lambda r: {**r, "ph_target": None, "ph_mask": False, "ph_quality_weight": 0.0}
+            self.rows = {d: {cid: r if not r["ph_mask"] or source_category(r) == "crystal" else masked(r) for cid, r in rows.items()}
+                         for d, rows in self.rows.items()}
         self.coverage = {}
         for dataset, manifest in manifests.items():
             for split in ("train", "val"):
@@ -63,7 +74,7 @@ class PhTable:
         self.train = [self.rows[d][r["id"]] for d in ("pinder", "pkpdb") for r in manifests[d]["records"]
                       if r["split"] == "train" and r["min_fraction"] <= fraction + 1e-12]
         self.stats = fit(self.train)
-        self.provenance = {"training": f"annotations/{FORMAT_V4}", "validation": {d: f"{VALIDATION_V1}/{c}" for d, c in VALIDATION_COHORTS.items()},
+        self.provenance = {**({"sources": sources} if sources != "all" else {}), "training": f"annotations/{FORMAT_V4}", "validation": {d: f"{VALIDATION_V1}/{c}" for d, c in VALIDATION_COHORTS.items()},
                            "coverage": self.coverage, "fit": self.stats}
 
     def arrays(self, dataset, ids, size):
@@ -95,6 +106,20 @@ def initialize(params, seed):
     head = lambda key, out: {"w": jax.random.normal(key, (width, out), jnp.float32) / jnp.sqrt(float(width)), "b": jnp.zeros(out, jnp.float32)}
     return {**params, "aux_ph": {"norm": jnp.stack((jnp.ones(width), jnp.zeros(width))), "gate": head(kg, width), "value": head(kv, width),
                                  "out": head(ko, len(THRESHOLDS))}}
+
+
+def separate_optimizer(params, make):
+    """Optimizer `make(subtree)` run separately on the trunk and on aux_ph (own global-norm clip and Adam state), so a
+    stop-gradient probe's gradient cannot rescale the trunk update."""
+    import optax
+    trunk = lambda tree: {k: v for k, v in tree.items() if k != "aux_ph"}
+    rest, head = make(trunk(params)), make(params["aux_ph"])
+
+    def update(gradient, state, p=None):
+        u, s = rest.update(trunk(gradient), state[0], None if p is None else trunk(p))
+        v, t = head.update(gradient["aux_ph"], state[1], None if p is None else p["aux_ph"])
+        return {**u, "aux_ph": v}, (s, t)
+    return optax.GradientTransformation(lambda p: (rest.init(trunk(p)), head.init(p["aux_ph"])), update)
 
 
 def pooled_logits(p, tokens, site_mask):

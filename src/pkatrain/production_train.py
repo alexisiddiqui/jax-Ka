@@ -329,10 +329,11 @@ class AuxEngine:
     (production_aux rsa-bound-v1, < 0 masked).
     ph_weight (--ph-weight, 2026-10-12): + ph_weight x structure-level experimental-pH cumulative BCE from the pooled
     head aux_ph (production_ph); PINDER AB branch and pKPDB, each structure weighted by eligibility x parent weight.
-    The objectives then take ph=(target, weight) per structure (production_ph.PhTable.arrays)."""
+    The objectives then take ph=(target, weight) per structure (production_ph.PhTable.arrays). ph_probe (--ph-probe):
+    the pH head reads stop_gradient(tokens) and trains under production_ph.separate_optimizer (trunk untouched)."""
 
     def __init__(self, params, weight, rate=0.0, mode="ce", interface_branch="bound", heads="both", site_embeddings=None, geometry_weight=0.0, chi_weight=0.0,
-                 ph_weight=0.0):
+                 ph_weight=0.0, ph_probe=False):
         import jax
         import jax.numpy as jnp
         import optax
@@ -347,7 +348,9 @@ class AuxEngine:
         if heads == "burial-siamese" and mode != "ce": raise ValueError("Siamese burial is implemented for mode ce")
         self.heads = heads; use_interface = heads == "both"; siamese = heads == "burial-siamese"
         self.mode = mode; self.interface_branch = branch = 1 if interface_branch == "free" else 0
-        self.optimizer = optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(1.0, weight_decay=1e-4, mask=decay_mask(params)))
+        from . import production_ph
+        make = lambda tree: optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(1.0, weight_decay=1e-4, mask=decay_mask(tree)))
+        self.optimizer = production_ph.separate_optimizer(params, make) if ph_probe else make(params)
         reference = jnp.asarray(PKPDB_PK_MOD, jnp.float32); rate = float(rate); weight = float(weight)
         cuts = jnp.asarray(BURIAL_RSA_CUTS, jnp.float32); thresholds = jnp.asarray(INTERFACE_THRESHOLDS, jnp.float32)
 
@@ -360,7 +363,6 @@ class AuxEngine:
 
         geometry_weight = float(geometry_weight); chi_weight = float(chi_weight); structural = bool(geometry_weight or chi_weight)
         self.ph_weight = ph_weight = float(ph_weight)
-        from . import production_ph
 
         def predict_all(p, graph, key=None):
             tokens, query_site = site_embeddings_indexed(p, graph, key=key, dropout_rate=rate if key is not None else 0.0)
@@ -371,7 +373,7 @@ class AuxEngine:
                                     (linear(p["aux_geom_pos"], tokens)[query_site], linear(p["aux_partner"], tokens)[query_site, 0], *geometry_targets(graph))))
             if chi_weight:
                 geometry.update(zip(("chi", "chi_class", "chi_mask"), (linear(p["aux_chi"], tokens)[query_site], *chi1_targets(graph))))
-            ph = production_ph.pooled_logits(p["aux_ph"], tokens, graph["site_mask"]) if ph_weight else jnp.zeros((len(production_ph.THRESHOLDS),), jnp.float32)
+            ph = production_ph.pooled_logits(p["aux_ph"], jax.lax.stop_gradient(tokens) if ph_probe else tokens, graph["site_mask"]) if ph_weight else jnp.zeros((len(production_ph.THRESHOLDS),), jnp.float32)
             return (8 * jnp.tanh(linear(p["head"], tokens)[:, 0]))[query_site], linear(p["aux_burial"], tokens)[query_site], \
                 (linear(p["aux_interface"], tokens)[query_site] if use_interface else jnp.zeros((query_site.shape[0], 1), jnp.float32)), geometry, ph
 
@@ -805,7 +807,7 @@ def validate(engine, predict, params, sources, manifests, config, out=None, epoc
 def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none", seed=SEED, query_norm="shared", reduction="structure",
           mask_pmin=None, dropout=0.0, aux_weight=None, aux_loss="ce", aux_interface_branch="bound", aux_heads="both", width=None,
           sidechains=False, depth=2, loops=1, orientation=False, sidechain_view="all", sidechain_drop=0.0, geometry_weight=0.0,
-          dihedrals=False, chi_weight=0.0, hbonds=False, epochs=None, ph_weight=0.0):
+          dihedrals=False, chi_weight=0.0, hbonds=False, epochs=None, ph_weight=0.0, ph_sources="all", ph_probe=False):
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
@@ -878,6 +880,9 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
                             f"(LayerNorm, sigmoid gate x value, per-channel normalised) -> cumulative BCE over [pH > t], t in {list(PH_THRESHOLDS)}; "
                             "PINDER AB branch and pKPDB; structure weight = eligibility x parent weight; no per-residue repetition"}
            if ph_weight else {}),
+        **({"ph_sources": "crystallisation pH only; EM-buffer and NMR targets masked in training, fit and validation"} if ph_sources != "all" else {}),
+        **({"ph_probe": "pH head on stop_gradient(site tokens) with its own optimizer and clip (production_ph.separate_optimizer): "
+                        "the trunk trains on the pKa and burial objectives alone"} if ph_probe else {}),
         **({"hbonds": "production_inputs.backbone_hbonds: DSSP backbone H-bond energies (best donor / acceptor / 9.9, bonded flags, has-H / has-O) "
                        "from backbone-v1 over the residue-graph edges appended to the node features (6); embedding +6 rows"} if hbonds else {}),
         **({"dihedrals": "production_inputs.backbone_dihedrals: sin/cos phi, psi, omega from backbone-v1 appended to the node features (6); embedding +6 rows"}
@@ -900,7 +905,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     ph_table = None
     if ph_weight:
         from .production_ph import PhTable
-        ph_table = PhTable(root, manifests, fraction)
+        ph_table = PhTable(root, manifests, fraction, ph_sources)
         stored = read(out / "ph-annotations.json") if (out / "ph-annotations.json").exists() else None
         if stored is not None and stored != json.loads(json.dumps(ph_table.provenance)): raise AssertionError(f"{out}: pH annotations changed")
         atomic_json(out / "ph-annotations.json", ph_table.provenance)
@@ -922,6 +927,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
         raise ValueError("--width / --sidechains combine with the default objective, dropout and auxiliaries only")
     if sidechain_view != "all" and not sidechains: raise ValueError("--sidechain-view needs --sidechains")
     if (sidechain_view == "dropout") != (sidechain_drop > 0): raise ValueError("--sidechain-drop goes with --sidechain-view dropout")
+    if (ph_sources != "all" or ph_probe) and not ph_weight: raise ValueError("--ph-sources / --ph-probe need --ph-weight")
     if ph_weight and aux_weight is None: raise ValueError("--ph-weight runs through AuxEngine (use --aux-weight, e.g. with --aux-heads burial)")
     if (geometry_weight or chi_weight) and (sidechain_view != "dropout" or aux_weight is None):
         raise ValueError("--geometry-weight / --chi-weight need --sidechains --sidechain-view dropout (side chains hidden from validation) and --aux-weight")
@@ -945,7 +951,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
         if ph_weight:
             from .production_ph import initialize as initialize_ph
             params = initialize_ph(params, seed)
-        engine = AuxEngine(params, aux_weight, dropout, aux_loss, aux_interface_branch, aux_heads, embeddings_fn, geometry_weight, chi_weight, ph_weight)
+        engine = AuxEngine(params, aux_weight, dropout, aux_loss, aux_interface_branch, aux_heads, embeddings_fn, geometry_weight, chi_weight, ph_weight, ph_probe)
         engine.ph_table = ph_table
         state = engine.optimizer.init(params)
         step_key = jax.random.PRNGKey(seed + 200003)
@@ -1193,6 +1199,8 @@ def main(argv=None):
     p.add_argument("--hbonds", action="store_true", help="DSSP backbone H-bond node features from backbone-v1 (production_inputs)")
     p.add_argument("--epochs", type=int, default=None, help="schedule length (default 20; others stretch the schedule and patience)")
     p.add_argument("--ph-weight", type=float, default=0.0, help="structure-level experimental pH auxiliary weight (production_ph; needs --aux-weight)")
+    p.add_argument("--ph-sources", choices=("all", "crystal"), default="all", help="pH targets: all deposited sources, or crystallisation pH only")
+    p.add_argument("--ph-probe", action="store_true", help="pH head on stop-gradient site tokens with its own optimizer (trunk unaffected)")
     p = sub.add_parser("count"); p.add_argument("widths", type=int, nargs="+"); p.add_argument("--sidechains", action="store_true")
     p.add_argument("--depth", type=int, default=2); p.add_argument("--loops", type=int, default=1)
     p = sub.add_parser("export"); p.add_argument("run"); p.add_argument("destination")
@@ -1219,7 +1227,8 @@ def main(argv=None):
         result = train(root, args.run, args.fraction, args.smoke, args.batch, args.paired_weight, args.seed, args.query_norm, args.loss_reduction, args.site_mask_pmin,
                        args.dropout, args.aux_weight, args.aux_loss, args.aux_interface_branch,
                        args.aux_heads, args.width, args.sidechains, args.depth, args.loops, args.orientation, args.sidechain_view, args.sidechain_drop,
-                       args.geometry_weight, args.dihedrals, args.chi_weight, args.hbonds, args.epochs, args.ph_weight)
+                       args.geometry_weight, args.dihedrals, args.chi_weight, args.hbonds, args.epochs, args.ph_weight,
+                       args.ph_sources, args.ph_probe)
         print(json.dumps({"selected_epoch": result["selected_epoch"], "selection": result["validation"]["selection"]}))
 
 
