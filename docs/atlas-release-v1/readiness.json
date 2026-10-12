@@ -1,0 +1,11 @@
+{
+  "active_dataset_modified": false,
+  "active_validation": 1996,
+  "frozen_validation_membership": 2000,
+  "full_training_started": false,
+  "limitation": "Technical batch-2 smoke, uniform weighting; no convergence or production-batch memory claim",
+  "scope": "full ATLAS uniform-weight paired backbone oGQT",
+  "smoke_sha256": "8592740c3b5efb13fb6b5805ce8ff10fc5fb7a5e07731f180ec47e5ef6a61841",
+  "summary_sha256": "7f8c7e4cc6fef2da830235bcf96cb189b362f8ceab16ec620ec3fe891d377679",
+  "technical_checks_passed": true
+}

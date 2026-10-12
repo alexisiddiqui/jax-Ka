@@ -1,0 +1,31 @@
+{
+  "source_sha256": "08740c654b0be90ed0284ece0f50e6c506f6ba2725de8c882d394cd9c43b36d3",
+  "source_bytes": 858480917,
+  "rows": 1140264,
+  "high_confidence": 181671,
+  "unique_chains": 171265,
+  "bad_chain_records": [],
+  "source_counts": {
+    "('additional_bacteria_or_archaea', 'heterodimer')": 477385,
+    "('36_pathogens', 'homodimer')": 76429,
+    "('human', 'heterodimer')": 278167,
+    "('human-virus', 'heterodimer')": 81235,
+    "('mouse', 'heterodimer')": 116060,
+    "('arabidopsis', 'heterodimer')": 84498,
+    "('virulence-factor', 'homodimer')": 26490
+  },
+  "high_confidence_counts": {
+    "('additional_bacteria_or_archaea', 'heterodimer')": 69884,
+    "('36_pathogens', 'homodimer')": 38995,
+    "('human', 'heterodimer')": 37855,
+    "('human-virus', 'heterodimer')": 5119,
+    "('mouse', 'heterodimer')": 12778,
+    "('arabidopsis', 'heterodimer')": 7034,
+    "('virulence-factor', 'homodimer')": 10006
+  },
+  "criteria": "LIS >= 0.203 and LIA >= 3432",
+  "missing_confidence": {
+    "('virulence-factor', 'homodimer')": 6
+  },
+  "metadata_revision": "15b1cce925520e267e3c71c96a9eff582e480e66"
+}
