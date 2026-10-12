@@ -52,7 +52,7 @@ MAE; lower is better. The last column is the difference from base A. Pooled seed
 | ph01 / ph1 | A + experimental-pH auxiliary (all sources), weight 0.1 / 1 | 148,583 | 0.6230 / 0.6359 | 0.3943 / 0.4041 | 0.2288 / 0.2318 | 0.4767 / 0.4918 | 0.4959 / 0.5091 | +0.0018 neutral / +0.0147 real, worse |
 | phx01 | A + pH auxiliary, crystal targets only, weight 0.1 | 148,583 | 0.6219 | 0.3943 | 0.2276 | 0.4781 | 0.4970 | +0.0006, not real |
 | phx-probe | A + crystal-pH stop-gradient probe (trunk untouched) | 148,583 | 0.6231 | 0.3922 | 0.2308 | 0.4738 | 0.4982 | +0.0018, not real (expected 0) |
-| bind-prod / bind-diff | A + paired binding head, weighted Hadamard product / difference, weight 1 | | running | | | | | see section 6, item 0 |
+| bind-prod / bind-diff | A + paired binding head (token-weighted Hadamard product / difference), weight 1 | | 0.6211 / 0.6187 | 0.3936 / 0.3900 | 0.2275 / 0.2287 | 0.4775 / 0.4774 | 0.4942 / 0.4998 | -0.0002 / -0.0025, not real |
 
 3-seed ensembles (selection, with benchmark MAE in brackets):
 
@@ -80,6 +80,9 @@ residues' own side chains.
   crystal training mean <= ~1%, Spearman ~0.1, ~0 on the benchmark, jointly or as a stop-gradient probe. The probe's
   Spearman is already 0.13 after epoch 1, so the little signal is generic (size / composition). Dropped; not tried
   with side chains (B).
+- **A paired binding head whose target is interface membership adds nothing.** Both the token-weighted Hadamard
+  product and the difference of the AB / free site tokens reach AUROC 0.995 within two epochs (the bound token
+  already carries the partner) and leave pKa and interface paired MAE unchanged.
 - **GPU run-to-run noise is about one sigma.** The probe runs' trunk gets exactly base A's gradients (stop-gradient,
   separate optimizer and clip), yet per-seed selection differed from base A by +0.0043 / +0.0061 / -0.0049. Training
   is not bitwise reproducible, so a single-seed difference of ~0.005 means nothing.
@@ -122,7 +125,7 @@ residues' own side chains.
     eligibility x parent weight. `--ph-sources crystal` masks EM/NMR targets everywhere; `--ph-probe` puts the head
     on stop_gradient(tokens) with its own optimizer (`separate_optimizer`, reusable for any probe head). Adds a
     `validation.ph` section (per cohort and per source, against the training-mean baseline).
-  - `production_bind.py`: paired binding head (`--bind-weight`, `--bind-operand`; in progress, see section 6, item 0). Needs
+  - `production_bind.py`: paired binding head (`--bind-weight`, `--bind-operand`; neutral, see section 6, item 0). Needs
     `--aux-weight` with `--aux-heads burial` or `both` (contact scores in batch slot 4) and `--aux-loss ce`.
   - `production_graphs.py`, `production_loading.py`: stores and loaders.
 
@@ -228,39 +231,19 @@ has not helped (half-sphere exposure, H-bonds).
 
 ## 6. Open threads
 
-0. **Paired binding auxiliary: pilot running (2026-10-12), needs reading and a decision.**
-   - **Origin.** The user asked whether a Hadamard product of the trunk tokens suits an auxiliary binding loss. The
-     plain h_AB * h_free is a poor fit: (1) the pKa Siamese loss reads w.(h_AB - h_free), a difference, while a
-     linear head on the product is a diagonal bilinear similarity; (2) an unchanged site gives h_free^2, not a
-     neutral zero; (3) the bound token alone already solves interface detection (interface head AUROC 0.99 on the
-     bound branch, chance on the free branch), so the head can score without pushing new gradient into the trunk;
-     (4) the product is quadratic in the un-normalised residual stream. The alternative suggested was a head on
-     d = h_AB - h_free, or a hinge requiring |d| > margin at interface sites. The user then asked for "a small block
-     that computes the weights for the Hadamard product from the final site tokens".
-   - **Head** (`production_bind.py`): per pKa-labelled PINDER site, a = LN(h_AB), b = LN(h_free) (one shared norm),
-     w = W2 gelu(W1 [a; b]) + w0, logit = sum_k w_k (a_k b_k) + c (`--bind-operand product`) or sum_k w_k (a_k - b_k)
-     (`difference`, the comparison arm). Target: the interface soft target log(1 + min(c, 8)) / log 9 of the contact
-     score, sigmoid cross-entropy, per-site then per-structure mean (as the old interface head). W2, w0 and c start
-     at zero: with unit static weights the product starts at logit ~ sqrt(64) = 8 on every unchanged site
-     (cross-entropy 3.6 vs 0.69 in a smoke run), which is point (2) above in practice.
-   - **Readouts:** `history.jsonl` train_loss `pinder_bind_ce`; `selection.json` `validation.auxiliary.interface_binding`
-     (sites, AUROC and recall at 10% FPR for contact score > 0 / 0.5 / 1 / 2 / 4 / 8, Spearman vs the soft target),
-     computed at the selected epoch only; `validation.pinder.distance_bins` for paired MAE near the interface.
-   - **Pilot:** base A + `--bind-weight 1`, seeds 17 / 29 / 43: `prod-100pct-w64-drop10-bur1-orient-dihed-bind-prod`
-     and `...-bind-diff` (each `[-s29,-s43]`), jobs 7359267, 7359270, 7359275, 7359278, 7359281, 7359284 (~46 min
-     each). Judge with `seed_compare.py` against A as usual; the interesting metric is interface paired MAE, which has
-     moved least across arms. If the product arm is neutral and its AUROC is high, the head is solving the task
-     from the bound token (point 3) and the next arm is the difference operand or a hinge on |d|; if it hurts,
-     try weight 0.1 (the old interface head at weight 1 cost +0.005). Write the result into a new 07 note section
-     (after "Experimental pH auxiliary") and update the table in section 2.
-   - **Where these runs ran:** they were submitted with `$S/_submission/jaxka_ph_aux.sbatch train RUN FRACTION [opts]`
-     from the Isambard worktree `$S/_wt/ph-aux` (main's venv, `PYTHONPATH=$WT/src`), whose files equal `main`
-     9c67d93 but sit as uncommitted copies on f5ec452. Once the jobs finish, reset it with
-     `git checkout -- src tests; rm src/pkatrain/production_bind.py tests/test_production_bind.py; git checkout --detach origin/main`
-     (or remove the worktree). The code is on `main`, so new arms can use the standard `jaxka_gqt_train.sbatch`
-     after `git pull --ff-only` in `$JAXKA_REPO`.
-   - **Seed sigma:** the pH and binding pilots quoted 0.0038 (base A's own three seeds); use the pooled 52-df value
-     from `seed_compare.py` for decisions.
+0. **Paired binding auxiliary: done, neutral (2026-10-12; 07 note "Paired binding head").**
+   - The user asked for a small block computing the weights of a Hadamard product from the final site tokens. Head:
+     a = LN(h_AB), b = LN(h_free), w = W2 gelu(W1 [a; b]) + w0, logit = sum w * (a * b) (or * (a - b)), interface
+     soft-target cross-entropy on PINDER pKa-labelled sites; W2, w0, c zero-initialised (unit static weights start
+     the product at logit ~8 on unchanged sites).
+   - Base A + weight 1, 3 seeds: product -0.0002, difference -0.0025 selection (not real); interface paired MAE
+     unchanged. AUROC 0.995 at every contact threshold for both operands, flat training loss from epoch 3: the task
+     is read off the bound token, so the head stops pushing the trunk.
+   - If the binding idea is revisited, the target must not be recoverable from h_AB alone: a hinge on
+     |w.(h_AB - h_free)| > margin at interface sites, or a target tied to the paired pKa shift. Weight 0.1 is not
+     worth running (W 1 is already neutral).
+   - Background on why a plain h_AB * h_free is a poor binding feature (symmetric, h_free^2 on unchanged sites, the
+     bound-token shortcut, quadratic in the un-normalised stream) is in the 07 note section.
 1. **Next input or objective ideas on base A.** The user has not picked any. From the probe and the results so far:
    - the remaining weakly encoded signal is free backbone N-H / C=O groups around the site (probe R^2 about 0.2).
      The explicit H-bond inputs made the model encode them but did not help pKa, so a different representation

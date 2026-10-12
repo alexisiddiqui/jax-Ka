@@ -1062,6 +1062,35 @@ pH on crystal structures at the selected epoch (ranges over seeds):
 - Conclusion: deposited pH is not a useful target for backbone-only input, jointly or as a probe. Dropped; not tried
   with side chains (base B).
 
+### Paired binding head: token-weighted Hadamard product (2026-10-12)
+
+`--bind-weight W --bind-operand {product,difference}` (`pkatrain.production_bind`): per pKa-labelled PINDER site,
+a = LN(h_AB), b = LN(h_free) (one shared LayerNorm on the final site tokens), per-channel weights from a small block on
+the two tokens, w = W2 gelu(W1 [a; b]) + w0, and logit = sum_k w_k (a_k b_k) + c ("product") or sum_k w_k (a_k - b_k)
+("difference"). Target: the interface soft target log(1 + min(c, 8)) / log 9 of the contact score, sigmoid
+cross-entropy, per-site then per-structure mean. W2, w0 and c start at zero; with unit static weights the product
+started at logit ~ sqrt(64) = 8 on every site whose tokens barely change on binding (smoke cross-entropy 3.6 vs 0.69).
+Base A + W 1, seeds 17 / 29 / 43 (`prod-100pct-w64-drop10-bur1-orient-dihed-bind-{prod,diff}[-s29,-s43]`, jobs
+7359267-7359284, 44-49 min each). Pooled sigma 0.0040.
+
+| Arm | Selection (seeds) | State MAE | Interface paired MAE | pKPDB val MAE | Benchmark MAE | Selection vs base A (seed-paired) |
+|---|---|---:|---:|---:|---:|---|
+| base A | 0.6212 (0.6183 / 0.6182 / 0.6272) | 0.3923 | 0.2289 | 0.4744 | 0.4971 | |
+| + bind product | 0.6211 (0.6196 / 0.6206 / 0.6230) | 0.3936 | 0.2275 | 0.4775 | 0.4942 | -0.0002 (0.05 sigma), not real |
+| + bind difference | 0.6187 (0.6222 / 0.6179 / 0.6161) | 0.3900 | 0.2287 | 0.4774 | 0.4998 | -0.0025 (0.6 sigma), not real; metrics split 2 / 2 |
+
+- Neither operand changes pKa. Paired MAE at the interface is unchanged too: <= 4 A 0.459-0.466 (base A 0.454-0.471),
+  4-6 A 0.197-0.209 (0.201-0.206).
+- The head solves its task immediately and identically for both operands: validation AUROC 0.994-0.997 at every
+  contact threshold, recall at 10% FPR 0.99-1.00, Spearman 0.76 vs the soft target, cross-entropy 0.136 on all six
+  runs. Training cross-entropy falls to 0.19 by epoch 3 and is flat after. The bound token already carries the
+  partner (the old interface head on h_AB alone: AUROC 0.99), and both a * b and a - b keep it, so once fitted the
+  head sends little new gradient into the trunk; weighting the product by the tokens does not change that.
+- An auxiliary on the pair only helps if its target cannot be read off the bound token. Untried candidates: a hinge
+  requiring |w.(h_AB - h_free)| above a margin at interface sites (penalises unchanged interface tokens directly), or
+  a target that is not interface membership (e.g. the sign / size of the PINDER pKAI paired shift, which the paired
+  loss already uses). Production default unchanged.
+
 ### 40 epochs, seed ensembles and exported backbone-only models (2026-10-12)
 
 Bases A (orientation + dihedrals) and B (A + side-chain dropout 0.5), both width 64, dropout 0.1, burial W 1, 100%
