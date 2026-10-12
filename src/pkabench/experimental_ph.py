@@ -297,15 +297,200 @@ def targets_for_feature_records(annotations, names, *, exclude_validation_simila
     return targets_for_records(by_feature_name, names,
                                exclude_validation_similar=exclude_validation_similar)
 
+# ---------------------------------------------------------------- pool-v4 (2026-10-12)
+# experimental-ph-v1 was built for pool-v3; pool-v4 moved PINDER's retired val400 cohort into training and changed
+# membership. experimental-ph-v2 covers the pool-v4 training tables only (training/pool-v4/{pinder,pkpdb}.tsv): the
+# pool-v4 validation sets are annotated in annotations/validation-ph-v1. Same audit and eligibility (audit_record,
+# quality_record); parent weights recounted over pool-v4 training membership. PDBs absent from the ph-coverage
+# snapshot are fetched once into audits/ph-coverage/pool-v4-metadata.json (same record format, EM buffer pH inline).
+FORMAT_V4 = 'experimental-ph-v2'
+POOL_V4 = 'training/pool-v4'
+SNAPSHOT = ('metadata.json', 'recovered-metadata.json', 'extra-metadata.json')
+SUPPLEMENT_V4 = 'pool-v4-metadata.json'
+GRAPHQL = 'https://data.rcsb.org/graphql'
+GRAPHQL_QUERY = """query($ids: [String!]!) { entries(entry_ids: $ids) { rcsb_id exptl { method }
+  exptl_crystal_grow { pH pdbx_pH_range pdbx_details } pdbx_nmr_exptl_sample_conditions { pH pH_units } } }"""
+HEADER = 'https://files.rcsb.org/header/{}.cif'
+
+
+def _pool_v4(root, dataset):
+    with (Path(root) / POOL_V4 / f'{dataset}.tsv').open() as f:
+        return list(csv.DictReader(f, delimiter='\t'))
+
+
+def _snapshot(root):
+    """ph-coverage metadata (later files override), EM buffer pH merged in as in build()."""
+    source = Path(root) / 'audits/ph-coverage'; meta = {}
+    for name in SNAPSHOT:
+        if (source / name).exists(): meta.update(json.loads((source / name).read_text()))
+    em = json.loads((source / 'em-metadata.json').read_text())
+    for i, raw in meta.items():
+        raw.setdefault('em_buffer_ph', em.get(i, {}).get('em_buffer_ph', []))
+    return meta
+
+
+def _http(url, body=None, retries=4):
+    import time
+    import urllib.request
+    for attempt in range(retries):
+        try:
+            request = urllib.request.Request(url, body, {'Content-Type': 'application/json'} if body else {})
+            with urllib.request.urlopen(request, timeout=120) as response: return response.read()
+        except Exception:
+            if attempt == retries - 1: raise
+            time.sleep(5 * 2 ** attempt)
+
+
+def cif_values(text, category, item):
+    """Values of _category.item in mmCIF text, key-value or loop_ form (quoted tokens; ;-text fields as one token)."""
+    import shlex
+    lines = text.splitlines(); key = f'_{category}.{item}'; i = 0; out = []
+    while i < len(lines):
+        line = lines[i]
+        if line.split()[:1] == [key]:
+            rest = line[len(key):].strip(); out.append(rest if rest else lines[i + 1].strip()); i += 1; continue
+        if line.strip() == 'loop_':
+            names = []; i += 1
+            while i < len(lines) and lines[i].startswith('_'): names.append(lines[i].split()[0]); i += 1
+            tokens = []
+            while i < len(lines) and not lines[i].startswith(('_', 'loop_', '#', 'data_')):
+                if lines[i].startswith(';'):
+                    block = [lines[i][1:]]; i += 1
+                    while i < len(lines) and not lines[i].startswith(';'): block.append(lines[i]); i += 1
+                    tokens.append('\n'.join(block)); i += 1; continue
+                tokens.extend(shlex.split(lines[i], posix=True)); i += 1
+            if key in names: out.extend(tokens[names.index(key)::len(names)])
+            continue
+        i += 1
+    return [v.strip('\'"') for v in out]
+
+
+def supplement_v4(root, batch=400, workers=8):
+    """Fetch deposited metadata for pool-v4 training PDBs missing from the ph-coverage snapshot (RCSB GraphQL, batched;
+    EM buffer pH from the mmCIF header files, streamed). PDBs RCSB does not serve are listed under 'unresolved', and
+    build_v4 refuses them. One JSON file; run once (needs network, login node is fine: HTTP only)."""
+    from concurrent.futures import ThreadPoolExecutor
+    root = Path(root); out = root / 'audits/ph-coverage' / SUPPLEMENT_V4
+    if out.exists(): return {'exists': str(out)}
+    meta = _snapshot(root)
+    wanted = sorted({r['pdb_id'].upper() for d in DATASETS for r in _pool_v4(root, d)} - meta.keys())
+    fetched = {}
+    for start in range(0, len(wanted), batch):
+        chunk = wanted[start:start + batch]
+        data = json.loads(_http(GRAPHQL, json.dumps({'query': GRAPHQL_QUERY, 'variables': {'ids': chunk}}).encode()))
+        if data.get('errors'): raise RuntimeError(data['errors'][:3])
+        for entry in data['data']['entries'] or []: fetched[entry['rcsb_id'].upper()] = entry
+    em_ids = [i for i, e in fetched.items() if any(x['method'] == 'ELECTRON MICROSCOPY' for x in e.get('exptl') or [])]
+    def em(i): return i, cif_values(_http(HEADER.format(i)).decode(errors='replace'), 'em_buffer', 'pH')
+    with ThreadPoolExecutor(workers) as pool:
+        for i, values in pool.map(em, em_ids): fetched[i]['em_buffer_ph'] = [v for v in values if v not in ('?', '.')]
+    for e in fetched.values(): e.setdefault('em_buffer_ph', [])
+    result = {'source': GRAPHQL + ' + ' + HEADER, 'requested': len(wanted), 'resolved': len(fetched), 'em_headers': len(em_ids),
+              'unresolved': sorted(set(wanted) - fetched.keys()), 'records': fetched}
+    tmp = out.with_suffix('.json.tmp'); tmp.write_text(json.dumps(result, sort_keys=True) + '\n'); os.replace(tmp, out)
+    return {k: v for k, v in result.items() if k != 'records'}
+
+
+def build_v4(root, dataset):
+    """annotations/experimental-ph-v2/<dataset>: records.jsonl / pdb-evidence.jsonl / manifest.json for the pool-v4
+    training membership (split 'train'), immutable like build()."""
+    from pkabench.dataset_transfer import locked
+    root = Path(root); source = root / 'audits/ph-coverage'
+    pool_rel = f'{POOL_V4}/{dataset}.tsv'
+    meta = _snapshot(root); supplement = json.loads((source / SUPPLEMENT_V4).read_text())
+    meta.update(supplement['records'])
+    inputs = [source / n for n in SNAPSHOT + ('em-metadata.json', SUPPLEMENT_V4) if (source / n).exists()] + [root / pool_rel]
+    records = [{**r, 'split': 'train'} for r in _pool_v4(root, dataset)]
+    ids = [r['id'] for r in records]
+    if len(ids) != len(set(ids)): raise ValueError('duplicate annotation IDs')
+    pdb_ids = {r['pdb_id'].upper() for r in records}
+    if (missing := pdb_ids - meta.keys()):
+        raise ValueError(f'metadata not audited for {len(missing)} PDBs: {sorted(missing)[:8]}')
+    evidence = {i: {'pdb_id': i, 'audit': audit_record(dict(meta[i])), 'raw': meta[i]} for i in sorted(pdb_ids)}
+    counts = collections.Counter(r['pdb_id'].upper() for r in records)
+    rows = [quality_record(r, evidence[r['pdb_id'].upper()]['audit'], counts[r['pdb_id'].upper()]) for r in sorted(records, key=lambda r: r['id'])]
+    provenance = {str(p.relative_to(root)): digest(p) for p in inputs}
+    fingerprint = hashlib.sha256(json.dumps(provenance, sort_keys=True).encode()).hexdigest()
+    dest = Path(root) / 'annotations' / FORMAT_V4 / dataset; dest.parent.mkdir(parents=True, exist_ok=True)
+    with locked(dest.parent / f'.{dataset}.lock'):
+        if dest.exists():
+            manifest = json.loads((dest / 'manifest.json').read_text())
+            if manifest['input_fingerprint'] != fingerprint: raise ValueError('annotation inputs changed; create a new annotation version')
+            load_v4(root, dataset); return manifest
+        temp = Path(tempfile.mkdtemp(prefix=f'.{dataset}.pending-', dir=dest.parent))
+        try:
+            for name, values in [('records.jsonl', rows), ('pdb-evidence.jsonl', list(evidence.values()))]:
+                with (temp / name).open('w') as f:
+                    for row in values: f.write(json.dumps(row, sort_keys=True, allow_nan=False) + '\n')
+            eligible = [r for r in rows if r['ph_mask']]
+            manifest = {'format': FORMAT_V4, 'dataset': dataset, 'pool': pool_rel, 'input_fingerprint': fingerprint, 'inputs': provenance,
+                        'source': 'Deposited RCSB crystallization/NMR metadata and EM mmCIF headers (ph-coverage snapshot + pool-v4 supplement)',
+                        'policy': 'audit_record / quality_record of experimental-ph-v1, unchanged',
+                        'unit': 'structure/complex; shared across sites, not independent per-residue labels',
+                        'quality_weight': 'binary eligibility (0 or 1), not calibrated confidence',
+                        'parent_weight': '1 / entries sharing the parent PDB in pool-v4 training',
+                        'counts': {'train': {'entries': len(rows), 'eligible': len(eligible)}},
+                        'eligible_sources': dict(collections.Counter('+'.join(r['ph_sources']) for r in eligible)),
+                        'files': {name: digest(temp / name) for name in ('records.jsonl', 'pdb-evidence.jsonl')}}
+            (temp / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+            os.rename(temp, dest)
+        finally:
+            if temp.exists(): shutil.rmtree(temp)
+    load_v4(root, dataset); return manifest
+
+
+def _check_rows(path):
+    rows = {}
+    with Path(path).open() as f:
+        for line in f:
+            row = json.loads(line)
+            if row['id'] in rows: raise ValueError('duplicate annotation ID')
+            if row['ph_mask'] != (row['ph_target'] is not None): raise ValueError('invalid target/mask')
+            if row['ph_quality_weight'] != float(row['ph_mask']): raise ValueError('invalid quality weight')
+            if row['ph_mask'] and (not 0 < row['ph_target'] <= 14 or row['ph_warnings']): raise ValueError('invalid eligible pH')
+            rows[row['id']] = row
+    return rows
+
+
+def load_v4(root, dataset):
+    """Verified pool-v4 training annotations {id: row}; the pool table must match the one annotated."""
+    folder = Path(root) / 'annotations' / FORMAT_V4 / dataset; manifest = json.loads((folder / 'manifest.json').read_text())
+    if manifest['format'] != FORMAT_V4 or manifest['dataset'] != dataset: raise ValueError('annotation format mismatch')
+    if digest(Path(root) / manifest['pool']) != manifest['inputs'][manifest['pool']]: raise ValueError('annotation pool hash mismatch')
+    for name, expected in manifest['files'].items():
+        if digest(folder / name) != expected: raise ValueError(f'annotation file hash mismatch: {name}')
+    return _check_rows(folder / 'records.jsonl')
+
+
+VALIDATION_V1 = 'annotations/validation-ph-v1'
+
+
+def load_validation(root, cohort):
+    """validation-ph-v1/<cohort>/records.jsonl {id: row}, checked against its summary.json hash; structure pH only
+    (ph_kind deposited_structure_condition; ATLAS rows are masked predicted structures)."""
+    folder = Path(root) / VALIDATION_V1 / cohort
+    summary = json.loads((Path(root) / VALIDATION_V1 / 'summary.json').read_text())
+    expected = summary['cohorts'][cohort]['files']['records.jsonl']
+    if digest(folder / 'records.jsonl') != expected: raise ValueError(f'validation annotation hash mismatch: {cohort}')
+    rows = _check_rows(folder / 'records.jsonl')
+    if any(r['split'] != 'val' for r in rows.values()): raise ValueError(f'{cohort}: non-validation rows')
+    return rows
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['build', 'verify'])
-    parser.add_argument('dataset', choices=sorted(DATASETS))
+    parser.add_argument('action', choices=['build', 'verify', 'supplement-v4', 'build-v4', 'verify-v4'])
+    parser.add_argument('dataset', nargs='?', choices=sorted(DATASETS))
     parser.add_argument('--root', default=os.environ.get('PKABENCH_RUNTIME'))
     args = parser.parse_args()
     if not args.root:
         parser.error('--root or PKABENCH_RUNTIME required')
-    result = build(args.root, args.dataset) if args.action == 'build' else {'verified_entries': len(load_annotations(args.root, args.dataset))}
+    if args.action != 'supplement-v4' and not args.dataset: parser.error('dataset required')
+    result = {'build': lambda: build(args.root, args.dataset),
+              'verify': lambda: {'verified_entries': len(load_annotations(args.root, args.dataset))},
+              'supplement-v4': lambda: supplement_v4(args.root),
+              'build-v4': lambda: build_v4(args.root, args.dataset),
+              'verify-v4': lambda: {'verified_entries': len(load_v4(args.root, args.dataset))}}[args.action]()
     print(json.dumps(result, indent=2))
 if __name__ == '__main__':
     main()
