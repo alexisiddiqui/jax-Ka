@@ -996,3 +996,39 @@ Probe of the base A checkpoints (PINDER; pKPDB agrees within 0.04), R^2 from the
 - A clean negative: with the H-bond inputs the model does encode backbone H-bond status (probe R^2 roughly doubles),
   but pKa accuracy does not move in either base. Once dihedrals are given, which free backbone N-H / C=O groups
   surround a site adds nothing the pKa head can use.
+
+### Experimental pH auxiliary (2026-10-12)
+
+`--ph-weight W` (`pkatrain.production_ph`): structure-level deposited structure-condition pH (crystal growth, EM
+buffer or NMR sample pH; `pkabench.experimental_ph`, pool-v4 training annotations `experimental-ph-v2`, validation
+`validation-ph-v1`). Gated attention pooling of the site tokens (LayerNorm, sigmoid gate x value) -> cumulative BCE
+over [pH > t], t = 4.75 / 5.75 / 6.75 / 7.75 / 8.25, once per structure (PINDER AB branch, pKPDB), weighted by
+eligibility x parent weight. Eligible: PINDER 22,630 / 27,933 training structures (45% EM buffer pH), pKPDB 42,291 /
+56,191 (99% crystal). Base A (width 64, dropout 0.1, burial W 1, orientation, dihedrals, no side chains, 100% pool)
+plus W 0.1 or W 1, seeds 17 / 29 / 43 (`prod-100pct-w64-drop10-bur1-orient-dihed-ph{01,1}[-s29,-s43]`, jobs
+7351530-7351536); control the three base A runs. Pooled sigma 0.0038.
+
+| Arm | Selection (seeds) | State MAE | Interface paired MAE | pKPDB val MAE | Benchmark MAE | Selection vs base A (seed-paired) |
+|---|---|---:|---:|---:|---:|---|
+| base A | 0.6212 (0.6183 / 0.6182 / 0.6272) | 0.3923 | 0.2289 | 0.4744 | 0.4971 | |
+| + pH W 0.1 | 0.6230 (0.6167 / 0.6217 / 0.6307) | 0.3943 | 0.2288 | 0.4767 | 0.4959 | +0.0018 (0.5 sigma), none |
+| + pH W 1 | 0.6359 (0.6333 / 0.6338 / 0.6406) | 0.4041 | 0.2318 | 0.4918 | 0.5091 | +0.0147 (3.9 sigma), worse every seed |
+
+pH head on validation at the selected epoch (MAE of the expected pH vs the training-mean baseline, 6.86; ranges over
+seeds):
+
+| Arm | PINDER all (605) | PINDER crystal (420) | PINDER EM (173) | pKPDB crystal (575) | Benchmark crystal (83) |
+|---|---|---|---|---|---|
+| training mean | 0.961 | 1.042 | 0.756 | 1.032 | 1.142 |
+| W 0.1 | 0.875-0.896, rho 0.22-0.24 | 1.035-1.044, rho 0.09-0.11 | 0.40-0.49 | 1.036-1.071, rho 0.06-0.11 | 1.17-1.25, rho -0.21-0.02 |
+| W 1 | 0.909-0.978, rho 0.07-0.14 | 1.064-1.161, rho -0.04-0.04 | 0.45-0.49 | 1.057-1.096, rho 0.06-0.11 | 1.24-1.29, rho -0.31 to -0.01 |
+
+- No pKa benefit. W 0.1 is neutral; W 1 costs 0.015 selection with state, pKPDB and benchmark error all worse.
+- The head learns structure type, not pH. Its whole gain over the training mean is on EM structures (buffer pH
+  concentrated at 7-8: MAE 0.40-0.49 vs 0.76); on crystal structures it is at or below the baseline everywhere
+  (Spearman at most 0.11, negative on the benchmark), and per-threshold AUROC on pKPDB is 0.48-0.68.
+- W 1 memorises: training pH BCE falls 0.455 -> 0.293 over the cosine phase while validation PINDER pH MAE rises
+  from 0.89 (epoch 9) to 0.98; the trunk capacity spent on it is the likely source of the pKa cost.
+- Backbone-only input (base A, no side chains) may simply not carry the crystallisation pH signal. Untested: crystal
+  structures only (mask EM), with side chains (base B), or a stop-gradient probe to measure what the trunk encodes.
+  Production default unchanged.
