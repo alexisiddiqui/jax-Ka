@@ -52,8 +52,8 @@ from .production_graphs import VERSION, output, read
 from .production_aux import BURIAL_RSA_CUTS, INTERFACE_CAP, INTERFACE_THRESHOLDS, RSA_BOUND_TABLE, ContactTable
 from .production_aux import TABLE as CONTACTS_TABLE
 from .production_depth import INJECT_SCALE, add_injection, deepen, model_functions
-from .production_inputs import BACKBONE_WIDTH, ORIENTATION_EDGE, BackboneTable, ConcatTable, add_chi_head, add_dihedral_inputs, add_geometry_heads, add_orientation, chi1_targets, geometry_targets, \
-    input_functions, DIHEDRAL_FEATURES
+from .production_inputs import BACKBONE_WIDTH, ORIENTATION_EDGE, BackboneTable, ConcatTable, add_chi_head, add_dihedral_inputs, add_geometry_heads, add_hbond_inputs, add_orientation, chi1_targets, geometry_targets, \
+    input_functions, DIHEDRAL_FEATURES, HBOND_FEATURES
 from .production_sidechains import WIDTH as SIDECHAIN_WIDTH, SidechainTable
 from .production_loading import MANIFEST, AuxPinderSource, PinderSource, PkpdbSource, normalization, select
 
@@ -520,7 +520,7 @@ def parameter_count(params):
 
 
 def make_model(seed, query_norm="shared", paired_weight="none", reduction="structure", width=None, sidechains=False, depth=2, loops=1,
-               orientation=False, sidechain_view="all", sidechain_drop=0.0, table=None, dihedrals=False):
+               orientation=False, sidechain_view="all", sidechain_drop=0.0, table=None, dihedrals=False, hbonds=False):
     """(params, engine, predict): scratch oGQT and its engine; separate query norm starts as a copy of query norm1.
     depth / loops (production_depth), orientation / side-chain views (production_inputs): the engine returned is
     JointEngine, valid for depth alone; the others take DropoutEngine / AuxEngine with model_inputs(...) (train())."""
@@ -530,7 +530,7 @@ def make_model(seed, query_norm="shared", paired_weight="none", reduction="struc
     from .gqt_multitask_replay import JointEngine
     shape = architecture(width, sidechains)
     params = initialize_ogqt(jax.random.PRNGKey(seed), **shape)
-    if depth != 2 or loops != 1 or orientation or sidechain_view != "all" or table or dihedrals:
+    if depth != 2 or loops != 1 or orientation or sidechain_view != "all" or table or dihedrals or hbonds:
         architecture(width, sidechains, depth, loops)  # validates the combination
         if query_norm != "shared" or paired_weight != "none" or reduction != "structure":
             raise ValueError("depth / loops / input variants combine with the default objective only")
@@ -538,7 +538,8 @@ def make_model(seed, query_norm="shared", paired_weight="none", reduction="struc
         if loops != 1: params = add_injection(params, seed)
         if orientation: params = add_orientation(params, seed)
         if dihedrals: params = add_dihedral_inputs(params, seed)
-        predict_shift = model_inputs(loops, orientation, sidechain_view, sidechain_drop, table, dihedrals)[1]
+        if hbonds: params = add_hbond_inputs(params, seed)
+        predict_shift = model_inputs(loops, orientation, sidechain_view, sidechain_drop, table, dihedrals, hbonds)[1]
         return params, JointEngine(params), jax.jit(jax.vmap(predict_shift, in_axes=(None, 0)))
     if query_norm == "separate":
         params = {**params, "query_context_norm": jnp.array(params["query"]["norm1"])}
@@ -550,10 +551,10 @@ def make_model(seed, query_norm="shared", paired_weight="none", reduction="struc
     return params, engine, jax.jit(jax.vmap(predict_shift, in_axes=(None, 0)))
 
 
-def model_inputs(loops=1, orientation=False, sidechain_view="all", sidechain_drop=0.0, table=None, dihedrals=False):
+def model_inputs(loops=1, orientation=False, sidechain_view="all", sidechain_drop=0.0, table=None, dihedrals=False, hbonds=False):
     """(site_embeddings, predict_shift) for the looped encoder and the input variants (pkanet.site_model's by default);
     table: the loader appends backbone-v1 (default: with orientation)."""
-    return input_functions(model_functions(loops), sidechain_view, sidechain_drop, orientation, table, dihedrals)
+    return input_functions(model_functions(loops), sidechain_view, sidechain_drop, orientation, table, dihedrals, hbonds)
 
 
 def interface_weighted(engine):
@@ -776,7 +777,7 @@ def validate(engine, predict, params, sources, manifests, config, out=None, epoc
 def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none", seed=SEED, query_norm="shared", reduction="structure",
           mask_pmin=None, dropout=0.0, aux_weight=None, aux_loss="ce", aux_interface_branch="bound", aux_heads="both", width=None,
           sidechains=False, depth=2, loops=1, orientation=False, sidechain_view="all", sidechain_drop=0.0, geometry_weight=0.0,
-          dihedrals=False, chi_weight=0.0):
+          dihedrals=False, chi_weight=0.0, hbonds=False):
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
@@ -789,7 +790,8 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     norms = normalization(manifests["pinder"], fraction); scale = lr_scale(batch)
     protocol = {"version": "gqt-production-joint-v1", "run": run, "fraction": fraction, "seed": seed, "batch": batch,
         "architecture": {**architecture(width, sidechains, depth, loops), **({"orientation_edges": ORIENTATION_EDGE} if orientation else {}),
-                         **({"dihedral_features": DIHEDRAL_FEATURES} if dihedrals else {})}, "initialization": f"scratch (pkanet.ogqt.initialize, PRNGKey({seed}))"
+                         **({"dihedral_features": DIHEDRAL_FEATURES} if dihedrals else {}),
+                         **({"hbond_features": HBOND_FEATURES} if hbonds else {})}, "initialization": f"scratch (pkanet.ogqt.initialize, PRNGKey({seed}))"
         + (f"; residue blocks 3-{depth} from production_depth.deepen" if depth != 2 else "") + ("; W_inject from production_depth.add_injection" if loops != 1 else ""),
         "objective": "gqt_multitask_replay.JointEngine: pKPDB state-shift MSE (train_mask) + PINDER AB/free state-shift MSE + binding-shift MSE; equal coefficients; no site weights",
         "optimizer": "AdamW weight decay 1e-4, global clip 1 after gradient summation",
@@ -837,6 +839,8 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
         **({"chi_auxiliary": f"+ {chi_weight} x chi1-class softmax cross-entropy (g+ / t / g-; production_inputs.chi1_targets) for "
                              "D/E/H/C/Y/K/R query sites from the hidden side chains and backbone-v1; head aux_chi; PINDER both branches, pKPDB train_mask sites"}
            if chi_weight else {}),
+        **({"hbonds": "production_inputs.backbone_hbonds: DSSP backbone H-bond energies (best donor / acceptor / 9.9, bonded flags, has-H / has-O) "
+                       "from backbone-v1 over the residue-graph edges appended to the node features (6); embedding +6 rows"} if hbonds else {}),
         **({"dihedrals": "production_inputs.backbone_dihedrals: sin/cos phi, psi, omega from backbone-v1 appended to the node features (6); embedding +6 rows"}
            if dihedrals else {}),
         **({"orientation": {"definition": "production_inputs: residue edges + direction to i in j's frame, F_i^T F_j, signed sequence separation / 32 "
@@ -856,7 +860,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     config = LoaderConfig()
     side = {}
     for d in ("pinder", "pkpdb", "benchmark-val"):
-        tables = ([SidechainTable(root, d)] if sidechains else []) + ([BackboneTable(root, d)] if orientation or geometry_weight or chi_weight or dihedrals else [])
+        tables = ([SidechainTable(root, d)] if sidechains else []) + ([BackboneTable(root, d)] if orientation or geometry_weight or chi_weight or dihedrals or hbonds else [])
         side[d] = None if not tables else tables[0] if len(tables) == 1 else ConcatTable(*tables)
     contacts = ContactTable(root, RSA_BOUND_TABLE if aux_heads == "burial-siamese" else CONTACTS_TABLE) if aux_weight is not None else None
     train_pinder = AuxPinderSource(_with_policy(manifests["pinder"], batch), contacts, config=config, norms=norms, sidechains=side["pinder"]) if contacts else \
@@ -874,14 +878,14 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     if (sidechain_view == "dropout") != (sidechain_drop > 0): raise ValueError("--sidechain-drop goes with --sidechain-view dropout")
     if (geometry_weight or chi_weight) and (sidechain_view != "dropout" or aux_weight is None):
         raise ValueError("--geometry-weight / --chi-weight need --sidechains --sidechain-view dropout (side chains hidden from validation) and --aux-weight")
-    table = bool(orientation or geometry_weight or chi_weight or dihedrals)
+    table = bool(orientation or geometry_weight or chi_weight or dihedrals or hbonds)
     params, engine, predict = make_model(seed, query_norm, paired_weight, reduction, width, sidechains, depth, loops,
-                                         orientation, sidechain_view, sidechain_drop, table, dihedrals); state = engine.optimizer.init(params)
+                                         orientation, sidechain_view, sidechain_drop, table, dihedrals, hbonds); state = engine.optimizer.init(params)
     custom_inputs = loops != 1 or table or sidechain_view != "all"
     if custom_inputs and aux_weight is None and not dropout:
         raise ValueError("--loops / --orientation / --sidechain-view run through DropoutEngine / AuxEngine (use --dropout or --aux-weight)")
     if (depth != 2 or custom_inputs) and mask_pmin is not None: raise ValueError("depth / loops / input variants do not combine with site masking")
-    embeddings_fn, shift_fn = model_inputs(loops, orientation, sidechain_view, sidechain_drop, table, dihedrals)
+    embeddings_fn, shift_fn = model_inputs(loops, orientation, sidechain_view, sidechain_drop, table, dihedrals, hbonds)
     step_key = None
     if aux_weight is not None:
         if query_norm != "shared" or paired_weight != "none" or reduction != "structure" or mask_pmin is not None:
@@ -1040,10 +1044,11 @@ def selected_model(root, run):
         text = protocol["sidechain_view"]
         view = "dropout" if text.startswith("side-chain features hidden") else "titratable" if text.startswith("side-chain features on D/E") else "non-titratable"
         if view == "dropout": drop = float(text.split("probability ")[1].split(" ")[0])
-    orientation = "orientation_edges" in arch; dihedrals = "dihedral_features" in arch
-    table = bool(orientation or dihedrals or "geometry_auxiliary" in protocol or "chi_auxiliary" in protocol)
+    orientation = "orientation_edges" in arch; dihedrals = "dihedral_features" in arch; hbonds = "hbond_features" in arch
+    table = bool(orientation or dihedrals or hbonds or "geometry_auxiliary" in protocol or "chi_auxiliary" in protocol)
     params, _, _ = make_model(protocol["seed"], width=arch["width"], sidechains="sidechains" in protocol, depth=arch.get("depth", 2),
-                              loops=arch.get("loops", 1), orientation=orientation, sidechain_view=view, sidechain_drop=drop, table=table, dihedrals=dihedrals)
+                              loops=arch.get("loops", 1), orientation=orientation, sidechain_view=view, sidechain_drop=drop, table=table, dihedrals=dihedrals,
+                              hbonds=hbonds)
     if "auxiliary" in protocol:
         text = protocol["auxiliary"]; mode = "ce" if text.startswith("AuxEngine ce") else "ordinal"
         heads = "burial" if text.startswith("AuxEngine ce burial-only") else "burial-siamese" if text.startswith("AuxEngine ce burial-siamese") else "both"
@@ -1053,7 +1058,7 @@ def selected_model(root, run):
     # the engines' optimizer (JointEngine / DropoutEngine / AuxEngine), only for the checkpoint's tree structure
     state = optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(1.0, weight_decay=1e-4, mask=decay_mask(params))).init(params)
     params, _, _ = load_checkpoint(out / "checkpoints" / f"epoch-{selection['selected_epoch']:03d}", (params, state))
-    return params, model_inputs(arch.get("loops", 1), orientation, view, drop, table, dihedrals)
+    return params, model_inputs(arch.get("loops", 1), orientation, view, drop, table, dihedrals, hbonds)
 
 
 def export_model(root, run, destination):
@@ -1110,6 +1115,7 @@ def main(argv=None):
     p.add_argument("--geometry-weight", type=float, default=0.0, help="titratable side-chain geometry auxiliary weight (production_inputs)")
     p.add_argument("--dihedrals", action="store_true", help="sin/cos phi, psi, omega node features from backbone-v1 (production_inputs)")
     p.add_argument("--chi-weight", type=float, default=0.0, help="chi1 rotamer-class auxiliary weight (production_inputs)")
+    p.add_argument("--hbonds", action="store_true", help="DSSP backbone H-bond node features from backbone-v1 (production_inputs)")
     p = sub.add_parser("count"); p.add_argument("widths", type=int, nargs="+"); p.add_argument("--sidechains", action="store_true")
     p.add_argument("--depth", type=int, default=2); p.add_argument("--loops", type=int, default=1)
     p = sub.add_parser("export"); p.add_argument("run"); p.add_argument("destination")
@@ -1136,7 +1142,7 @@ def main(argv=None):
         result = train(root, args.run, args.fraction, args.smoke, args.batch, args.paired_weight, args.seed, args.query_norm, args.loss_reduction, args.site_mask_pmin,
                        args.dropout, args.aux_weight, args.aux_loss, args.aux_interface_branch,
                        args.aux_heads, args.width, args.sidechains, args.depth, args.loops, args.orientation, args.sidechain_view, args.sidechain_drop,
-                       args.geometry_weight, args.dihedrals, args.chi_weight)
+                       args.geometry_weight, args.dihedrals, args.chi_weight, args.hbonds)
         print(json.dumps({"selected_epoch": result["selected_epoch"], "selection": result["validation"]["selection"]}))
 
 

@@ -32,6 +32,13 @@
    D/E/H/C/Y/K/R query site, chi1 = dihedral(N, CA, CB, gamma) from the hidden side chains (gamma CG, or SG for C)
    in three classes centred on +60, 180 and -60 degrees; softmax cross-entropy on head aux_chi.
 
+6. Backbone H-bonds (--hbonds): DSSP electrostatic H-bond energy E = 0.084 x 332 (1/r_ON + 1/r_CH - 1/r_OH - 1/r_CN)
+   kcal/mol between the N-H of residue i and the C=O of residue j (H = N + unit(C_{i-1} - O_{i-1}); no H on proline,
+   chain starts or after a residue whose O is missing; pairs from the residue graph's edges with CA-CA < 9 A, at least
+   2 apart in sequence or on different chains; E floored at -9.9). Per residue, 6 node features: best donor and best
+   acceptor energy / 9.9, bonded flags (E < -0.5), has-H and has-O flags (O missing: stored as C in backbone-v1).
+   Backbone atoms only; edges follow the branch's graph (the PINDER free branch drops partner-chain H-bonds).
+
   python -m pkatrain.production_inputs build-backbone {pinder,pkpdb,benchmark-val} [--workers 72] [--limit N]
 """
 from __future__ import annotations
@@ -62,6 +69,10 @@ DIHEDRAL_FEATURES = 6
 DIHEDRAL_SALT = 4241
 CHI_SALT = 9973
 PEPTIDE_BOND_A = 2.0
+HBOND_FEATURES = 6
+HBOND_SALT = 7349
+DSSP_CA_A, DSSP_FLOOR, DSSP_BOND = 9.0, -9.9, -0.5
+PROLINE = 12  # jaxpropka ALPHABET index
 PARTNER_CONTACT_A, PARTNER_DECAY_A = 4.0, 2.0
 
 
@@ -263,6 +274,36 @@ def backbone_dihedrals(table, xp=None):
     return xp.concatenate((trig(phi, has_prev), trig(psi, has_next), trig(omega, has_next)), axis=-1)
 
 
+def backbone_hbonds(table, aa, neighbors, edge_mask, xp=None):
+    """(N, 6) DSSP backbone H-bond features per residue (see module doc), from backbone-v1 rows, residue identities and
+    the residue graph's (N, K) neighbours / edge mask."""
+    if xp is None: import jax.numpy as xp
+    n, ca, c, o = table[:, 0:3], table[:, 3:6], table[:, 6:9], table[:, 9:12]; chain = table[:, 12]; seq = table[:, 13]
+    prev = lambda x: xp.roll(x, 1, axis=0)
+    o_known = xp.linalg.norm(o - c, axis=-1) > 0.5
+    has_prev = (prev(chain) == chain) & (prev(seq) == seq - 1) & (xp.linalg.norm(prev(c) - n, axis=-1) < PEPTIDE_BOND_A) & prev(o_known)
+    co = prev(c) - prev(o); h = n + co / xp.maximum(xp.linalg.norm(co, axis=-1, keepdims=True), 1e-6)
+    has_h = has_prev & (aa != PROLINE)
+    dist = lambda x, y: xp.maximum(xp.linalg.norm(x - y, axis=-1), 0.5)
+    pair = edge_mask & (xp.linalg.norm(ca[neighbors] - ca[:, None], axis=-1) < DSSP_CA_A) & \
+        ((xp.abs(seq[neighbors] - seq[:, None]) >= 2) | (chain[neighbors] != chain[:, None]))
+
+    def energy(nd, hd, oa, ca_):
+        return xp.maximum(0.084 * 332 * (1 / dist(nd, oa) + 1 / dist(hd, ca_) - 1 / dist(hd, oa) - 1 / dist(nd, ca_)), DSSP_FLOOR)
+    # residue i as donor to neighbour acceptors j, and as acceptor of neighbour donors j
+    donate = xp.where(pair & has_h[:, None] & o_known[neighbors], energy(n[:, None], h[:, None], o[neighbors], c[neighbors]), 0.0).min(axis=1)
+    accept = xp.where(pair & has_h[neighbors] & o_known[:, None], energy(n[neighbors], h[neighbors], o[:, None], c[:, None]), 0.0).min(axis=1)
+    return xp.stack((donate / -DSSP_FLOOR, accept / -DSSP_FLOOR, donate < DSSP_BOND, accept < DSSP_BOND, has_h, o_known), axis=-1).astype(xp.float32)
+
+
+def add_hbond_inputs(params, seed):
+    import jax
+    import jax.numpy as jnp
+    w = params["embed"]["w"]; key = jax.random.fold_in(jax.random.PRNGKey(seed), HBOND_SALT)
+    extra = jax.random.normal(key, (HBOND_FEATURES, w.shape[1]), jnp.float32) / jnp.sqrt(float(w.shape[0] + HBOND_FEATURES))
+    return {**params, "embed": {**params["embed"], "w": jnp.concatenate((w, extra))}}
+
+
 def chi1_targets(graph, xp=None):
     """Per query site: (chi1 class 0 / 1 / 2 for g+ (0, 120) / t (|chi| >= 120) / g- (-120, 0), mask). Masks exclude
     termini sites, degenerate frames and residues without CB or gamma."""
@@ -323,23 +364,24 @@ def add_orientation(params, seed):
     return {**params, "blocks": [extend(b, k) for b, k in zip(params["blocks"], keys[:-1])], "query": extend(params["query"], keys[-1])}
 
 
-def input_functions(functions, sidechain_view="all", drop=0.0, orientation=False, table=None, dihedrals=False):
+def input_functions(functions, sidechain_view="all", drop=0.0, orientation=False, table=None, dihedrals=False, hbonds=False):
     """Wrap (site_embeddings, predict_shift) so each graph is transformed first: a loaded backbone table (the last
     BACKBONE_WIDTH node columns; table defaults to orientation or dihedrals) is stripped, with orientation turned into
-    13 extra edge features; the side-chain view masks node columns 24:; dihedrals appends 6 node features after that.
+    13 extra edge features; the side-chain view masks node columns 24:; dihedrals then hbonds append 6 node features each.
     The defaults return `functions` unchanged."""
     import jax
     import jax.numpy as jnp
     from jaxpropka.parameters import GROUP_AA
     from pkanet.model import linear
     if sidechain_view not in VIEWS: raise ValueError(sidechain_view)
-    table = (orientation or dihedrals) if table is None else table
-    if (orientation or dihedrals) and not table: raise ValueError("orientation / dihedrals need the backbone table")
+    table = (orientation or dihedrals or hbonds) if table is None else table
+    if (orientation or dihedrals or hbonds) and not table: raise ValueError("orientation / dihedrals / hbonds need the backbone table")
     if sidechain_view == "all" and not table: return functions
     embeddings = functions[0]; titratable = jnp.zeros(20, bool).at[jnp.asarray(GROUP_AA)].set(True)
 
     def transform(graph, key):
         nodes = graph["nodes"]; angles = backbone_dihedrals(nodes[:, -BACKBONE_WIDTH:]) if dihedrals else None
+        bonds = backbone_hbonds(nodes[:, -BACKBONE_WIDTH:], jnp.argmax(nodes[:, :20], axis=1), graph["neighbors"], graph["edge_mask"]) if hbonds else None
         if orientation:
             graph = {**graph, "edge": jnp.concatenate((graph["edge"], orientation_edges(nodes[:, -BACKBONE_WIDTH:], graph["neighbors"])), axis=-1)}
         if table: nodes = nodes[:, :-BACKBONE_WIDTH]
@@ -352,6 +394,7 @@ def input_functions(functions, sidechain_view="all", drop=0.0, orientation=False
                 keep = (own if sidechain_view == "titratable" else ~own).astype(jnp.float32)
             nodes = jnp.concatenate((nodes[:, :24], nodes[:, 24:] * keep[:, None]), axis=-1)
         if dihedrals: nodes = jnp.concatenate((nodes, angles), axis=-1)
+        if hbonds: nodes = jnp.concatenate((nodes, bonds), axis=-1)
         return {**graph, "nodes": nodes}
 
     def wrapped(params, graph, *, key=None, dropout_rate=0.0):
