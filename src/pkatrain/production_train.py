@@ -52,7 +52,7 @@ from .production_graphs import VERSION, output, read
 from .production_aux import BURIAL_RSA_CUTS, INTERFACE_CAP, INTERFACE_THRESHOLDS, RSA_BOUND_TABLE, ContactTable
 from .production_aux import TABLE as CONTACTS_TABLE
 from .production_depth import INJECT_SCALE, add_injection, deepen, model_functions
-from .production_inputs import BACKBONE_WIDTH, ORIENTATION_EDGE, BackboneTable, ConcatTable, add_orientation, input_functions
+from .production_inputs import BACKBONE_WIDTH, ORIENTATION_EDGE, BackboneTable, ConcatTable, add_geometry_heads, add_orientation, geometry_targets, input_functions
 from .production_sidechains import WIDTH as SIDECHAIN_WIDTH, SidechainTable
 from .production_loading import MANIFEST, AuxPinderSource, PinderSource, PkpdbSource, normalization, select
 
@@ -316,7 +316,7 @@ class AuxEngine:
     clip(RSA_free) - clip(RSA_bound), mirroring the pKa state + Siamese losses; slot 4 then holds RSA_bound
     (production_aux rsa-bound-v1, < 0 masked)."""
 
-    def __init__(self, params, weight, rate=0.0, mode="ce", interface_branch="bound", heads="both", site_embeddings=None):
+    def __init__(self, params, weight, rate=0.0, mode="ce", interface_branch="bound", heads="both", site_embeddings=None, geometry_weight=0.0):
         import jax
         import jax.numpy as jnp
         import optax
@@ -342,10 +342,23 @@ class AuxEngine:
             return (score[..., None] > thresholds).astype(jnp.float32) if mode == "ordinal" else \
                 (jnp.log1p(jnp.minimum(score, INTERFACE_CAP)) / jnp.log1p(INTERFACE_CAP))[..., None]
 
+        geometry_weight = float(geometry_weight)
+
         def predict_all(p, graph, key=None):
             tokens, query_site = site_embeddings_indexed(p, graph, key=key, dropout_rate=rate if key is not None else 0.0)
+            # geometry auxiliary (production_inputs): predictions and targets from the untransformed graph, else zeros
+            geometry = (linear(p["aux_geom_pos"], tokens)[query_site], linear(p["aux_partner"], tokens)[query_site, 0], *geometry_targets(graph)) \
+                if geometry_weight else jnp.zeros((query_site.shape[0],), jnp.float32)
             return (8 * jnp.tanh(linear(p["head"], tokens)[:, 0]))[query_site], linear(p["aux_burial"], tokens)[query_site], \
-                (linear(p["aux_interface"], tokens)[query_site] if use_interface else jnp.zeros((query_site.shape[0], 1), jnp.float32))
+                (linear(p["aux_interface"], tokens)[query_site] if use_interface else jnp.zeros((query_site.shape[0], 1), jnp.float32)), geometry
+
+        def geometry_loss(geometry, sites, valid):
+            """Mean squared error of the functional centroid (A / 10, per site mean over xyz) + partner-score
+            cross-entropy, each averaged per structure over sites with a target."""
+            if not geometry_weight: return 0.0
+            position, partner, target, mask, score, partner_mask = geometry
+            return structure_mean(jnp.mean(jnp.square(position - target), axis=-1), sites * mask, valid) + \
+                structure_mean(optax.sigmoid_binary_cross_entropy(partner, score), sites * partner_mask, valid)
 
         def flatten(graphs):
             batch, branches = graphs["nodes"].shape[:2]
@@ -367,7 +380,7 @@ class AuxEngine:
             return structure_mean(cross_entropy(logits, burial_labels(rsa)), sites * (rsa >= 0), valid)
 
         def paired_objective(p, graphs, targets, mask, rsa, contacts, valid, key):
-            predicted, burial_logits, interface_logits = paired_all(p, graphs, key)
+            predicted, burial_logits, interface_logits, geometry = paired_all(p, graphs, key)
             expected = targets - reference[graphs["query_group"][:, 0]][:, None, :]
             state_error = jnp.square(predicted - expected) * mask[:, None, :]
             pair_error = jnp.square((predicted[:, 0] - predicted[:, 1]) - (expected[:, 0] - expected[:, 1])) * mask
@@ -385,15 +398,19 @@ class AuxEngine:
                 burial = states + structure_mean(jnp.square(change - expected_change), both, valid)
             else: burial = burial_loss(burial_logits[:, 1], rsa, sites, valid)
             interface = structure_mean(cross_entropy(interface_logits[:, branch], interface_labels(contacts)), sites, valid) if use_interface else 0.0
-            return state_loss + pair_loss + weight * (burial + interface), (state_loss, pair_loss)
+            # geometry auxiliary on both branches (the free branch's partner score sees only its own edges)
+            geometric = (geometry_loss(jax.tree.map(lambda x: x[:, 0], geometry), sites, valid)
+                         + geometry_loss(jax.tree.map(lambda x: x[:, 1], geometry), sites, valid)) / 2 if geometry_weight else 0.0
+            return state_loss + pair_loss + weight * (burial + interface) + geometry_weight * geometric, (state_loss, pair_loss)
 
         def pkpdb_objective(p, graphs, targets, eligible, rsa, valid, key):
             keys = jax.random.split(key, graphs["nodes"].shape[0])
-            predicted, burial_logits, _ = jax.vmap(lambda graph, k: predict_all(p, graph, k if rate else None))(graphs, keys)
+            predicted, burial_logits, _, geometry = jax.vmap(lambda graph, k: predict_all(p, graph, k))(graphs, keys)
             expected = targets - reference[graphs["query_group"]]
             per_structure = jnp.sum(jnp.square(predicted - expected) * eligible, axis=1) / jnp.maximum(jnp.sum(eligible, axis=1), 1)
             primary = jnp.sum(jnp.where(valid, per_structure, 0.0)) / jnp.maximum(jnp.sum(valid), 1)
-            return primary + weight * burial_loss(burial_logits, rsa, eligible.astype(jnp.float32), valid)
+            return primary + weight * burial_loss(burial_logits, rsa, eligible.astype(jnp.float32), valid) + \
+                geometry_weight * geometry_loss(geometry, eligible.astype(jnp.float32), valid)
 
         def apply(p, state, pair_gradient, pk_gradient, rate_):
             gradient = jax.tree.map(lambda a, b: a + b, pair_gradient, pk_gradient)
@@ -402,7 +419,7 @@ class AuxEngine:
             return optax.apply_updates(p, jax.tree.map(lambda value: value * rate_, updates)), state, finite
 
         self.predictions = jax.jit(lambda p, graphs: paired_all(p, graphs)[0])
-        self.paired_auxiliary = jax.jit(lambda p, graphs: paired_all(p, graphs)[1:])
+        self.paired_auxiliary = jax.jit(lambda p, graphs: paired_all(p, graphs)[1:3])
         self.site_auxiliary = jax.jit(jax.vmap(lambda p, graph: predict_all(p, graph)[1], in_axes=(None, 0)))
         self.paired_value_grad = jax.jit(jax.value_and_grad(paired_objective, has_aux=True))
         self.pkpdb_value_grad = jax.jit(jax.value_and_grad(pkpdb_objective))
@@ -494,7 +511,7 @@ def parameter_count(params):
 
 
 def make_model(seed, query_norm="shared", paired_weight="none", reduction="structure", width=None, sidechains=False, depth=2, loops=1,
-               orientation=False, sidechain_view="all", sidechain_drop=0.0):
+               orientation=False, sidechain_view="all", sidechain_drop=0.0, table=None):
     """(params, engine, predict): scratch oGQT and its engine; separate query norm starts as a copy of query norm1.
     depth / loops (production_depth), orientation / side-chain views (production_inputs): the engine returned is
     JointEngine, valid for depth alone; the others take DropoutEngine / AuxEngine with model_inputs(...) (train())."""
@@ -504,14 +521,14 @@ def make_model(seed, query_norm="shared", paired_weight="none", reduction="struc
     from .gqt_multitask_replay import JointEngine
     shape = architecture(width, sidechains)
     params = initialize_ogqt(jax.random.PRNGKey(seed), **shape)
-    if depth != 2 or loops != 1 or orientation or sidechain_view != "all":
+    if depth != 2 or loops != 1 or orientation or sidechain_view != "all" or table:
         architecture(width, sidechains, depth, loops)  # validates the combination
         if query_norm != "shared" or paired_weight != "none" or reduction != "structure":
             raise ValueError("depth / loops / input variants combine with the default objective only")
         if depth != 2: params = deepen(params, seed, depth, shape["width"], shape["ff"], shape.get("node_dim", 24))
         if loops != 1: params = add_injection(params, seed)
         if orientation: params = add_orientation(params, seed)
-        predict_shift = model_inputs(loops, orientation, sidechain_view, sidechain_drop)[1]
+        predict_shift = model_inputs(loops, orientation, sidechain_view, sidechain_drop, table)[1]
         return params, JointEngine(params), jax.jit(jax.vmap(predict_shift, in_axes=(None, 0)))
     if query_norm == "separate":
         params = {**params, "query_context_norm": jnp.array(params["query"]["norm1"])}
@@ -523,9 +540,10 @@ def make_model(seed, query_norm="shared", paired_weight="none", reduction="struc
     return params, engine, jax.jit(jax.vmap(predict_shift, in_axes=(None, 0)))
 
 
-def model_inputs(loops=1, orientation=False, sidechain_view="all", sidechain_drop=0.0):
-    """(site_embeddings, predict_shift) for the looped encoder and the input variants (pkanet.site_model's by default)."""
-    return input_functions(model_functions(loops), sidechain_view, sidechain_drop, orientation)
+def model_inputs(loops=1, orientation=False, sidechain_view="all", sidechain_drop=0.0, table=None):
+    """(site_embeddings, predict_shift) for the looped encoder and the input variants (pkanet.site_model's by default);
+    table: the loader appends backbone-v1 (default: with orientation)."""
+    return input_functions(model_functions(loops), sidechain_view, sidechain_drop, orientation, table)
 
 
 def interface_weighted(engine):
@@ -747,7 +765,7 @@ def validate(engine, predict, params, sources, manifests, config, out=None, epoc
 
 def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none", seed=SEED, query_norm="shared", reduction="structure",
           mask_pmin=None, dropout=0.0, aux_weight=None, aux_loss="ce", aux_interface_branch="bound", aux_heads="both", width=None,
-          sidechains=False, depth=2, loops=1, orientation=False, sidechain_view="all", sidechain_drop=0.0):
+          sidechains=False, depth=2, loops=1, orientation=False, sidechain_view="all", sidechain_drop=0.0, geometry_weight=0.0):
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
@@ -799,6 +817,11 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
                                "non-titratable": "side-chain features on all residues except D/E/H/C/Y/K/R",
                                "dropout": f"side-chain features hidden per structure with probability {sidechain_drop} in training (AB/free share the draw); "
                                           "validation without side chains"}[sidechain_view]} if sidechain_view != "all" else {}),
+        **({"geometry_auxiliary": f"+ {geometry_weight} x (functional-centroid MSE in the own frame, A / 10, + salt-bridge partner score cross-entropy) "
+                                  "for D/E/H/C/Y/K/R query sites from the hidden side chains and backbone-v1 (production_inputs.geometry_targets); "
+                                  "heads aux_geom_pos / aux_partner; PINDER both branches, pKPDB train_mask sites",
+            "backbone_verification_sha256": {d: BackboneTable(root, d).verification_sha256 for d in ("pinder", "pkpdb", "benchmark-val")}}
+           if geometry_weight else {}),
         **({"orientation": {"definition": "production_inputs: residue edges + direction to i in j's frame, F_i^T F_j, signed sequence separation / 32 "
                                           "(13 features) from backbone-v1; residue and query block edge projections 20 -> 33",
                             "verification_sha256": {d: BackboneTable(root, d).verification_sha256 for d in ("pinder", "pkpdb", "benchmark-val")}}}
@@ -816,7 +839,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     config = LoaderConfig()
     side = {}
     for d in ("pinder", "pkpdb", "benchmark-val"):
-        tables = ([SidechainTable(root, d)] if sidechains else []) + ([BackboneTable(root, d)] if orientation else [])
+        tables = ([SidechainTable(root, d)] if sidechains else []) + ([BackboneTable(root, d)] if orientation or geometry_weight else [])
         side[d] = None if not tables else tables[0] if len(tables) == 1 else ConcatTable(*tables)
     contacts = ContactTable(root, RSA_BOUND_TABLE if aux_heads == "burial-siamese" else CONTACTS_TABLE) if aux_weight is not None else None
     train_pinder = AuxPinderSource(_with_policy(manifests["pinder"], batch), contacts, config=config, norms=norms, sidechains=side["pinder"]) if contacts else \
@@ -832,13 +855,16 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
         raise ValueError("--width / --sidechains combine with the default objective, dropout and auxiliaries only")
     if sidechain_view != "all" and not sidechains: raise ValueError("--sidechain-view needs --sidechains")
     if (sidechain_view == "dropout") != (sidechain_drop > 0): raise ValueError("--sidechain-drop goes with --sidechain-view dropout")
+    if geometry_weight and (sidechain_view != "dropout" or aux_weight is None):
+        raise ValueError("--geometry-weight needs --sidechains --sidechain-view dropout (side chains hidden from validation) and --aux-weight")
+    table = bool(orientation or geometry_weight)
     params, engine, predict = make_model(seed, query_norm, paired_weight, reduction, width, sidechains, depth, loops,
-                                         orientation, sidechain_view, sidechain_drop); state = engine.optimizer.init(params)
+                                         orientation, sidechain_view, sidechain_drop, table); state = engine.optimizer.init(params)
     custom_inputs = loops != 1 or orientation or sidechain_view != "all"
     if custom_inputs and aux_weight is None and not dropout:
         raise ValueError("--loops / --orientation / --sidechain-view run through DropoutEngine / AuxEngine (use --dropout or --aux-weight)")
     if (depth != 2 or custom_inputs) and mask_pmin is not None: raise ValueError("depth / loops / input variants do not combine with site masking")
-    embeddings_fn, shift_fn = model_inputs(loops, orientation, sidechain_view, sidechain_drop)
+    embeddings_fn, shift_fn = model_inputs(loops, orientation, sidechain_view, sidechain_drop, table)
     step_key = None
     if aux_weight is not None:
         if query_norm != "shared" or paired_weight != "none" or reduction != "structure" or mask_pmin is not None:
@@ -846,7 +872,8 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
         if chunked(batch): raise ValueError("the auxiliary objective runs the unchunked path; use batch <= 64")
         if aux_heads != "both" and aux_loss != "ce": raise ValueError("burial-only auxiliaries are implemented for --aux-loss ce")
         params = initialize_aux(params, seed, aux_loss, aux_heads)
-        engine = AuxEngine(params, aux_weight, dropout, aux_loss, aux_interface_branch, aux_heads, embeddings_fn); state = engine.optimizer.init(params)
+        if geometry_weight: params = add_geometry_heads(params, seed)
+        engine = AuxEngine(params, aux_weight, dropout, aux_loss, aux_interface_branch, aux_heads, embeddings_fn, geometry_weight); state = engine.optimizer.init(params)
         step_key = jax.random.PRNGKey(seed + 200003)
     elif dropout:
         if query_norm != "shared" or paired_weight != "none" or reduction != "structure" or mask_pmin is not None:
@@ -995,6 +1022,7 @@ def export_model(root, run, destination):
         text = protocol["auxiliary"]; mode = "ce" if text.startswith("AuxEngine ce") else "ordinal"
         heads = "burial" if text.startswith("AuxEngine ce burial-only") else "burial-siamese" if text.startswith("AuxEngine ce burial-siamese") else "both"
         params = initialize_aux(params, protocol["seed"], mode, heads)
+    if "geometry_auxiliary" in protocol: params = add_geometry_heads(params, protocol["seed"])
     import optax
     from .gqt_regularization import decay_mask
     # the engines' optimizer (JointEngine / DropoutEngine / AuxEngine), only for the checkpoint's tree structure
@@ -1045,6 +1073,7 @@ def main(argv=None):
     p.add_argument("--orientation", action="store_true", help="13 orientation features on the residue edges (production_inputs, backbone-v1)")
     p.add_argument("--sidechain-view", choices=("all", "titratable", "non-titratable", "dropout"), default="all")
     p.add_argument("--sidechain-drop", type=float, default=0.0, help="with --sidechain-view dropout: per-structure probability of hiding side chains")
+    p.add_argument("--geometry-weight", type=float, default=0.0, help="titratable side-chain geometry auxiliary weight (production_inputs)")
     p = sub.add_parser("count"); p.add_argument("widths", type=int, nargs="+"); p.add_argument("--sidechains", action="store_true")
     p.add_argument("--depth", type=int, default=2); p.add_argument("--loops", type=int, default=1)
     p = sub.add_parser("export"); p.add_argument("run"); p.add_argument("destination")
@@ -1070,7 +1099,8 @@ def main(argv=None):
     if args.action == "train":
         result = train(root, args.run, args.fraction, args.smoke, args.batch, args.paired_weight, args.seed, args.query_norm, args.loss_reduction, args.site_mask_pmin,
                        args.dropout, args.aux_weight, args.aux_loss, args.aux_interface_branch,
-                       args.aux_heads, args.width, args.sidechains, args.depth, args.loops, args.orientation, args.sidechain_view, args.sidechain_drop)
+                       args.aux_heads, args.width, args.sidechains, args.depth, args.loops, args.orientation, args.sidechain_view, args.sidechain_drop,
+                       args.geometry_weight)
         print(json.dumps({"selected_epoch": result["selected_epoch"], "selection": result["validation"]["selection"]}))
 
 
