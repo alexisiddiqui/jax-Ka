@@ -906,3 +906,64 @@ Pooled sigma over the seventeen 3-seed groups: 0.0037 (34 df; 2 sigma = 0.0074).
   which phi/psi are recoverable in principle, yet explicit per-residue angles give 3x the orientation + dropout gain.
 - The side-chain dropout rate does not matter between 0.25 and 0.75.
 - The chi1 auxiliary leans the right way but stays under 2 sigma, like the functional-centroid auxiliary.
+
+### Dihedral ablation (2026-10-12)
+
+Backbone dihedrals with and without residue-edge orientation and side-chain dropout 0.5 (same fixed config and seeds;
+backbone-only validation). Pooled sigma over the twenty 3-seed groups: 0.0037 (40 df; 2 sigma = 0.0074).
+
+| Arm | Selection (seeds) | State MAE | Interface paired MAE | pKPDB val MAE | Benchmark MAE | s / epoch |
+|---|---|---:|---:|---:|---:|---:|
+| backbone (reference) | 0.6503 | 0.4143 | 0.2360 | 0.5020 | 0.5220 | 127 |
+| dihedrals | 0.6238 (0.6206 / 0.6249 / 0.6258) | 0.3960 | 0.2278 | 0.4830 | 0.5051 | 120 |
+| dihedrals + orientation | 0.6212 (0.6183 / 0.6182 / 0.6272) | 0.3923 | 0.2289 | 0.4744 | 0.4971 | 120 |
+| dihedrals + side-chain dropout | 0.6144 (0.6149 / 0.6120 / 0.6163) | 0.3915 | 0.2229 | 0.4771 | 0.5030 | 125 |
+| dihedrals + orientation + side-chain dropout | **0.6080** (0.6079 / 0.6070 / 0.6090) | **0.3860** | **0.2219** | **0.4692** | **0.4902** | 136 |
+
+Contrasts (selection; real = beyond 2 sigma with at least 3 of 4 metrics agreeing):
+
+| Contrast | Change | Metrics agreeing | Verdict |
+|---|---:|---:|---|
+| dihedrals vs backbone | -0.0265 | 4 / 4 | real |
+| + orientation (on dihedrals) | -0.0025 | 3 / 4 | not real |
+| + side-chain dropout (on dihedrals) | -0.0094 | 4 / 4 | real |
+| + orientation (on dihedrals + dropout) | -0.0064 | | not real (under 2 sigma) |
+| all three vs dihedrals | -0.0158 | 4 / 4 | real |
+
+- Dihedrals carry most of the gain on their own (-0.027 of the -0.042 total). Side-chain dropout adds a real -0.009
+  on top. Orientation leans the right way in both contexts (-0.003, -0.006) but never clears 2 sigma by itself.
+
+### Representation probe: which backbone features does the model already know? (2026-10-12)
+
+`scripts/representation_probe.py`: on the selected checkpoint, PINDER (AB branch) and pKPDB validation sites, the
+held-out R^2 (ridge, two folds split by structure) of each candidate feature from the final site embedding (what the
+linear pKa head reads), and from the model's own predicted burial alone. Features from backbone-v1 only (no side
+chains): phi/psi; half-sphere exposure (CA within 13 A on the virtual-CB side / the other) and virtual-CB count within
+10 A; DSSP backbone H-bond energies of the site residue's own N-H and C=O; free / bonded backbone N-H and free C=O
+within 8 A of the site's virtual CB (free: no DSSP H-bond below -0.5 kcal/mol); shortest N-O / O-N distances. About
+2 minutes per checkpoint on one GPU. Burial head vs true 1 - clip(RSA): R^2 0.88, Spearman 0.93; embedding probe
+of true burial R^2 0.85.
+
+PINDER, orientation + side-chain dropout checkpoint (no dihedrals); pKPDB agrees within 0.03:
+
+| Feature | R^2 from embedding | R^2 from predicted burial | R^2 from embedding, dihedral checkpoint |
+|---|---:|---:|---:|
+| phi / psi (sin, cos) | 0.10 | 0.01 | 0.67 |
+| HSE-up | 0.83 | 0.71 | 0.81 |
+| virtual-CB count 10 A | 0.85 | 0.77 | 0.85 |
+| HSE-down | 0.36 | 0.08 | 0.38 |
+| bonded backbone N-H within 8 A | 0.49 | 0.36 | 0.55 |
+| free backbone N-H within 8 A | 0.18 | 0.07 | 0.23 |
+| free N-H pointing at the site | 0.15 | 0.03 | 0.23 |
+| free backbone C=O within 8 A | 0.16 | 0.04 | 0.23 |
+| own N-H / C=O H-bond energy | 0.20 / 0.17 | 0.09 / 0.09 | 0.26 / 0.24 |
+| shortest N-O / O-N | 0.34 / 0.32 | 0.09 / 0.10 | 0.38 / 0.39 |
+
+- The probe passes its calibration: phi/psi is barely recoverable before dihedrals were added (0.10) and well
+  recovered after (0.67), matching the 8.7 sigma training result.
+- Half-sphere exposure is burial by another name: HSE-up and the CB count are recovered as well as burial itself
+  and mostly from the burial prediction alone, so it is not worth a training run.
+- Free backbone N-H / C=O groups are weakly encoded and nearly independent of burial: the strongest remaining
+  candidates for an explicit input.
+- A linear residual test (feature x group interactions on the site's own features) found nothing for any feature,
+  including phi/psi, so it cannot detect the kind of gain dihedrals gave and is not used for decisions.
