@@ -129,6 +129,13 @@ Direct midpoint results include `valid`, `bracketed`, `probability`, `slope`, `c
 
 Grid midpoint results additionally expose sampled monotonicity and bracket width. Gradients are through the interpolation, with possible kinks when the crossing changes intervals. Refine the grid and compare against direct roots before using that approximation in a loss. The bracket width is a resolution indicator, not an independently measured error estimate.
 
+## PyTorch integration
+
+Use `from jaxpropka.torch import torch_readout` to wrap a prepared JAX readout
+as a PyTorch module. Gradients propagate through its input to an upstream
+PyTorch model. Install `.[torch]`; see [usage, supported devices and gradient
+validation](docs/TORCH.md).
+
 ## Biotite topology and multiple chains
 
 Biotite handles PDB/mmCIF/BCIF coordinates, AtomArray residue annotation, CCD residue templates and intra-residue bond topology. A small PDB `TER` reader supplements Biotite because its AtomArray representation does not retain those records. Peptide bonds are rebuilt using chain identity, explicit segment boundaries and C–N geometry; spatial neighbors across chains still contribute noncovalent interactions.
