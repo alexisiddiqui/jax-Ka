@@ -68,3 +68,6 @@ ownership, batching, and end-to-end PyTorch linear-model parameter gradients
 against native JAX through a synthetic titration fixture. A CUDA test skips
 unless both frameworks have CUDA devices. Synthetic numerical validation is
 not a molecular-accuracy benchmark.
+
+For gradients through structural featurisation, sequence, backbone and side-chain
+inputs, see [the structural gradient interface](TORCH_STRUCTURES.md).

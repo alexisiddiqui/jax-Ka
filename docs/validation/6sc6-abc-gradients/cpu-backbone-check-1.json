@@ -1,0 +1,147 @@
+{
+  "variant": "backbone",
+  "mode": "check",
+  "run": "1",
+  "torch": "2.10.0",
+  "jax": "0.4.38",
+  "device": "cpu",
+  "residues": 604,
+  "interface_residues": 39,
+  "interface_query_sites": 14,
+  "input_parameter_dtype": "float32",
+  "context_chains": [
+    "A",
+    "B",
+    "C"
+  ],
+  "model": "released 24-feature checkpoint",
+  "objective": "mean predicted shift over supported query sites at the A-B interface",
+  "forward": {
+    "seconds": 0.9656176249991404,
+    "cache_hits": 0,
+    "value": 1.0004792213439941,
+    "output_dtype": "torch.float32",
+    "memory": {
+      "jax": {},
+      "torch_peak_allocated": null,
+      "torch_peak_reserved": null
+    }
+  },
+  "backward": {
+    "seconds": 2.554126333008753,
+    "cache_hits": 0,
+    "memory": {
+      "jax": {},
+      "torch_peak_allocated": null,
+      "torch_peak_reserved": null
+    }
+  },
+  "finite_gradients": true,
+  "outside_interface_max": 0.0,
+  "checks": [
+    {
+      "group": "sequence",
+      "chain": "A",
+      "autograd": 0.6097729206085205,
+      "estimates": [
+        {
+          "epsilon": 0.01,
+          "finite_difference": 0.6094574928283691,
+          "absolute_error": 0.0003154277801513672,
+          "relative_error": 0.000517287287596483,
+          "passed": true
+        },
+        {
+          "epsilon": 0.003,
+          "finite_difference": 0.6096959114074707,
+          "absolute_error": 7.700920104980469e-05,
+          "relative_error": 0.000126291605361802,
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "group": "sequence",
+      "chain": "B",
+      "autograd": 0.3875995874404907,
+      "estimates": [
+        {
+          "epsilon": 0.01,
+          "finite_difference": 0.3875821828842163,
+          "absolute_error": 1.7404556274414062e-05,
+          "relative_error": 4.490344375582245e-05,
+          "passed": true
+        },
+        {
+          "epsilon": 0.003,
+          "finite_difference": 0.38759908080101013,
+          "absolute_error": 5.066394805908203e-07,
+          "relative_error": 1.307120794261955e-06,
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "group": "backbone",
+      "chain": "A",
+      "autograd": 0.3216497600078583,
+      "estimates": [
+        {
+          "epsilon": 0.01,
+          "finite_difference": 0.3219187259674072,
+          "absolute_error": 0.0002689659595489502,
+          "relative_error": 0.0008362075555174642,
+          "passed": true
+        },
+        {
+          "epsilon": 0.003,
+          "finite_difference": 0.32189488410949707,
+          "absolute_error": 0.00024512410163879395,
+          "relative_error": 0.0007620838940865533,
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "group": "backbone",
+      "chain": "B",
+      "autograd": 0.17646121978759766,
+      "estimates": [
+        {
+          "epsilon": 0.01,
+          "finite_difference": 0.1764923334121704,
+          "absolute_error": 3.1113624572753906e-05,
+          "relative_error": 0.00017631989969356818,
+          "passed": true
+        },
+        {
+          "epsilon": 0.003,
+          "finite_difference": 0.17640988528728485,
+          "absolute_error": 5.1334500312805176e-05,
+          "relative_error": 0.0002909109456151065,
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "group": "sidechains",
+      "chain": "A",
+      "zero_gradient": true,
+      "expected": true
+    },
+    {
+      "group": "sidechains",
+      "chain": "B",
+      "zero_gradient": true,
+      "expected": true
+    }
+  ],
+  "passed": true,
+  "sampled_process_peak_mib": null,
+  "sampled_process_peak_by_phase_mib": {},
+  "memory_samples": 0
+}

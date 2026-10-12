@@ -29,6 +29,7 @@ mps = [
 ]
 
 [project.scripts]
+ogqt = "pkanet.cli:main"
 jaxpropka = "jaxpropka.cli:main"
 pkabench = "pkabench.cli:main"
 

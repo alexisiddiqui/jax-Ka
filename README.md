@@ -274,3 +274,10 @@ Upstream parameter and API references are recorded in [SOURCES.md](SOURCES.md). 
 The [ATLAS preparation guide](tools/atlas/README.md) records the full-dataset
 Isambard pipeline, frozen validation split, nested 10%/50%/75% training portions,
 compressed graph release and completed GPU smoke checks.
+
+## Trained transformer prediction
+
+The repository includes the production oGQT checkpoint at
+`models/ogqt-production-50k`. Use `ogqt predict` (or `python -m pkanet.cli predict`)
+for PDB/mmCIF/BCIF inputs, cached features and mixed-size batches.
+See [standalone inference](docs/INFERENCE.md) for CPU/GPU commands and compilation behaviour.

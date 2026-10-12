@@ -1,0 +1,332 @@
+{
+  "source": "https://files.rcsb.org/download/6SC6.pdb",
+  "source_sha256": "ef678990e7c64f333836b41e423d7164b840f8d8d45e2a3706847f5c3108fff7",
+  "chains": [
+    "A",
+    "B",
+    "C"
+  ],
+  "residues": 604,
+  "interface_count": 39,
+  "interface": [
+    {
+      "index": 101,
+      "chain": "A",
+      "number": 798,
+      "insertion": "",
+      "min_partner_distance": 3.454659608639977
+    },
+    {
+      "index": 102,
+      "chain": "A",
+      "number": 799,
+      "insertion": "",
+      "min_partner_distance": 4.648789923464962
+    },
+    {
+      "index": 103,
+      "chain": "A",
+      "number": 800,
+      "insertion": "",
+      "min_partner_distance": 3.356611779428839
+    },
+    {
+      "index": 104,
+      "chain": "A",
+      "number": 801,
+      "insertion": "",
+      "min_partner_distance": 3.0675324752324493
+    },
+    {
+      "index": 105,
+      "chain": "A",
+      "number": 802,
+      "insertion": "",
+      "min_partner_distance": 3.6968813141914985
+    },
+    {
+      "index": 106,
+      "chain": "A",
+      "number": 803,
+      "insertion": "",
+      "min_partner_distance": 3.0930006692287058
+    },
+    {
+      "index": 123,
+      "chain": "A",
+      "number": 820,
+      "insertion": "",
+      "min_partner_distance": 3.5398194440372106
+    },
+    {
+      "index": 125,
+      "chain": "A",
+      "number": 822,
+      "insertion": "",
+      "min_partner_distance": 3.6307229745597414
+    },
+    {
+      "index": 129,
+      "chain": "A",
+      "number": 826,
+      "insertion": "",
+      "min_partner_distance": 4.124303746376149
+    },
+    {
+      "index": 130,
+      "chain": "A",
+      "number": 827,
+      "insertion": "",
+      "min_partner_distance": 3.0341384726538587
+    },
+    {
+      "index": 131,
+      "chain": "A",
+      "number": 828,
+      "insertion": "",
+      "min_partner_distance": 3.2299884964275014
+    },
+    {
+      "index": 132,
+      "chain": "A",
+      "number": 829,
+      "insertion": "",
+      "min_partner_distance": 2.906656971448613
+    },
+    {
+      "index": 133,
+      "chain": "A",
+      "number": 830,
+      "insertion": "",
+      "min_partner_distance": 3.782712829879264
+    },
+    {
+      "index": 155,
+      "chain": "A",
+      "number": 852,
+      "insertion": "",
+      "min_partner_distance": 3.0679620591854904
+    },
+    {
+      "index": 157,
+      "chain": "A",
+      "number": 854,
+      "insertion": "",
+      "min_partner_distance": 3.2414341037316876
+    },
+    {
+      "index": 158,
+      "chain": "A",
+      "number": 855,
+      "insertion": "",
+      "min_partner_distance": 3.9450148425857225
+    },
+    {
+      "index": 179,
+      "chain": "A",
+      "number": 876,
+      "insertion": "",
+      "min_partner_distance": 4.655578518618037
+    },
+    {
+      "index": 276,
+      "chain": "A",
+      "number": 982,
+      "insertion": "",
+      "min_partner_distance": 4.691881064817606
+    },
+    {
+      "index": 365,
+      "chain": "B",
+      "number": 1,
+      "insertion": "",
+      "min_partner_distance": 4.655578518618037
+    },
+    {
+      "index": 394,
+      "chain": "B",
+      "number": 30,
+      "insertion": "",
+      "min_partner_distance": 3.0679620591854904
+    },
+    {
+      "index": 397,
+      "chain": "B",
+      "number": 33,
+      "insertion": "",
+      "min_partner_distance": 3.0675324752324493
+    },
+    {
+      "index": 399,
+      "chain": "B",
+      "number": 35,
+      "insertion": "",
+      "min_partner_distance": 4.709527166298321
+    },
+    {
+      "index": 411,
+      "chain": "B",
+      "number": 47,
+      "insertion": "",
+      "min_partner_distance": 4.434090338859056
+    },
+    {
+      "index": 414,
+      "chain": "B",
+      "number": 50,
+      "insertion": "",
+      "min_partner_distance": 3.0930006692287058
+    },
+    {
+      "index": 415,
+      "chain": "B",
+      "number": 51,
+      "insertion": "",
+      "min_partner_distance": 4.969175020037855
+    },
+    {
+      "index": 416,
+      "chain": "B",
+      "number": 52,
+      "insertion": "",
+      "min_partner_distance": 4.54979249354026
+    },
+    {
+      "index": 417,
+      "chain": "B",
+      "number": 53,
+      "insertion": "",
+      "min_partner_distance": 3.514389160079306
+    },
+    {
+      "index": 421,
+      "chain": "B",
+      "number": 57,
+      "insertion": "",
+      "min_partner_distance": 4.279080347203304
+    },
+    {
+      "index": 423,
+      "chain": "B",
+      "number": 59,
+      "insertion": "",
+      "min_partner_distance": 3.5398194440372106
+    },
+    {
+      "index": 440,
+      "chain": "B",
+      "number": 76,
+      "insertion": "",
+      "min_partner_distance": 4.691881064817606
+    },
+    {
+      "index": 463,
+      "chain": "B",
+      "number": 99,
+      "insertion": "",
+      "min_partner_distance": 4.982311032774104
+    },
+    {
+      "index": 464,
+      "chain": "B",
+      "number": 100,
+      "insertion": "",
+      "min_partner_distance": 3.356611779428839
+    },
+    {
+      "index": 465,
+      "chain": "B",
+      "number": 101,
+      "insertion": "",
+      "min_partner_distance": 3.2299884964275014
+    },
+    {
+      "index": 466,
+      "chain": "B",
+      "number": 102,
+      "insertion": "",
+      "min_partner_distance": 3.0133463632812263
+    },
+    {
+      "index": 467,
+      "chain": "B",
+      "number": 103,
+      "insertion": "",
+      "min_partner_distance": 3.0341384726538587
+    },
+    {
+      "index": 468,
+      "chain": "B",
+      "number": 104,
+      "insertion": "",
+      "min_partner_distance": 3.661988230492122
+    },
+    {
+      "index": 469,
+      "chain": "B",
+      "number": 105,
+      "insertion": "",
+      "min_partner_distance": 2.906656971448613
+    },
+    {
+      "index": 470,
+      "chain": "B",
+      "number": 106,
+      "insertion": "",
+      "min_partner_distance": 3.454659608639977
+    },
+    {
+      "index": 471,
+      "chain": "B",
+      "number": 107,
+      "insertion": "",
+      "min_partner_distance": 3.115515129320897
+    }
+  ],
+  "topology_metadata": {
+    "model": 1,
+    "altloc": "occupancy",
+    "gap_policy": "cap",
+    "biotite_version": "1.2.0",
+    "source_name": "6SC6.pdb",
+    "source_sha256": "ef678990e7c64f333836b41e423d7164b840f8d8d45e2a3706847f5c3108fff7",
+    "omitted_nonprotein": [
+      "CL",
+      "SO4",
+      "ZN"
+    ],
+    "water_atoms_omitted": 169,
+    "gaps": [
+      {
+        "after": "A:958",
+        "before": "A:968",
+        "distance": 16.372487269442786
+      }
+    ],
+    "disulfide_pairs": [
+      [
+        "C:22",
+        "C:96"
+      ],
+      [
+        "B:22",
+        "B:96"
+      ]
+    ],
+    "free_n_termini": [
+      "A:697",
+      "B:1",
+      "C:1"
+    ],
+    "free_c_termini": [
+      "A:1070",
+      "B:119",
+      "C:120"
+    ],
+    "explicit_break_after": [
+      "A:1070",
+      "B:119",
+      "C:120"
+    ]
+  }
+}

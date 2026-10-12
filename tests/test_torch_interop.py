@@ -106,9 +106,13 @@ def test_contract_errors():
         wrapped(torch.ones(3, dtype=torch.int64))
     with pytest.raises(ValueError, match="CPU and CUDA"):
         wrapped(torch.empty(3, device="meta"))
-    with jax.experimental.enable_x64(False):
+    previous_x64 = jax.config.x64_enabled
+    jax.config.update("jax_enable_x64", False)
+    try:
         with pytest.raises(ValueError, match="jax_enable_x64"):
             wrapped(torch.ones(3, dtype=torch.float64))
+    finally:
+        jax.config.update("jax_enable_x64", previous_x64)
     with pytest.raises(TypeError, match="one floating JAX array"):
         torch_readout(lambda x: {"value": x})(torch.ones(3))
     with pytest.raises(TypeError, match="float32 or float64"):

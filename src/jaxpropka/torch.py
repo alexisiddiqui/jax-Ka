@@ -1,8 +1,9 @@
-"""Optional PyTorch autograd bridge for prepared, single-array JAX readouts.
+"""Optional PyTorch autograd bridges for pure single-array and multi-input JAX readouts.
 
 The bridge follows BioFeaturisers' DLPack / recomputed-VJP approach. Importing
 jaxpropka itself does not import PyTorch. Only first-order reverse mode is
-supported; geometry and any values closed over by the readout remain fixed.
+supported; values closed over by the readout remain fixed. Pass geometry as an
+explicit tensor input to differentiate through it with TorchInputsReadout.
 """
 from __future__ import annotations
 
@@ -133,3 +134,57 @@ def torch_readout(function: Callable, *, jit: bool = True) -> TorchReadout:
 
 
 __all__ = ["TorchReadout", "torch_readout"]
+
+
+class _InputsFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, module, *values):
+        ctx.module = module
+        ctx.jax_device = _jax_device(values[0])
+        ctx.save_for_backward(*values)
+        with jax.default_device(ctx.jax_device):
+            result = module._forward(*(_to_jax(x, ctx.jax_device) for x in values))
+        return _to_torch(result, values[0].device)
+
+    @staticmethod
+    @once_differentiable
+    def backward(ctx, cotangent):
+        values = ctx.saved_tensors
+        with jax.default_device(ctx.jax_device):
+            gradients = ctx.module._backward(
+                tuple(_to_jax(x, ctx.jax_device) for x in values),
+                _to_jax(cotangent, ctx.jax_device))
+        return (None, *(_to_torch(g, x.device) if needed else None
+                        for g, x, needed in zip(gradients, values, ctx.needs_input_grad[1:])))
+
+
+class TorchInputsReadout(torch.nn.Module):
+    """First-order bridge for a pure multi-input JAX featurise+predict callable.
+
+    All inputs are floating tensors on the same device and with the same dtype.
+    Captured parameters/metadata must remain fixed until backward completes.
+    Compose Torch masks/detaches or softmax before this module as usual.
+    """
+    def __init__(self, function: Callable, *, jit=True):
+        super().__init__()
+        if not callable(function): raise TypeError('function must be callable')
+        def backward(values, cotangent):
+            _, pullback = jax.vjp(function, *values)
+            return pullback(cotangent)
+        self._forward = jax.jit(function) if jit else function
+        self._backward = jax.jit(backward) if jit else backward
+
+    def forward(self, *values):
+        if not values: raise ValueError('At least one tensor is required')
+        for value in values:
+            if not isinstance(value, torch.Tensor): raise TypeError('Inputs must be torch tensors')
+            if value.layout != torch.strided or value.dtype not in (torch.float32, torch.float64):
+                raise TypeError('Inputs must be dense float32 or float64 tensors')
+            if value.dtype != values[0].dtype or value.device != values[0].device:
+                raise ValueError('Inputs must share dtype and device')
+            if value.dtype == torch.float64 and not jax.config.x64_enabled:
+                raise ValueError('Enable jax_enable_x64 before using float64 Torch inputs')
+        return _InputsFunction.apply(self, *values)
+
+
+__all__.append('TorchInputsReadout')
