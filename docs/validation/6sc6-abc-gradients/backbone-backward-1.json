@@ -1,0 +1,70 @@
+{
+  "variant": "backbone",
+  "mode": "backward",
+  "run": "1",
+  "torch": "2.14.1+cu130",
+  "jax": "0.11.2",
+  "device": "NVIDIA GH200 120GB",
+  "residues": 604,
+  "interface_residues": 39,
+  "interface_query_sites": 14,
+  "input_parameter_dtype": "float32",
+  "context_chains": [
+    "A",
+    "B",
+    "C"
+  ],
+  "model": "released 24-feature checkpoint",
+  "objective": "mean predicted shift over supported query sites at the A-B interface",
+  "forward": {
+    "seconds": 0.2881797240115702,
+    "cache_hits": 1,
+    "value": 1.0004793911107948,
+    "output_dtype": "torch.float64",
+    "memory": {
+      "jax": {
+        "num_allocs": 78,
+        "bytes_in_use": 282112,
+        "peak_bytes_in_use": 67391744,
+        "largest_alloc_size": 67108864,
+        "bytes_limit": 76504104960,
+        "bytes_reserved": 0,
+        "peak_bytes_reserved": 0,
+        "largest_free_block_bytes": 67108864,
+        "pool_bytes": 69206016,
+        "peak_pool_bytes": 69206016
+      },
+      "torch_peak_allocated": 644096,
+      "torch_peak_reserved": 2097152
+    }
+  },
+  "backward": {
+    "seconds": 9.24814369197702,
+    "cache_hits": 0,
+    "memory": {
+      "jax": {
+        "num_allocs": 907,
+        "bytes_in_use": 282112,
+        "peak_bytes_in_use": 203077120,
+        "largest_alloc_size": 134217728,
+        "bytes_limit": 76504104960,
+        "bytes_reserved": 0,
+        "peak_bytes_reserved": 0,
+        "largest_free_block_bytes": 134217728,
+        "pool_bytes": 270532608,
+        "peak_pool_bytes": 270532608
+      },
+      "torch_peak_allocated": 953856,
+      "torch_peak_reserved": 2097152
+    }
+  },
+  "finite_gradients": true,
+  "outside_interface_max": 0.0,
+  "sampled_process_peak_mib": 1014.0,
+  "sampled_process_peak_by_phase_mib": {
+    "backward": 1014.0,
+    "setup": 590.0,
+    "forward": 684.0
+  },
+  "memory_samples": 81
+}

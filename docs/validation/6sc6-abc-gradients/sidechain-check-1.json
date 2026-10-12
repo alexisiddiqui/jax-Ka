@@ -1,0 +1,205 @@
+{
+  "variant": "sidechain",
+  "mode": "check",
+  "run": "1",
+  "torch": "2.14.1+cu130",
+  "jax": "0.11.2",
+  "device": "NVIDIA GH200 120GB",
+  "residues": 604,
+  "interface_residues": 39,
+  "interface_query_sites": 14,
+  "input_parameter_dtype": "float32",
+  "context_chains": [
+    "A",
+    "B",
+    "C"
+  ],
+  "model": "initialized 152-feature width44 ff88 seed4",
+  "objective": "mean predicted shift over supported query sites at the A-B interface",
+  "forward": {
+    "seconds": 0.20624711300479248,
+    "cache_hits": 1,
+    "value": 0.20295475849083489,
+    "output_dtype": "torch.float64",
+    "memory": {
+      "jax": {
+        "num_allocs": 371,
+        "bytes_in_use": 314880,
+        "peak_bytes_in_use": 67425024,
+        "largest_alloc_size": 67108864,
+        "bytes_limit": 76504104960,
+        "bytes_reserved": 0,
+        "peak_bytes_reserved": 0,
+        "largest_free_block_bytes": 67108864,
+        "pool_bytes": 69206016,
+        "peak_pool_bytes": 69206016
+      },
+      "torch_peak_allocated": 644096,
+      "torch_peak_reserved": 2097152
+    }
+  },
+  "backward": {
+    "seconds": 0.41790825000498444,
+    "cache_hits": 1,
+    "memory": {
+      "jax": {
+        "num_allocs": 376,
+        "bytes_in_use": 314880,
+        "peak_bytes_in_use": 134842368,
+        "largest_alloc_size": 134217728,
+        "bytes_limit": 76504104960,
+        "bytes_reserved": 0,
+        "peak_bytes_reserved": 0,
+        "largest_free_block_bytes": 134217728,
+        "pool_bytes": 203423744,
+        "peak_pool_bytes": 203423744
+      },
+      "torch_peak_allocated": 1185792,
+      "torch_peak_reserved": 2097152
+    }
+  },
+  "finite_gradients": true,
+  "outside_interface_max": 0.0,
+  "checks": [
+    {
+      "group": "sequence",
+      "chain": "A",
+      "autograd": 0.014678667299449444,
+      "estimates": [
+        {
+          "epsilon": 0.01,
+          "finite_difference": 0.014679878950119019,
+          "absolute_error": 1.2116506695747375e-06,
+          "relative_error": 8.254500526898537e-05,
+          "passed": true
+        },
+        {
+          "epsilon": 0.003,
+          "finite_difference": 0.014679949908030787,
+          "absolute_error": 1.2826085813433252e-06,
+          "relative_error": 8.737908933949558e-05,
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "group": "sequence",
+      "chain": "B",
+      "autograd": 0.016898151487112045,
+      "estimates": [
+        {
+          "epsilon": 0.01,
+          "finite_difference": 0.01689802323068812,
+          "absolute_error": 1.2825642392577663e-07,
+          "relative_error": 7.589967696975364e-06,
+          "passed": true
+        },
+        {
+          "epsilon": 0.003,
+          "finite_difference": 0.016898803767701844,
+          "absolute_error": 6.522805897982153e-07,
+          "relative_error": 3.860070672793409e-05,
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "group": "backbone",
+      "chain": "A",
+      "autograd": 0.006553075276315212,
+      "estimates": [
+        {
+          "epsilon": 0.01,
+          "finite_difference": 0.006551880921636111,
+          "absolute_error": 1.1943546791015613e-06,
+          "relative_error": 0.000182258653951118,
+          "passed": true
+        },
+        {
+          "epsilon": 0.003,
+          "finite_difference": 0.006549592529025057,
+          "absolute_error": 3.482747290155068e-06,
+          "relative_error": 0.0005314676153260081,
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "group": "backbone",
+      "chain": "B",
+      "autograd": 0.007106353994458914,
+      "estimates": [
+        {
+          "epsilon": 0.01,
+          "finite_difference": 0.007105938025883662,
+          "absolute_error": 4.1596857525139086e-07,
+          "relative_error": 5.853473885141901e-05,
+          "passed": true
+        },
+        {
+          "epsilon": 0.003,
+          "finite_difference": 0.007110160021551551,
+          "absolute_error": 3.8060270926374568e-06,
+          "relative_error": 0.0005355808471693299,
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "group": "sidechains",
+      "chain": "A",
+      "autograd": 0.0015546821523457766,
+      "estimates": [
+        {
+          "epsilon": 0.01,
+          "finite_difference": 0.0015554151364727264,
+          "absolute_error": 7.329841269498871e-07,
+          "relative_error": 0.0004714687988434978,
+          "passed": true
+        },
+        {
+          "epsilon": 0.003,
+          "finite_difference": 0.0015546878178914387,
+          "absolute_error": 5.665545662171881e-09,
+          "relative_error": 3.644182609045484e-06,
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "group": "sidechains",
+      "chain": "B",
+      "autograd": 0.0017688460648059845,
+      "estimates": [
+        {
+          "epsilon": 0.01,
+          "finite_difference": 0.0017687146152772781,
+          "absolute_error": 1.3144952870636217e-07,
+          "relative_error": 7.431371859980376e-05,
+          "passed": true
+        },
+        {
+          "epsilon": 0.003,
+          "finite_difference": 0.0017741251559511007,
+          "absolute_error": 5.279091145116155e-06,
+          "relative_error": 0.002984483076369447,
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "passed": true,
+  "sampled_process_peak_mib": 948.0,
+  "sampled_process_peak_by_phase_mib": {
+    "backward": 948.0,
+    "forward": 686.0,
+    "setup": 590.0
+  },
+  "memory_samples": 30
+}

@@ -1,0 +1,47 @@
+{
+  "variant": "sidechain",
+  "mode": "forward",
+  "run": "1",
+  "torch": "2.14.1+cu130",
+  "jax": "0.11.2",
+  "device": "NVIDIA GH200 120GB",
+  "residues": 604,
+  "interface_residues": 39,
+  "interface_query_sites": 14,
+  "input_parameter_dtype": "float32",
+  "context_chains": [
+    "A",
+    "B",
+    "C"
+  ],
+  "model": "initialized 152-feature width44 ff88 seed4",
+  "objective": "mean predicted shift over supported query sites at the A-B interface",
+  "forward": {
+    "seconds": 3.7536190699902363,
+    "cache_hits": 0,
+    "value": 0.20295475849083489,
+    "output_dtype": "torch.float64",
+    "memory": {
+      "jax": {
+        "num_allocs": 635,
+        "bytes_in_use": 314880,
+        "peak_bytes_in_use": 168126720,
+        "largest_alloc_size": 67108864,
+        "bytes_limit": 76504104960,
+        "bytes_reserved": 0,
+        "peak_bytes_reserved": 0,
+        "largest_free_block_bytes": 134217728,
+        "pool_bytes": 270532608,
+        "peak_pool_bytes": 270532608
+      },
+      "torch_peak_allocated": 642560,
+      "torch_peak_reserved": 2097152
+    }
+  },
+  "sampled_process_peak_mib": 1010.0,
+  "sampled_process_peak_by_phase_mib": {
+    "setup": 590.0,
+    "forward": 1010.0
+  },
+  "memory_samples": 55
+}

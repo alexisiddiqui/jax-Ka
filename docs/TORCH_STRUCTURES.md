@@ -107,3 +107,6 @@ initialization; repeated configuration of the same directory is a no-op. Capture
 and topology must not change between forward and backward. Backward recomputes a
 JAX VJP; double backward, torch.func transforms and torch.compile fullgraph are
 not supported. Tensor gradient masks do not require new model JITs.
+
+The [6SC6 ABC-context validation](validation/6sc6-abc-gradients/RESULTS.md)
+checks A–B interface gradients on CPU/GPU and records GPU memory and disk-cache reuse.

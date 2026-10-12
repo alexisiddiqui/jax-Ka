@@ -45,3 +45,7 @@ gradient-aligned directions, separately for each chain/input group. Sequence
 perturbations are zero-sum per residue. Acceptance is absolute error <= 5e-5 +
 2% of the analytic derivative. These are directional checks, not a complete
 Jacobian check. All gradients must be finite and exactly zero off the interface.
+
+## Results
+
+See [measured memory, gradient checks and cache reuse](RESULTS.md).
