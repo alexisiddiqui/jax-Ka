@@ -1,0 +1,12 @@
+# Backbone plane-orientation experiment
+
+`PKAI_ENCODING=atom16aa20ori` adds three signed geometry channels to each of the existing backbone atom16+aa20 slots (39 per slot; 9,758 inputs at 250 slots). No side-chain flag or coordinates enter this representation. The training objective, frozen validation rows, pool-v3 subsets, seed, architecture, optimizer and selection rule are unchanged.
+
+For each residue, define a right-handed frame from N, CA and C: x = unit(C−CA), z = unit(x × (N−CA)), y = z × x. Each N/O neighbour atom receives its residue's z normal projected onto the query's x/y/z axes, multiplied by 1/d². These three cosines describe relative backbone-plane tilt (two independent degrees of freedom). They are not a full relative rotation or explicit φ/ψ/ω torsions, and the N–CA–C plane is a local residue backbone plane rather than the C–N peptide-bond plane. Global proper rotations and translations leave the features invariant. The frame construction follows the established local-backbone-frame idea used in [AlphaFold](https://pmc.ncbi.nlm.nih.gov/articles/PMC8371605/); this three-channel normal projection is the encoding chosen for this experiment.
+
+Backbone N/O context, C-alpha query origin, 15 Å cutoff, 250-slot sorting/truncation, atom/residue channels and eight query-identity channels remain as before. A missing, duplicate or degenerate N/CA/C frame gives three zero orientation values, an implicit missing-geometry marker distinguishable from any valid unit normal. No neighbours are removed because of missing frames. Existing joint-scale full-feature mapping checks are retained solely to keep the training row selection aligned with the baseline; only backbone inputs are stored and trainable for this encoding. Float32 orientation values are stored directly so compact expansion is bit-exact, including negative values.
+
+Selected configuration: 100% data, backbone/joint, batch 4096, LR 0.000512 cosine, 40-epoch cap with the existing early-stopping rule, seed 17. One GPU per Slurm job. Run directory:
+`training/pkai-joint-scale-v1-f100-atom16aa20ori/runs/backbone-joint-b4096-e40-lr0.000512-cos/seed-17`.
+
+Tests cover rotation/translation invariance, sensitivity to plane tilt while N/O distance channels stay fixed, side-chain independence, missing/degenerate frames, signed geometry, and exact NumPy/Torch compact round trips. A fresh rescore and TorchScript export check run after training. pKPDB validation uses the same 7,778 sites; pkpdb-5k-v3 is untouched.

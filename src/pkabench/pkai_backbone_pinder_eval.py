@@ -74,6 +74,9 @@ def _features(atoms, keys, encoding="atom16"):
     its origin.  Context consists of N/O atoms from other residues within 15 A;
     the native 4008-wide pKAI schema is otherwise unchanged.
     """
+    if encoding == "atom16aa20ori":
+        from pkatrain.pkai_orientation import orientation_features
+        return orientation_features(atoms, keys)
     protein = ~np.asarray(atoms.hetero)
     atom_name = np.asarray(atoms.atom_name).astype(str)
     context = protein & np.isin(atom_name, ("N", "O"))
@@ -116,7 +119,7 @@ def _features(atoms, keys, encoding="atom16"):
         if encoding == "atom16":
             ordered = sorted(((float(distance[j]), 0 if context_name[j] == "N" else 9)
                               for j in ids))[:SLOTS]
-        elif encoding == "atom16aa20":
+        elif encoding in ("atom16aa20", "atom16aa20sc"):
             ordered = sorted(((float(distance[j]), 0 if context_name[j] == "N" else 9, aa20_index(context_residue[j]))
                               for j in ids))[:SLOTS]
         else:
@@ -124,6 +127,7 @@ def _features(atoms, keys, encoding="atom16"):
         for position, (value, atom_class, *residue) in enumerate(ordered):
             matrix[row, position * slot + atom_class] = 1.0 / value ** 2
             if residue: matrix[row, position * slot + 16 + residue[0]] = 1.0 / value ** 2
+            if encoding == "atom16aa20sc": matrix[row, position * slot + 36] = 1.0 / value ** 2
         matrix[row, SLOTS * slot + RES_OHE.index(group)] = 1.0
         retained[row] = True
     return matrix, retained
