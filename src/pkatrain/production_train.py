@@ -1028,28 +1028,41 @@ def aux_rescore(root, run):
     atomic_json(out / "aux-rescore.json", result); return result
 
 
-def export_model(root, run, destination):
-    """Write a run's selected parameters (no optimizer state) to `destination`: params.npz (one array per parameter,
-    keyed by its tree path, e.g. "blocks/0/q/w") and model.json (architecture, parameter count, the run's protocol and
-    selection metrics, checkpoint and params sha256). Load with load_exported."""
-    import jax
+def selected_model(root, run):
+    """(params at the selected epoch, model_inputs functions (site_embeddings, predict_shift)) rebuilt from a run's
+    protocol: architecture, input variants and auxiliary heads, as train() built them."""
+    import optax
+    from .gqt_regularization import decay_mask
     from .trainer import load_checkpoint
-    root = Path(root); out = run_dir(root, run); protocol = read(out / "protocol.json"); selection = read(out / "selection.json")
-    arch = protocol["architecture"]; params, _, _ = make_model(protocol["seed"], width=arch["width"], sidechains="sidechains" in protocol,
-                                                                depth=arch.get("depth", 2), loops=arch.get("loops", 1), orientation="orientation_edges" in arch,
-                                                                dihedrals="dihedral_features" in arch)
+    out = run_dir(root, run); protocol = read(out / "protocol.json"); selection = read(out / "selection.json"); arch = protocol["architecture"]
+    view, drop = "all", 0.0
+    if "sidechain_view" in protocol:
+        text = protocol["sidechain_view"]
+        view = "dropout" if text.startswith("side-chain features hidden") else "titratable" if text.startswith("side-chain features on D/E") else "non-titratable"
+        if view == "dropout": drop = float(text.split("probability ")[1].split(" ")[0])
+    orientation = "orientation_edges" in arch; dihedrals = "dihedral_features" in arch
+    table = bool(orientation or dihedrals or "geometry_auxiliary" in protocol or "chi_auxiliary" in protocol)
+    params, _, _ = make_model(protocol["seed"], width=arch["width"], sidechains="sidechains" in protocol, depth=arch.get("depth", 2),
+                              loops=arch.get("loops", 1), orientation=orientation, sidechain_view=view, sidechain_drop=drop, table=table, dihedrals=dihedrals)
     if "auxiliary" in protocol:
         text = protocol["auxiliary"]; mode = "ce" if text.startswith("AuxEngine ce") else "ordinal"
         heads = "burial" if text.startswith("AuxEngine ce burial-only") else "burial-siamese" if text.startswith("AuxEngine ce burial-siamese") else "both"
         params = initialize_aux(params, protocol["seed"], mode, heads)
     if "geometry_auxiliary" in protocol: params = add_geometry_heads(params, protocol["seed"])
     if "chi_auxiliary" in protocol: params = add_chi_head(params, protocol["seed"])
-    import optax
-    from .gqt_regularization import decay_mask
     # the engines' optimizer (JointEngine / DropoutEngine / AuxEngine), only for the checkpoint's tree structure
     state = optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(1.0, weight_decay=1e-4, mask=decay_mask(params))).init(params)
-    folder = out / "checkpoints" / f"epoch-{selection['selected_epoch']:03d}"
-    params, _, _ = load_checkpoint(folder, (params, state))
+    params, _, _ = load_checkpoint(out / "checkpoints" / f"epoch-{selection['selected_epoch']:03d}", (params, state))
+    return params, model_inputs(arch.get("loops", 1), orientation, view, drop, table, dihedrals)
+
+
+def export_model(root, run, destination):
+    """Write a run's selected parameters (no optimizer state) to `destination`: params.npz (one array per parameter,
+    keyed by its tree path, e.g. "blocks/0/q/w") and model.json (architecture, parameter count, the run's protocol and
+    selection metrics, checkpoint and params sha256). Load with load_exported."""
+    import jax
+    root = Path(root); out = run_dir(root, run); protocol = read(out / "protocol.json"); selection = read(out / "selection.json")
+    params, _ = selected_model(root, run)
     flat = {"/".join(str(getattr(k, "key", getattr(k, "idx", k))) for k in path): np.asarray(v) for path, v in jax.tree_util.tree_flatten_with_path(params)[0]}
     destination = Path(destination); destination.mkdir(parents=True, exist_ok=True)
     np.savez(destination / "params.npz", **flat)
