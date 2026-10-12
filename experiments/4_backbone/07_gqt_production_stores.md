@@ -877,3 +877,32 @@ falls back under the bar.
 - The geometry auxiliary does nothing: alone it is level with backbone, and on top of orientation + dropout it moves
   selection by -0.0006. Predicting the functional-group position and salt-bridge partner from the backbone does not
   transfer into the pKa head (whether the heads themselves learn their targets was not measured).
+
+### Side-chain dropout rate, backbone dihedrals, chi1 auxiliary (2026-10-12)
+
+All on top of orientation + side-chain dropout (same fixed config and seeds; backbone-only validation). Options from
+`pkatrain.production_inputs`:
+- `--dihedrals`: sin/cos of phi, psi and omega per residue (6 node features), computed on the device from
+  backbone-v1 (zero where residue i -/+ 1 is not the bonded neighbour: same chain, sequence index -/+ 1, C-N under
+  2 A); the embedding gains 6 input rows. Check on 300 validation structures per dataset: phi/psi defined for 99%
+  of residues, 36% in the helix and 27% in the sheet region, 99.7% trans omega, 6% positive phi.
+- `--chi-weight 1`: chi1 rotamer-class auxiliary (g+ / t / g-, centred on +60 / 180 / -60 degrees) for each
+  D/E/H/C/Y/K/R query site, from the hidden side chains (class fractions on validation: 11-12% / 34-41% / 48-54%).
+
+Pooled sigma over the seventeen 3-seed groups: 0.0037 (34 df; 2 sigma = 0.0074).
+
+| Arm | Selection (seeds) | State MAE | Interface paired MAE | pKPDB val MAE | Benchmark MAE | vs orientation + dropout 0.5 | vs backbone |
+|---|---|---:|---:|---:|---:|---|---|
+| backbone (reference) | 0.6503 | 0.4143 | 0.2360 | 0.5020 | 0.5220 | | |
+| orientation + dropout 0.5 (reference) | 0.6402 | 0.4080 | 0.2322 | 0.4946 | 0.5126 | | -0.0101, real |
+| orientation + dropout 0.25 | 0.6400 (0.6340 / 0.6423 / 0.6438) | 0.4099 | 0.2302 | 0.4985 | 0.5203 | -0.0001, none | -0.0103, real |
+| orientation + dropout 0.75 | 0.6422 (0.6429 / 0.6390 / 0.6446) | 0.4087 | 0.2335 | 0.4944 | 0.5142 | +0.0020, none | -0.0081, real |
+| **+ dihedrals** | **0.6080** (0.6079 / 0.6070 / 0.6090) | **0.3860** | **0.2219** | **0.4692** | **0.4902** | **-0.0322 (8.7 sigma, 4 / 4), real** | **-0.0423, real** |
+| + chi1 auxiliary | 0.6352 (0.6324 / 0.6365 / 0.6368) | 0.4046 | 0.2307 | 0.4860 | 0.5096 | -0.0049 (1.3 sigma, 4 / 4), not real | -0.0151, real |
+
+- Backbone dihedrals are the largest backbone-only gain so far: selection 0.650 -> 0.608 (-6.5%), PINDER state MAE
+  0.414 -> 0.386, pKPDB val MAE 0.502 -> 0.469, benchmark MAE 0.522 -> 0.490, with the tightest seed spread of any
+  arm (SD 0.0010) and no change in time per epoch. The orientation edges carry the relative rotation of i -/+ 1, from
+  which phi/psi are recoverable in principle, yet explicit per-residue angles give 3x the orientation + dropout gain.
+- The side-chain dropout rate does not matter between 0.25 and 0.75.
+- The chi1 auxiliary leans the right way but stays under 2 sigma, like the functional-centroid auxiliary.
