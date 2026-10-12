@@ -813,3 +813,37 @@ Contrasts (selection difference; real = beyond 2 sigma with at least 3 of 4 metr
   for 2.5x its FLOPs; both runs were cancelled after one epoch. Wall-clock tracks FLOPs poorly: width 32 -> 168 is
   7x the FLOPs for 1.6x the time, and depth 4 costs the same time per epoch as depth 2.
 - Most runs select epoch 17-20, so the 20-epoch schedule is still short for the full pool (affects all arms alike).
+
+### Where the side-chain gain comes from; side-chain dropout; residue-edge orientation (2026-10-12)
+
+Same fixed config (width 64, dropout 0.1, burial W 1, batch 16, 20 epochs, 100% pool, seeds 17 / 29 / 43), options
+from `pkatrain.production_inputs`:
+- `--sidechain-view titratable` / `non-titratable`: side-chain features only on D/E/H/C/Y/K/R residues, or only on
+  all other residues (masked on the device; same 152 node features).
+- `--sidechain-view dropout --sidechain-drop 0.5`: training hides a structure's side chains with probability 0.5
+  (AB and free share the draw); validation never sees side chains, so its selection is backbone-only.
+- `--orientation`: the residue edges gain the 13 orientation features the site-site edges already had (direction to i
+  in j's frame, F_i^T F_j, signed sequence separation / 32), computed on the device from `<dataset>/backbone-v1`
+  (per node N/CA/C/O xyz, chain and sequence index; 13.9M PINDER, 25.4M pKPDB, 57K benchmark nodes). The table
+  reproduces the stored residue-edge directions to 1e-6 and the stored site-edge orientation columns to 5e-7, with
+  no chain disagreements. +156 parameters (13 rows on each residue and query block edge projection).
+
+Pooled seed sigma over all ten 3-seed groups: 0.0034 (20 df; 2 sigma = 0.0068). With this sigma, backbone width 64
+vs 32 (-0.0072, 4 / 4) just clears the bar.
+
+| Arm | Validation input | Selection (seeds) | State MAE | Interface paired MAE | pKPDB val MAE | Benchmark MAE | vs backbone 0.6503 |
+|---|---|---|---:|---:|---:|---:|---|
+| backbone (reference) | backbone | 0.6503 (0.6520 / 0.6514 / 0.6475) | 0.4143 | 0.2360 | 0.5020 | 0.5220 | |
+| all side chains (reference) | side chains | 0.5028 (0.4997 / 0.5042 / 0.5044) | 0.3120 | 0.1908 | 0.3877 | 0.4241 | -0.1475, real |
+| titratable side chains only | side chains | **0.4992** (0.4982 / 0.5019 / 0.4975) | 0.3092 | 0.1900 | 0.3903 | 0.4242 | -0.1511, real |
+| non-titratable side chains only | side chains | 0.6523 (0.6567 / 0.6470 / 0.6532) | 0.4144 | 0.2379 | 0.5044 | 0.5266 | +0.0020, none |
+| side-chain dropout 0.5 | backbone | 0.6443 (0.6443 / 0.6429 / 0.6458) | 0.4142 | 0.2301 | 0.5022 | 0.5199 | -0.0060 (1.8 sigma, 3 / 4), not real |
+| residue-edge orientation | backbone | 0.6459 (0.6461 / 0.6445 / 0.6472) | 0.4106 | 0.2353 | 0.4947 | 0.5167 | -0.0044 (1.3 sigma, 4 / 4), not real |
+
+- The whole side-chain gain comes from the titratable residues' own side chains (the sites and their titratable
+  partners): titratable-only matches all side chains (0.499 vs 0.503), and non-titratable side chains add nothing
+  over backbone. The missing information for backbone-only is the conformation of the titratable groups themselves,
+  not the surrounding environment.
+- Side-chain dropout and residue-edge orientation both move the backbone-only model in the right direction (all
+  three seeds below every backbone seed in both arms; seed SDs 0.0014 and 0.0013) but each stays under 2 sigma.
+- Cost: no arm changes the time per epoch (127-131 s).
