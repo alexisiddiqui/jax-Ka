@@ -24,6 +24,14 @@
    charge (D/E/C/Y -1, H/K/R +1) among its residue-graph neighbours in that branch (cross-entropy). Needs the
    backbone-v1 table (global centroids), loaded with or without --orientation.
 
+4. Backbone dihedrals (--dihedrals): sin/cos of phi, psi and omega per residue (6 node features, zero where the
+   neighbouring residue is missing: i -/+ 1 must be the next node of the same chain, sequence index -/+ 1, with a
+   C-N peptide bond under 2 A), computed on the device from backbone-v1 and appended to the node features; the
+   embedding gains 6 input rows (drawn N(0, 1) / sqrt(node_dim + 6)).
+5. Chi1 rotamer-class auxiliary (--chi-weight W, with --sidechains and --sidechain-view dropout): for each
+   D/E/H/C/Y/K/R query site, chi1 = dihedral(N, CA, CB, gamma) from the hidden side chains (gamma CG, or SG for C)
+   in three classes centred on +60, 180 and -60 degrees; softmax cross-entropy on head aux_chi.
+
   python -m pkatrain.production_inputs build-backbone {pinder,pkpdb,benchmark-val} [--workers 72] [--limit N]
 """
 from __future__ import annotations
@@ -49,6 +57,11 @@ VIEWS = ("all", "titratable", "non-titratable", "dropout")
 GEOMETRY_SALT = 8191
 FUNCTIONAL = {"D": ("OD1", "OD2"), "E": ("OE1", "OE2"), "H": ("ND1", "NE2"), "C": ("SG",), "Y": ("OH",), "K": ("NZ",), "R": ("NE", "NH1", "NH2")}
 ACIDS = "DECY"
+GAMMA = {"D": "CG", "E": "CG", "H": "CG", "C": "SG", "Y": "CG", "K": "CG", "R": "CG"}
+DIHEDRAL_FEATURES = 6
+DIHEDRAL_SALT = 4241
+CHI_SALT = 9973
+PEPTIDE_BOND_A = 2.0
 PARTNER_CONTACT_A, PARTNER_DECAY_A = 4.0, 2.0
 
 
@@ -230,6 +243,65 @@ def geometry_targets(graph, xp=None):
     return local[q] / 10.0, mask, score, mask
 
 
+def _dihedral(a, b, c, d, xp):
+    b0 = a - b; b1 = c - b; b2 = d - c
+    b1 = b1 / xp.maximum(xp.linalg.norm(b1, axis=-1, keepdims=True), 1e-6)
+    v = b0 - (b0 * b1).sum(-1, keepdims=True) * b1; w = b2 - (b2 * b1).sum(-1, keepdims=True) * b1
+    return xp.arctan2((xp.cross(b1, v) * w).sum(-1), (v * w).sum(-1))
+
+
+def backbone_dihedrals(table, xp=None):
+    """(N, 6): sin/cos of phi, psi, omega from backbone-v1 rows in node order; zero without a bonded neighbour."""
+    if xp is None: import jax.numpy as xp
+    n, ca, c = table[:, 0:3], table[:, 3:6], table[:, 6:9]; chain = table[:, 12]; sequence = table[:, 13]
+    prev = lambda x: xp.roll(x, 1, axis=0); nxt = lambda x: xp.roll(x, -1, axis=0)
+    bonded = lambda c_, n_: xp.linalg.norm(c_ - n_, axis=-1) < PEPTIDE_BOND_A
+    has_prev = (prev(chain) == chain) & (prev(sequence) == sequence - 1) & bonded(prev(c), n)
+    has_next = (nxt(chain) == chain) & (nxt(sequence) == sequence + 1) & bonded(c, nxt(n))
+    phi = _dihedral(prev(c), n, ca, c, xp); psi = _dihedral(n, ca, c, nxt(n), xp); omega = _dihedral(ca, c, nxt(n), nxt(ca), xp)
+    trig = lambda angle, ok: xp.stack((xp.sin(angle), xp.cos(angle)), axis=-1) * ok[:, None]
+    return xp.concatenate((trig(phi, has_prev), trig(psi, has_next), trig(omega, has_next)), axis=-1)
+
+
+def chi1_targets(graph, xp=None):
+    """Per query site: (chi1 class 0 / 1 / 2 for g+ (0, 120) / t (|chi| >= 120) / g- (-120, 0), mask). Masks exclude
+    termini sites, degenerate frames and residues without CB or gamma."""
+    if xp is None: import jax.numpy as xp
+    from jaxpropka.parameters import ALPHABET
+    from pkanet.graph import SIDECHAIN_ATOMS
+    gamma = np.zeros((20, len(SIDECHAIN_ATOMS)), np.float32)
+    for aa, name in GAMMA.items(): gamma[ALPHABET.index(aa), SIDECHAIN_ATOMS.index(name)] = 1.0
+    gamma = xp.asarray(gamma); cb = SIDECHAIN_ATOMS.index("CB")
+    nodes = graph["nodes"]; table = nodes[:, -BACKBONE_WIDTH:]; side = nodes[:, 24:152].reshape(nodes.shape[0], -1, 4)
+    aa = xp.argmax(nodes[:, :20], axis=1); g = gamma[aa]
+    n, ca, c = table[:, 0:3], table[:, 3:6], table[:, 6:9]
+    x = c - ca; xn = xp.linalg.norm(x, axis=-1, keepdims=True); x = x / xp.maximum(xn, 1e-6)
+    y = n - ca; y = y - (y * x).sum(-1, keepdims=True) * x; yn = xp.linalg.norm(y, axis=-1, keepdims=True); y = y / xp.maximum(yn, 1e-6)
+    valid = (xn[:, 0] > 1e-5) & (yn[:, 0] > 1e-5); frames = xp.stack((x, y, xp.cross(x, y)), axis=-1)
+    place = lambda local: ca + xp.einsum("nij,nj->ni", frames, local * 10.0)
+    beta = place(side[:, cb, :3]); gam = place((g[..., None] * side[..., :3]).sum(1))
+    ok = valid & (side[:, cb, 3] > 0) & ((g * side[..., 3]).sum(-1) > 0)
+    chi = xp.degrees(_dihedral(n, ca, beta, gam, xp))
+    cls = xp.where(xp.abs(chi) >= 120.0, 1, xp.where(chi > 0, 0, 2)).astype(xp.int32)
+    query = graph["query_site"]; q = graph["site_residue"][query]
+    return cls[q], ok[q] & (graph["site_type"][query] < 7)
+
+
+def add_dihedral_inputs(params, seed):
+    import jax
+    import jax.numpy as jnp
+    w = params["embed"]["w"]; key = jax.random.fold_in(jax.random.PRNGKey(seed), DIHEDRAL_SALT)
+    extra = jax.random.normal(key, (DIHEDRAL_FEATURES, w.shape[1]), jnp.float32) / jnp.sqrt(float(w.shape[0] + DIHEDRAL_FEATURES))
+    return {**params, "embed": {**params["embed"], "w": jnp.concatenate((w, extra))}}
+
+
+def add_chi_head(params, seed):
+    import jax
+    import jax.numpy as jnp
+    width = params["head"]["w"].shape[0]; key = jax.random.fold_in(jax.random.PRNGKey(seed), CHI_SALT)
+    return {**params, "aux_chi": {"w": jax.random.normal(key, (width, 3), jnp.float32) / jnp.sqrt(float(width)), "b": jnp.zeros(3, jnp.float32)}}
+
+
 def add_geometry_heads(params, seed):
     import jax
     import jax.numpy as jnp
@@ -251,22 +323,23 @@ def add_orientation(params, seed):
     return {**params, "blocks": [extend(b, k) for b, k in zip(params["blocks"], keys[:-1])], "query": extend(params["query"], keys[-1])}
 
 
-def input_functions(functions, sidechain_view="all", drop=0.0, orientation=False, table=None):
+def input_functions(functions, sidechain_view="all", drop=0.0, orientation=False, table=None, dihedrals=False):
     """Wrap (site_embeddings, predict_shift) so each graph is transformed first: a loaded backbone table (the last
-    BACKBONE_WIDTH node columns; table defaults to orientation) is stripped, and with orientation turned into 13 extra
-    edge features; the side-chain view masks node columns 24:. The defaults return `functions` unchanged."""
+    BACKBONE_WIDTH node columns; table defaults to orientation or dihedrals) is stripped, with orientation turned into
+    13 extra edge features; the side-chain view masks node columns 24:; dihedrals appends 6 node features after that.
+    The defaults return `functions` unchanged."""
     import jax
     import jax.numpy as jnp
     from jaxpropka.parameters import GROUP_AA
     from pkanet.model import linear
     if sidechain_view not in VIEWS: raise ValueError(sidechain_view)
-    table = orientation if table is None else table
-    if orientation and not table: raise ValueError("orientation needs the backbone table")
+    table = (orientation or dihedrals) if table is None else table
+    if (orientation or dihedrals) and not table: raise ValueError("orientation / dihedrals need the backbone table")
     if sidechain_view == "all" and not table: return functions
     embeddings = functions[0]; titratable = jnp.zeros(20, bool).at[jnp.asarray(GROUP_AA)].set(True)
 
     def transform(graph, key):
-        nodes = graph["nodes"]
+        nodes = graph["nodes"]; angles = backbone_dihedrals(nodes[:, -BACKBONE_WIDTH:]) if dihedrals else None
         if orientation:
             graph = {**graph, "edge": jnp.concatenate((graph["edge"], orientation_edges(nodes[:, -BACKBONE_WIDTH:], graph["neighbors"])), axis=-1)}
         if table: nodes = nodes[:, :-BACKBONE_WIDTH]
@@ -278,6 +351,7 @@ def input_functions(functions, sidechain_view="all", drop=0.0, orientation=False
                 own = titratable[jnp.argmax(nodes[:, :20], axis=1)]
                 keep = (own if sidechain_view == "titratable" else ~own).astype(jnp.float32)
             nodes = jnp.concatenate((nodes[:, :24], nodes[:, 24:] * keep[:, None]), axis=-1)
+        if dihedrals: nodes = jnp.concatenate((nodes, angles), axis=-1)
         return {**graph, "nodes": nodes}
 
     def wrapped(params, graph, *, key=None, dropout_rate=0.0):
