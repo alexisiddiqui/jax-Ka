@@ -242,8 +242,9 @@ has not helped (half-sphere exposure, H-bonds).
    - If the binding idea is revisited, the target must not be recoverable from h_AB alone: a hinge on
      |w.(h_AB - h_free)| > margin at interface sites, or a target tied to the paired pKa shift. Weight 0.1 is not
      worth running (W 1 is already neutral).
-   - Background on why a plain h_AB * h_free is a poor binding feature (symmetric, h_free^2 on unchanged sites, the
-     bound-token shortcut, quadratic in the un-normalised stream) is in the 07 note section.
+   - Why a plain h_AB * h_free is a poor binding feature: the Siamese pKa loss reads a difference, not a product;
+     unchanged sites give h_free^2 rather than a neutral zero; the bound token alone solves interface detection;
+     the product is quadratic in the un-normalised residual stream (hence the LayerNorm).
 1. **Next input or objective ideas on base A.** The user has not picked any. From the probe and the results so far:
    - the remaining weakly encoded signal is free backbone N-H / C=O groups around the site (probe R^2 about 0.2).
      The explicit H-bond inputs made the model encode them but did not help pKa, so a different representation
