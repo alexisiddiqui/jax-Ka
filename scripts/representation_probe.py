@@ -88,7 +88,7 @@ def collect(root, run, dataset):
     from pkatrain.production_train import _with_policy, run_dir, selected_model
     params, (embeddings, _) = selected_model(root, run); protocol = read(run_dir(root, run) / "protocol.json")
     sidechains = "sidechains" in protocol; arch = protocol["architecture"]
-    table = "orientation_edges" in arch or "dihedral_features" in arch or "geometry_auxiliary" in protocol or "chi_auxiliary" in protocol
+    table = "orientation_edges" in arch or "dihedral_features" in arch or "hbond_features" in arch or "geometry_auxiliary" in protocol or "chi_auxiliary" in protocol
     manifest = read(output(root, dataset) / MANIFEST); tables = ([SidechainTable(root, dataset)] if sidechains else []) + [BackboneTable(root, dataset)]
     side = tables[0] if len(tables) == 1 else ConcatTable(*tables); config = LoaderConfig()
     source = PinderSource(_with_policy(manifest), config=config, norms=protocol["pinder_weight_normalization"], sidechains=side) if dataset == "pinder" \
