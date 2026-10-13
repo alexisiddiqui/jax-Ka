@@ -119,6 +119,8 @@ package versions, commit and input hashes are recorded. The isolated environment
 at ``_submission/augmentation-gh200-repair-v1/env`` needs ``openmm[cuda12]``
 and ProDy. The probe uses OpenMM 8.6.1, ProDy 2.6.1 and NVRTC 12.6.85;
 CUDA extensions are installed separately from the CPU-only base wheel.
+Install all probe dependencies with ``env/bin/python -m pip install -r
+_HPC/submission/augmentation-repair-requirements.txt`` in that isolated environment.
 
 This probe starts after source completion: source reading, hydrogen/system
 preparation and conditional CG2ALL completion are excluded. Its sample covers
