@@ -7,6 +7,40 @@ device. First-order reverse-mode gradients flow back to those inputs and their
 upstream Torch operations. Model parameters captured by the readout are fixed;
 this is not a Torch parameter-training wrapper.
 
+## Default frozen relational GQT
+
+Use the pinned 50% relational checkpoint (seed 17, epoch 18) for new structural
+readouts. This adapter rebuilds the backbone table, orientation/dihedral inputs
+and relation edges from the supplied coordinates:
+
+```python
+from pkanet.differentiable import StructureFeatures
+from pkanet.torch import TorchStructureReadout
+
+features, arrays, metadata = StructureFeatures.from_file("protein.pdb")
+bound = TorchStructureReadout.from_default(features, state="bound")
+free = TorchStructureReadout.from_default(features, state="free")
+# sequence, backbone, sidechains are Torch tensors constructed from arrays.
+binding_shift = bound(sequence, backbone, sidechains) - free(sequence, backbone, sidechains)
+```
+
+The default output is absolute pKa; `output="shift"` returns the model-compound
+shift instead. Both branches use identical fixed weights and site ordering.
+Free-state residue, site-query and site attention exclude partner chains. This
+is partner removal at the supplied conformation, not unbound structure prediction.
+The model is backbone-only: side-chain input derivatives are zero. Discrete site
+identities and chain membership stay fixed as in the standard adapter.
+
+The portable forward retains sequence and coordinate gradients, including the
+attention switch derivatives. Weights are captured and the Torch module exposes
+no trainable parameters. The experiment loader's default output stop-gradient
+remains unchanged; this endpoint explicitly requests `input_gradients=True`.
+Use `model_path=` or `GQT_FROZEN_MODEL` for the pinned model directory outside a
+repository checkout. `model_metadata` records its identity and checksum.
+Install the `train` and `torch` extras for this adapter, which reuses production
+input transforms. Dense candidate attention has quadratic memory cost. The
+standalone `ogqt predict` CLI and `from_ogqt` retain their existing contracts.
+
 ## Standard backbone / named-heavy-atom inputs
 
 ```python
@@ -94,8 +128,8 @@ extension of topology changes.
 
 The standard adapter uses portable JAX on CPU or GPU. The existing indexed Triton
 attention VJP omits switch-weight derivatives, so using it would give incomplete
-coordinate gradients. Other production variants (extra orientation/dihedral/H-bond
-inputs or altered forwards) require matching feature/model callables; they are
+coordinate gradients. Other production variants (beyond the default relational
+adapter above, such as H-bond inputs or altered forwards) require matching feature/model callables; they are
 not automatically inferred from checkpoints. `from_ogqt` targets the standard
 24/152-feature architecture. The 152-feature test uses initialized parameters;
 the released 24-feature checkpoint also has forward-parity coverage.

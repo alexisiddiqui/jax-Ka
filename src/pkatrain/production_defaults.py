@@ -18,11 +18,13 @@ def default_model_path():
     return Path(override) if override else Path(__file__).resolve().parents[2] / "models" / DEFAULT_EXPORT
 
 
-def load_frozen_default(path=None):
-    """Return (embeddings(graph), predict_shift(graph), metadata), with frozen outputs.
+def load_frozen_default(path=None, *, input_gradients=False):
+    """Return (embeddings(graph), predict_shift(graph), metadata), with outputs detached by default.
 
     Graphs need the backbone table appended by BackboneTable, as in production
     training. The bound/free graph masks determine permitted information flow.
+    With input_gradients=True, use the portable forward and retain derivatives
+    with respect to graph inputs (parameters remain captured, not trainable).
     Parameters are deliberately not returned to a head optimizer. Explicit paths
     still must identify the pinned default; choose another loader for other models.
     """
@@ -36,12 +38,18 @@ def load_frozen_default(path=None):
     import jax
     from .production_train import load_exported, exported_functions
     params = load_exported(path)
-    embed, predict = exported_functions(path)
+    if input_gradients:
+        from pkanet.relational import relational_functions
+        embed, predict = relational_functions()
+    else:
+        embed, predict = exported_functions(path)
 
     def embeddings(graph):
-        return jax.tree.map(jax.lax.stop_gradient, embed(params, graph))
+        value = embed(params, graph)
+        return value if input_gradients else jax.tree.map(jax.lax.stop_gradient, value)
 
     def predict_shift(graph):
-        return jax.lax.stop_gradient(predict(params, graph))
+        value = predict(params, graph)
+        return value if input_gradients else jax.lax.stop_gradient(value)
 
     return embeddings, predict_shift, info

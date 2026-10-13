@@ -14,3 +14,8 @@ the legacy 24-feature standalone `ogqt predict` CLI.
 
 New experiments start with seed 17 only. GQT stays frozen by default. The existing
 three-seed relational runs remain the confirmation baseline.
+
+For differentiable structural readouts, use
+`TorchStructureReadout.from_default(features, state="bound" | "free")`.
+This keeps weights fixed while retaining input gradients; see
+[the structural adapter](../../docs/TORCH_STRUCTURES.md).

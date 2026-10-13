@@ -59,6 +59,27 @@ class TorchStructureReadout(torch.nn.Module):
             return shift if output=='shift' else shift+PKPDB_PK_MOD[graph['query_group']]
         return cls(features,predict,**kwargs)
 
+    @classmethod
+    def from_default(cls, features, *, state='bound', output='pka', model_path=None, **kwargs):
+        """Pinned frozen relational GQT, with gradients to structural inputs.
+
+        Pass a backbone-only StructureFeatures template. Free-state attention is
+        restricted to each chain; bound-state attention includes partner chains.
+        """
+        from pkatrain.production_defaults import load_frozen_default
+        from .relational import RelationalStructureFeatures
+        from .model import PKPDB_PK_MOD
+        if output not in ('pka', 'shift'):
+            raise ValueError('output must be pka or shift')
+        adapter = RelationalStructureFeatures(features, state)
+        _, shift, metadata = load_frozen_default(model_path, input_gradients=True)
+        def predict(graph):
+            value = shift(graph)
+            return value if output == 'shift' else value + PKPDB_PK_MOD[graph['query_group']]
+        result = cls(adapter, predict, **kwargs)
+        result.model_metadata = metadata
+        return result
+
     def forward(self, sequence, backbone, sidechains, *,
                 gradients=('sequence','backbone','sidechains'),
                 sequence_mask=None, backbone_mask=None, sidechain_mask=None):
