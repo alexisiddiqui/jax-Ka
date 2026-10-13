@@ -1,0 +1,218 @@
+{
+  "runs": [
+    {
+      "seed": 17,
+      "head": "small",
+      "objective": "free-only",
+      "epoch": 1,
+      "site_macro_ap": 0.4738522118619113,
+      "pooled_ap": 0.2753381113572882,
+      "auroc": 0.6196711140355561,
+      "bound_macro_ap": null
+    },
+    {
+      "seed": 17,
+      "head": "small",
+      "objective": "siamese",
+      "epoch": 11,
+      "site_macro_ap": 0.4420077924150978,
+      "pooled_ap": 0.23190146619346239,
+      "auroc": 0.5683944203998921,
+      "bound_macro_ap": 0.5689157884884035
+    },
+    {
+      "seed": 17,
+      "head": "mlp",
+      "objective": "free-only",
+      "epoch": 2,
+      "site_macro_ap": 0.46301576392919586,
+      "pooled_ap": 0.2753168189100508,
+      "auroc": 0.6159937145904698,
+      "bound_macro_ap": null
+    },
+    {
+      "seed": 17,
+      "head": "mlp",
+      "objective": "siamese",
+      "epoch": 3,
+      "site_macro_ap": 0.42986084093242216,
+      "pooled_ap": 0.219921884259014,
+      "auroc": 0.5531490942607566,
+      "bound_macro_ap": 0.5776565032957804
+    },
+    {
+      "seed": 17,
+      "head": "transformer",
+      "objective": "free-only",
+      "epoch": 3,
+      "site_macro_ap": 0.4654698561917183,
+      "pooled_ap": 0.28596615799800995,
+      "auroc": 0.6088868074275491,
+      "bound_macro_ap": null
+    },
+    {
+      "seed": 17,
+      "head": "transformer",
+      "objective": "siamese",
+      "epoch": 2,
+      "site_macro_ap": 0.450624245572336,
+      "pooled_ap": 0.2517905420203845,
+      "auroc": 0.5840371795618757,
+      "bound_macro_ap": 0.5845118583106245
+    },
+    {
+      "seed": 29,
+      "head": "small",
+      "objective": "free-only",
+      "epoch": 1,
+      "site_macro_ap": 0.4636771354201246,
+      "pooled_ap": 0.2707470793327934,
+      "auroc": 0.615570809120801,
+      "bound_macro_ap": null
+    },
+    {
+      "seed": 29,
+      "head": "small",
+      "objective": "siamese",
+      "epoch": 12,
+      "site_macro_ap": 0.4314541619101668,
+      "pooled_ap": 0.21649471361201644,
+      "auroc": 0.5510431096928396,
+      "bound_macro_ap": 0.5880483046957907
+    },
+    {
+      "seed": 29,
+      "head": "mlp",
+      "objective": "free-only",
+      "epoch": 2,
+      "site_macro_ap": 0.4666219548340236,
+      "pooled_ap": 0.26599275028134384,
+      "auroc": 0.6105430947852107,
+      "bound_macro_ap": null
+    },
+    {
+      "seed": 29,
+      "head": "mlp",
+      "objective": "siamese",
+      "epoch": 2,
+      "site_macro_ap": 0.43128946310074606,
+      "pooled_ap": 0.21412442724815703,
+      "auroc": 0.5479293828605624,
+      "bound_macro_ap": 0.5912184645412636
+    },
+    {
+      "seed": 29,
+      "head": "transformer",
+      "objective": "free-only",
+      "epoch": 2,
+      "site_macro_ap": 0.45662145222432,
+      "pooled_ap": 0.2988034012321536,
+      "auroc": 0.6121344982682864,
+      "bound_macro_ap": null
+    },
+    {
+      "seed": 29,
+      "head": "transformer",
+      "objective": "siamese",
+      "epoch": 2,
+      "site_macro_ap": 0.44078655288770896,
+      "pooled_ap": 0.2535606158741719,
+      "auroc": 0.5796765498741301,
+      "bound_macro_ap": 0.5763116682099307
+    },
+    {
+      "seed": 43,
+      "head": "small",
+      "objective": "free-only",
+      "epoch": 3,
+      "site_macro_ap": 0.47562724133713347,
+      "pooled_ap": 0.27705501340942484,
+      "auroc": 0.621995684963546,
+      "bound_macro_ap": null
+    },
+    {
+      "seed": 43,
+      "head": "small",
+      "objective": "siamese",
+      "epoch": 1,
+      "site_macro_ap": 0.4216368577774929,
+      "pooled_ap": 0.2115330065262606,
+      "auroc": 0.5499839474266627,
+      "bound_macro_ap": 0.5739400559909933
+    },
+    {
+      "seed": 43,
+      "head": "mlp",
+      "objective": "free-only",
+      "epoch": 1,
+      "site_macro_ap": 0.46601348944307447,
+      "pooled_ap": 0.28231660169204775,
+      "auroc": 0.6227855875330981,
+      "bound_macro_ap": null
+    },
+    {
+      "seed": 43,
+      "head": "mlp",
+      "objective": "siamese",
+      "epoch": 9,
+      "site_macro_ap": 0.4228720091896579,
+      "pooled_ap": 0.21642354155567373,
+      "auroc": 0.5442145242804819,
+      "bound_macro_ap": 0.5708728726393104
+    },
+    {
+      "seed": 43,
+      "head": "transformer",
+      "objective": "free-only",
+      "epoch": 1,
+      "site_macro_ap": 0.4624151927240934,
+      "pooled_ap": 0.2844449962555974,
+      "auroc": 0.612806859132892,
+      "bound_macro_ap": null
+    },
+    {
+      "seed": 43,
+      "head": "transformer",
+      "objective": "siamese",
+      "epoch": 3,
+      "site_macro_ap": 0.44363961822152387,
+      "pooled_ap": 0.23431443198776233,
+      "auroc": 0.5659589781125189,
+      "bound_macro_ap": 0.588091813066553
+    }
+  ],
+  "means": {
+    "small/free-only": {
+      "site_macro_ap": 0.4710521962063898,
+      "pooled_ap": 0.27438006803316883,
+      "auroc": 0.6190792027066343
+    },
+    "small/siamese": {
+      "site_macro_ap": 0.4316996040342525,
+      "pooled_ap": 0.21997639544391315,
+      "auroc": 0.5564738258397982
+    },
+    "mlp/free-only": {
+      "site_macro_ap": 0.465217069402098,
+      "pooled_ap": 0.2745420569611475,
+      "auroc": 0.6164407989695929
+    },
+    "mlp/siamese": {
+      "site_macro_ap": 0.428007437740942,
+      "pooled_ap": 0.21682328435428158,
+      "auroc": 0.548431000467267
+    },
+    "transformer/free-only": {
+      "site_macro_ap": 0.46150216704671054,
+      "pooled_ap": 0.28973818516192035,
+      "auroc": 0.6112760549429092
+    },
+    "transformer/siamese": {
+      "site_macro_ap": 0.445016805560523,
+      "pooled_ap": 0.2465551966274396,
+      "auroc": 0.5765575691828416
+    }
+  },
+  "identical_validation_support": true,
+  "test_data_included": false
+}

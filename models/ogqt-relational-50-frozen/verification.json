@@ -1,0 +1,16 @@
+{
+  "compute_job": 7383226,
+  "status": "COMPLETED",
+  "exit_code": "0:0",
+  "checkpoint_parameter_arrays_exact": true,
+  "export_matches_bound_and_free_predictions": true,
+  "frozen_input_gradients_zero": true,
+  "weighted_loss_regressions_passed": true,
+  "architecture_checks_passed": [
+    "fourier",
+    "rope",
+    "shared-projection",
+    "relations",
+    "paired-delta"
+  ]
+}

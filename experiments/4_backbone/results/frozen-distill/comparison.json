@@ -1,0 +1,137 @@
+{
+  "runs": [
+    {
+      "seed": 17,
+      "role": "labels-only",
+      "input": "free",
+      "epoch": 1,
+      "macro_ap": 0.4738522118619113,
+      "pooled_ap": 0.2753381113572882,
+      "auroc": 0.6196711140355561
+    },
+    {
+      "seed": 17,
+      "role": "teacher",
+      "input": "bound",
+      "epoch": 3,
+      "macro_ap": 0.617183850238734,
+      "pooled_ap": 0.4710007226054389,
+      "auroc": 0.7368268303660872
+    },
+    {
+      "seed": 17,
+      "role": "lambda-0.1",
+      "input": "free",
+      "epoch": 1,
+      "macro_ap": 0.47417849592426736,
+      "pooled_ap": 0.2747246873856745,
+      "auroc": 0.6191244189493359
+    },
+    {
+      "seed": 17,
+      "role": "lambda-1",
+      "input": "free",
+      "epoch": 1,
+      "macro_ap": 0.4652908359523483,
+      "pooled_ap": 0.2616200233806219,
+      "auroc": 0.5989277663698356
+    },
+    {
+      "seed": 29,
+      "role": "labels-only",
+      "input": "free",
+      "epoch": 1,
+      "macro_ap": 0.4636771354201246,
+      "pooled_ap": 0.2707470793327934,
+      "auroc": 0.615570809120801
+    },
+    {
+      "seed": 29,
+      "role": "teacher",
+      "input": "bound",
+      "epoch": 12,
+      "macro_ap": 0.6282879858250817,
+      "pooled_ap": 0.49097396385534264,
+      "auroc": 0.7436851150151329
+    },
+    {
+      "seed": 29,
+      "role": "lambda-0.1",
+      "input": "free",
+      "epoch": 1,
+      "macro_ap": 0.46281619360049636,
+      "pooled_ap": 0.26906574315986637,
+      "auroc": 0.6132734762659897
+    },
+    {
+      "seed": 29,
+      "role": "lambda-1",
+      "input": "free",
+      "epoch": 2,
+      "macro_ap": 0.4554247585384972,
+      "pooled_ap": 0.2512883889613452,
+      "auroc": 0.5944801750398305
+    },
+    {
+      "seed": 43,
+      "role": "labels-only",
+      "input": "free",
+      "epoch": 3,
+      "macro_ap": 0.47562724133713347,
+      "pooled_ap": 0.27705501340942484,
+      "auroc": 0.621995684963546
+    },
+    {
+      "seed": 43,
+      "role": "teacher",
+      "input": "bound",
+      "epoch": 9,
+      "macro_ap": 0.6288979170923527,
+      "pooled_ap": 0.4961721596368945,
+      "auroc": 0.7478636092360038
+    },
+    {
+      "seed": 43,
+      "role": "lambda-0.1",
+      "input": "free",
+      "epoch": 2,
+      "macro_ap": 0.4734090597496119,
+      "pooled_ap": 0.2766588317291344,
+      "auroc": 0.6224816023959461
+    },
+    {
+      "seed": 43,
+      "role": "lambda-1",
+      "input": "free",
+      "epoch": 2,
+      "macro_ap": 0.46143135408512725,
+      "pooled_ap": 0.25436765344469836,
+      "auroc": 0.596065846254321
+    }
+  ],
+  "means": {
+    "labels-only": {
+      "macro_ap": 0.4710521962063898,
+      "pooled_ap": 0.27438006803316883,
+      "auroc": 0.6190792027066343
+    },
+    "teacher": {
+      "macro_ap": 0.6247899177187227,
+      "pooled_ap": 0.4860489486992254,
+      "auroc": 0.7427918515390747
+    },
+    "lambda-0.1": {
+      "macro_ap": 0.4701345830914585,
+      "pooled_ap": 0.27348308742489175,
+      "auroc": 0.6182931658704239
+    },
+    "lambda-1": {
+      "macro_ap": 0.46071564952532423,
+      "pooled_ap": 0.2557586885955552,
+      "auroc": 0.5964912625546623
+    }
+  },
+  "identical_validation_support": true,
+  "teacher_frozen_verified": true,
+  "test_data_included": false
+}

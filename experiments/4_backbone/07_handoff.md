@@ -4,6 +4,24 @@ This is a handoff for the agent taking over the backbone-only production oGQT th
 table, run name and job id, is `experiments/4_backbone/07_gqt_production_stores.md` (the 07 note). This file is the
 map: what was decided, where things are, how to run and judge an experiment, and what is still open.
 
+## Current default and experiment policy
+
+As of 13 October 2026, the default for frozen GQT experiments is the **50% relational,
+seed-17 checkpoint**, `control-v2-50-relations-s17`, selected epoch 18. Its checkpoint
+SHA256 is `b79d6e37eaebb7bdbdd73ff1f5af6995a1c6bdf29ad36f93352f0ec455539347`.
+Use `pkatrain.production_defaults.load_frozen_default()` with the checked-in export
+`models/ogqt-relational-50-frozen`. It returns frozen embedding/prediction functions
+without exposing GQT parameters to the head optimizer. Existing explicit model
+loaders and the legacy standalone prediction CLI retain their behavior.
+
+**New experiments start with one seed (17).** Add more seeds only if the result
+warrants confirmation and the user approves. The relational baseline already has
+three completed seeds; reuse them. Do not unfreeze GQT without a specific request.
+
+The reference below describes the earlier 100% base-A series; it is retained as
+historical context, not the current default. Current experiments and results are
+summarized in `08_frozen_relational.md`, with scripts and result records beside it.
+
 ## 1. Where we are
 
 - **Goal:** the best backbone-only pKa model (no side-chain coordinates at inference). The model is jointly trained

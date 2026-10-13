@@ -1,0 +1,95 @@
+{
+  "runs": [
+    {
+      "seed": 17,
+      "head": "site",
+      "epoch": 1,
+      "site_macro_ap": 0.4738522118619113,
+      "site_pooled_ap": 0.2753381113572882,
+      "site_auroc": 0.6196711140355561,
+      "pair_ap": null,
+      "pair_macro_ap": null,
+      "complexes": 601,
+      "sites": 23452,
+      "positives": 4574
+    },
+    {
+      "seed": 17,
+      "head": "pair",
+      "epoch": 2,
+      "site_macro_ap": 0.45418341789441846,
+      "site_pooled_ap": 0.27742223326683896,
+      "site_auroc": 0.623171821263374,
+      "pair_ap": 0.030380688444098847,
+      "pair_macro_ap": 0.17651733249561405,
+      "complexes": 601,
+      "sites": 23452,
+      "positives": 4574
+    },
+    {
+      "seed": 29,
+      "head": "site",
+      "epoch": 1,
+      "site_macro_ap": 0.4636771354201246,
+      "site_pooled_ap": 0.2707470793327934,
+      "site_auroc": 0.615570809120801,
+      "pair_ap": null,
+      "pair_macro_ap": null,
+      "complexes": 601,
+      "sites": 23452,
+      "positives": 4574
+    },
+    {
+      "seed": 29,
+      "head": "pair",
+      "epoch": 6,
+      "site_macro_ap": 0.44363851874521926,
+      "site_pooled_ap": 0.2580872935258164,
+      "site_auroc": 0.6100109391069959,
+      "pair_ap": 0.025655444002236443,
+      "pair_macro_ap": 0.16424168235135342,
+      "complexes": 601,
+      "sites": 23452,
+      "positives": 4574
+    },
+    {
+      "seed": 43,
+      "head": "site",
+      "epoch": 3,
+      "site_macro_ap": 0.47562724133713347,
+      "site_pooled_ap": 0.27705501340942484,
+      "site_auroc": 0.621995684963546,
+      "pair_ap": null,
+      "pair_macro_ap": null,
+      "complexes": 601,
+      "sites": 23452,
+      "positives": 4574
+    },
+    {
+      "seed": 43,
+      "head": "pair",
+      "epoch": 13,
+      "site_macro_ap": 0.4522507876689109,
+      "site_pooled_ap": 0.26120869831965193,
+      "site_auroc": 0.6106040744635285,
+      "pair_ap": 0.024753876150808627,
+      "pair_macro_ap": 0.17292703532171616,
+      "complexes": 601,
+      "sites": 23452,
+      "positives": 4574
+    }
+  ],
+  "means": {
+    "site": {
+      "site_macro_ap": 0.4710521962063898,
+      "site_pooled_ap": 0.27438006803316883,
+      "site_auroc": 0.6190792027066343
+    },
+    "pair": {
+      "site_macro_ap": 0.45002424143618286,
+      "site_pooled_ap": 0.26557274170410244,
+      "site_auroc": 0.6145956116112995
+    }
+  },
+  "test_data_included": false
+}

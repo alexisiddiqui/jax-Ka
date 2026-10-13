@@ -1,0 +1,6 @@
+stage	job_id	dependency
+smoke	7379396	none
+seed17	7379402	afterok:7379396
+seed29	7379404	afterok:7379396
+seed43	7379406	afterok:7379396
+report	7379407	afterok:7379402:7379404:7379406

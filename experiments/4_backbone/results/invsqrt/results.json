@@ -1,0 +1,1467 @@
+{
+  "results": [
+    {
+      "run": "invsqrt-v2-50-s17",
+      "fraction": 0.5,
+      "seed": 17,
+      "weight": "invsqrt",
+      "variant": "none",
+      "kind": "weighted-reference",
+      "epoch": 18,
+      "selection": 0.6554861853983863,
+      "state_mae": 0.41107893399537976,
+      "interface_mae": 0.24440725140300654,
+      "pkpdb_mae": 0.49378716823498614,
+      "benchmark_mae": 0.5143583930325432,
+      "bins": [
+        {
+          "lower": 0,
+          "upper": 0.1,
+          "sites": 3758,
+          "complexes": 730,
+          "mae": 0.10050785216984119,
+          "rmse": 0.1937644215266121,
+          "signed_bias": 0.0015565604942951385,
+          "magnitude_bias": 0.06975899882388598
+        },
+        {
+          "lower": 0.1,
+          "upper": 0.25,
+          "sites": 1518,
+          "complexes": 478,
+          "mae": 0.18892711188094458,
+          "rmse": 0.29433383800433793,
+          "signed_bias": 0.002115317276766099,
+          "magnitude_bias": 0.059480205913257145
+        },
+        {
+          "lower": 0.25,
+          "upper": 0.5,
+          "sites": 962,
+          "complexes": 361,
+          "mae": 0.2977465569911033,
+          "rmse": 0.44147123599448707,
+          "signed_bias": 0.028228269204528318,
+          "magnitude_bias": 0.05396359461880523
+        },
+        {
+          "lower": 0.5,
+          "upper": 1.0,
+          "sites": 745,
+          "complexes": 293,
+          "mae": 0.42358830467166514,
+          "rmse": 0.5958522760803531,
+          "signed_bias": 0.02864709064464441,
+          "magnitude_bias": -0.032149899205905476
+        },
+        {
+          "lower": 1.0,
+          "upper": 2.0,
+          "sites": 477,
+          "complexes": 216,
+          "mae": 0.6500538690191395,
+          "rmse": 0.794192839555552,
+          "signed_bias": 0.06723767508063426,
+          "magnitude_bias": -0.3392307123704276
+        },
+        {
+          "lower": 2.0,
+          "upper": 4.0,
+          "sites": 205,
+          "complexes": 116,
+          "mae": 1.0503168229467985,
+          "rmse": 1.2336273410848035,
+          "signed_bias": -0.26787825134105797,
+          "magnitude_bias": -0.8612546730877423
+        },
+        {
+          "lower": 4.0,
+          "upper": null,
+          "sites": 38,
+          "complexes": 23,
+          "mae": 2.3887665491355095,
+          "rmse": 2.654497866575188,
+          "signed_bias": -0.9660074742216813,
+          "magnitude_bias": -2.351469852422413
+        }
+      ]
+    },
+    {
+      "run": "invsqrt-v2-50-s29",
+      "fraction": 0.5,
+      "seed": 29,
+      "weight": "invsqrt",
+      "variant": "none",
+      "kind": "weighted-reference",
+      "epoch": 20,
+      "selection": 0.6592364723034538,
+      "state_mae": 0.41383630318960724,
+      "interface_mae": 0.24540016911384654,
+      "pkpdb_mae": 0.5014706693502771,
+      "benchmark_mae": 0.5195099325531356,
+      "bins": [
+        {
+          "lower": 0,
+          "upper": 0.1,
+          "sites": 3758,
+          "complexes": 730,
+          "mae": 0.09494309087480682,
+          "rmse": 0.19431080957148486,
+          "signed_bias": 0.004543876898945361,
+          "magnitude_bias": 0.06381333653654997
+        },
+        {
+          "lower": 0.1,
+          "upper": 0.25,
+          "sites": 1518,
+          "complexes": 478,
+          "mae": 0.19354795010905218,
+          "rmse": 0.31853857159977295,
+          "signed_bias": -0.004504659951803163,
+          "magnitude_bias": 0.06964901620608034
+        },
+        {
+          "lower": 0.25,
+          "upper": 0.5,
+          "sites": 962,
+          "complexes": 361,
+          "mae": 0.2998048853043955,
+          "rmse": 0.4534375559586984,
+          "signed_bias": 0.012975606285113059,
+          "magnitude_bias": 0.07222744106874644
+        },
+        {
+          "lower": 0.5,
+          "upper": 1.0,
+          "sites": 745,
+          "complexes": 293,
+          "mae": 0.43494387469035667,
+          "rmse": 0.6273570575384472,
+          "signed_bias": 0.0352372736338801,
+          "magnitude_bias": -0.017319266388080266
+        },
+        {
+          "lower": 1.0,
+          "upper": 2.0,
+          "sites": 477,
+          "complexes": 216,
+          "mae": 0.6527550375592783,
+          "rmse": 0.7865427510373078,
+          "signed_bias": 0.05428415201057678,
+          "magnitude_bias": -0.3289388373369191
+        },
+        {
+          "lower": 2.0,
+          "upper": 4.0,
+          "sites": 205,
+          "complexes": 116,
+          "mae": 1.1051692289368409,
+          "rmse": 1.3226710268698465,
+          "signed_bias": -0.3018520289259713,
+          "magnitude_bias": -0.9119446262172083
+        },
+        {
+          "lower": 4.0,
+          "upper": null,
+          "sites": 38,
+          "complexes": 23,
+          "mae": 2.3512174047921834,
+          "rmse": 2.6586822559445418,
+          "signed_bias": -0.957112729549408,
+          "magnitude_bias": -2.345802040476548
+        }
+      ]
+    },
+    {
+      "run": "invsqrt-v2-50-s43",
+      "fraction": 0.5,
+      "seed": 43,
+      "weight": "invsqrt",
+      "variant": "none",
+      "kind": "weighted-reference",
+      "epoch": 20,
+      "selection": 0.6623479695785597,
+      "state_mae": 0.41490855232825324,
+      "interface_mae": 0.24743941725030644,
+      "pkpdb_mae": 0.4995748677175152,
+      "benchmark_mae": 0.5152574166685164,
+      "bins": [
+        {
+          "lower": 0,
+          "upper": 0.1,
+          "sites": 3758,
+          "complexes": 730,
+          "mae": 0.09752295198966811,
+          "rmse": 0.1904972984028076,
+          "signed_bias": 0.00900113742209737,
+          "magnitude_bias": 0.06542080287693218
+        },
+        {
+          "lower": 0.1,
+          "upper": 0.25,
+          "sites": 1518,
+          "complexes": 478,
+          "mae": 0.20121232428181823,
+          "rmse": 0.31570450409143197,
+          "signed_bias": 0.01062824637831553,
+          "magnitude_bias": 0.07459390572639125
+        },
+        {
+          "lower": 0.25,
+          "upper": 0.5,
+          "sites": 962,
+          "complexes": 361,
+          "mae": 0.2966599702649206,
+          "rmse": 0.4289478558452657,
+          "signed_bias": 0.02712366737719633,
+          "magnitude_bias": 0.06098842419482566
+        },
+        {
+          "lower": 0.5,
+          "upper": 1.0,
+          "sites": 745,
+          "complexes": 293,
+          "mae": 0.43635087473280476,
+          "rmse": 0.6413198779078689,
+          "signed_bias": 0.06119340206152641,
+          "magnitude_bias": -0.009665841024193988
+        },
+        {
+          "lower": 1.0,
+          "upper": 2.0,
+          "sites": 477,
+          "complexes": 216,
+          "mae": 0.6584722326142983,
+          "rmse": 0.8049942768120373,
+          "signed_bias": 0.03717734780264101,
+          "magnitude_bias": -0.32714587738991285
+        },
+        {
+          "lower": 2.0,
+          "upper": 4.0,
+          "sites": 205,
+          "complexes": 116,
+          "mae": 1.051435453262998,
+          "rmse": 1.255046758995521,
+          "signed_bias": -0.25159465141776133,
+          "magnitude_bias": -0.8606070811246953
+        },
+        {
+          "lower": 4.0,
+          "upper": null,
+          "sites": 38,
+          "complexes": 23,
+          "mae": 2.47343395728814,
+          "rmse": 2.7550244812594746,
+          "signed_bias": -1.0931061757238287,
+          "magnitude_bias": -2.4644045516064295
+        }
+      ]
+    },
+    {
+      "run": "invsqrt-v2-100-s17",
+      "fraction": 1.0,
+      "seed": 17,
+      "weight": "invsqrt",
+      "variant": "none",
+      "kind": "weighted-reference",
+      "epoch": 20,
+      "selection": 0.6283043129777319,
+      "state_mae": 0.3940765545149383,
+      "interface_mae": 0.23422775846279362,
+      "pkpdb_mae": 0.4801733674315738,
+      "benchmark_mae": 0.4894163316414494,
+      "bins": [
+        {
+          "lower": 0,
+          "upper": 0.1,
+          "sites": 3758,
+          "complexes": 730,
+          "mae": 0.09539088026926262,
+          "rmse": 0.20108554692401737,
+          "signed_bias": 0.003004202927488035,
+          "magnitude_bias": 0.0640531579342816
+        },
+        {
+          "lower": 0.1,
+          "upper": 0.25,
+          "sites": 1518,
+          "complexes": 478,
+          "mae": 0.18530676360898535,
+          "rmse": 0.28788496000385105,
+          "signed_bias": -0.004594556006881481,
+          "magnitude_bias": 0.061933080756568074
+        },
+        {
+          "lower": 0.25,
+          "upper": 0.5,
+          "sites": 962,
+          "complexes": 361,
+          "mae": 0.28926569647823697,
+          "rmse": 0.4328734579694461,
+          "signed_bias": 0.008590754284184588,
+          "magnitude_bias": 0.05431592634834519
+        },
+        {
+          "lower": 0.5,
+          "upper": 1.0,
+          "sites": 745,
+          "complexes": 293,
+          "mae": 0.4184565438120157,
+          "rmse": 0.6225260595814199,
+          "signed_bias": 0.03942614853782142,
+          "magnitude_bias": -0.014002576890407792
+        },
+        {
+          "lower": 1.0,
+          "upper": 2.0,
+          "sites": 477,
+          "complexes": 216,
+          "mae": 0.5937038170372915,
+          "rmse": 0.7518894351477166,
+          "signed_bias": 0.05731261577808632,
+          "magnitude_bias": -0.303977868607584
+        },
+        {
+          "lower": 2.0,
+          "upper": 4.0,
+          "sites": 205,
+          "complexes": 116,
+          "mae": 1.0373026578709847,
+          "rmse": 1.2283039322952454,
+          "signed_bias": -0.3062101362136806,
+          "magnitude_bias": -0.8840886118026768
+        },
+        {
+          "lower": 4.0,
+          "upper": null,
+          "sites": 38,
+          "complexes": 23,
+          "mae": 2.068798441635935,
+          "rmse": 2.3919193751352905,
+          "signed_bias": -0.7101126470063862,
+          "magnitude_bias": -2.068798441635935
+        }
+      ]
+    },
+    {
+      "run": "invsqrt-v2-100-s29",
+      "fraction": 1.0,
+      "seed": 29,
+      "weight": "invsqrt",
+      "variant": "none",
+      "kind": "weighted-reference",
+      "epoch": 16,
+      "selection": 0.631110346181846,
+      "state_mae": 0.3990505969289719,
+      "interface_mae": 0.23205974925287415,
+      "pkpdb_mae": 0.4843469368467371,
+      "benchmark_mae": 0.5016237658301809,
+      "bins": [
+        {
+          "lower": 0,
+          "upper": 0.1,
+          "sites": 3758,
+          "complexes": 730,
+          "mae": 0.0914356846733097,
+          "rmse": 0.18590834970041037,
+          "signed_bias": 0.007077747177750966,
+          "magnitude_bias": 0.06122181806643952
+        },
+        {
+          "lower": 0.1,
+          "upper": 0.25,
+          "sites": 1518,
+          "complexes": 478,
+          "mae": 0.1896144826178671,
+          "rmse": 0.30324805164747143,
+          "signed_bias": 0.008847822813128216,
+          "magnitude_bias": 0.06327253792984644
+        },
+        {
+          "lower": 0.25,
+          "upper": 0.5,
+          "sites": 962,
+          "complexes": 361,
+          "mae": 0.28868723240934635,
+          "rmse": 0.42171825418771297,
+          "signed_bias": 0.022440632793610905,
+          "magnitude_bias": 0.05406754375619353
+        },
+        {
+          "lower": 0.5,
+          "upper": 1.0,
+          "sites": 745,
+          "complexes": 293,
+          "mae": 0.3974224280590979,
+          "rmse": 0.5689354029778882,
+          "signed_bias": 0.029170352540560218,
+          "magnitude_bias": -0.028383311929318727
+        },
+        {
+          "lower": 1.0,
+          "upper": 2.0,
+          "sites": 477,
+          "complexes": 216,
+          "mae": 0.6015746908524001,
+          "rmse": 0.7463157478299148,
+          "signed_bias": 0.07304144382039456,
+          "magnitude_bias": -0.30482433903454736
+        },
+        {
+          "lower": 2.0,
+          "upper": 4.0,
+          "sites": 205,
+          "complexes": 116,
+          "mae": 1.0258132407396305,
+          "rmse": 1.2363113994694832,
+          "signed_bias": -0.2895904841401228,
+          "magnitude_bias": -0.8694316307764228
+        },
+        {
+          "lower": 4.0,
+          "upper": null,
+          "sites": 38,
+          "complexes": 23,
+          "mae": 2.2385920976337634,
+          "rmse": 2.5036419806250803,
+          "signed_bias": -0.945836669520328,
+          "magnitude_bias": -2.2385920976337634
+        }
+      ]
+    },
+    {
+      "run": "invsqrt-v2-100-s43",
+      "fraction": 1.0,
+      "seed": 43,
+      "weight": "invsqrt",
+      "variant": "none",
+      "kind": "weighted-reference",
+      "epoch": 20,
+      "selection": 0.6375523778620193,
+      "state_mae": 0.3989123456959307,
+      "interface_mae": 0.2386400321660887,
+      "pkpdb_mae": 0.48424460924451507,
+      "benchmark_mae": 0.5019768674317336,
+      "bins": [
+        {
+          "lower": 0,
+          "upper": 0.1,
+          "sites": 3758,
+          "complexes": 730,
+          "mae": 0.09390735025693597,
+          "rmse": 0.18806508130368976,
+          "signed_bias": 0.0035325748515833305,
+          "magnitude_bias": 0.06315973176441972
+        },
+        {
+          "lower": 0.1,
+          "upper": 0.25,
+          "sites": 1518,
+          "complexes": 478,
+          "mae": 0.19946005802150024,
+          "rmse": 0.3218627945327615,
+          "signed_bias": 0.00554150809093387,
+          "magnitude_bias": 0.07395948629522002
+        },
+        {
+          "lower": 0.25,
+          "upper": 0.5,
+          "sites": 962,
+          "complexes": 361,
+          "mae": 0.2913297235408097,
+          "rmse": 0.41905720938519847,
+          "signed_bias": 0.010764435925007858,
+          "magnitude_bias": 0.05400204395182168
+        },
+        {
+          "lower": 0.5,
+          "upper": 1.0,
+          "sites": 745,
+          "complexes": 293,
+          "mae": 0.41821529493235904,
+          "rmse": 0.603445613800296,
+          "signed_bias": 0.036401922470771224,
+          "magnitude_bias": -0.012183157669617826
+        },
+        {
+          "lower": 1.0,
+          "upper": 2.0,
+          "sites": 477,
+          "complexes": 216,
+          "mae": 0.5891138398766018,
+          "rmse": 0.7116740060908403,
+          "signed_bias": 0.039858760089619354,
+          "magnitude_bias": -0.31748612823288896
+        },
+        {
+          "lower": 2.0,
+          "upper": 4.0,
+          "sites": 205,
+          "complexes": 116,
+          "mae": 1.105860164234551,
+          "rmse": 1.32748866722385,
+          "signed_bias": -0.3556196949285705,
+          "magnitude_bias": -0.9096209487355337
+        },
+        {
+          "lower": 4.0,
+          "upper": null,
+          "sites": 38,
+          "complexes": 23,
+          "mae": 2.184781971730684,
+          "rmse": 2.464230442165202,
+          "signed_bias": -0.9244844097840158,
+          "magnitude_bias": -2.1286272688915857
+        }
+      ]
+    },
+    {
+      "run": "control-v2-50-s17",
+      "fraction": 0.5,
+      "seed": 17,
+      "weight": "none",
+      "variant": "none",
+      "kind": "unweighted-control",
+      "epoch": 17,
+      "selection": 0.6444147106456583,
+      "state_mae": 0.40652833686332973,
+      "interface_mae": 0.23788637378232852,
+      "pkpdb_mae": 0.4933166731922632,
+      "benchmark_mae": 0.5164786143099711,
+      "bins": [
+        {
+          "lower": 0,
+          "upper": 0.1,
+          "sites": 3758,
+          "complexes": 730,
+          "mae": 0.08688720319065216,
+          "rmse": 0.16985298661775602,
+          "signed_bias": 0.003595790795549679,
+          "magnitude_bias": 0.054819009565669465
+        },
+        {
+          "lower": 0.1,
+          "upper": 0.25,
+          "sites": 1518,
+          "complexes": 478,
+          "mae": 0.17696277421380102,
+          "rmse": 0.2732726533526677,
+          "signed_bias": 0.005784905895993251,
+          "magnitude_bias": 0.03997177891654106
+        },
+        {
+          "lower": 0.25,
+          "upper": 0.5,
+          "sites": 962,
+          "complexes": 361,
+          "mae": 0.28427289990154475,
+          "rmse": 0.4111675686191697,
+          "signed_bias": 0.0066469333090058485,
+          "magnitude_bias": 0.034035738410424295
+        },
+        {
+          "lower": 0.5,
+          "upper": 1.0,
+          "sites": 745,
+          "complexes": 293,
+          "mae": 0.41475053277591734,
+          "rmse": 0.5806355705315891,
+          "signed_bias": 0.03053111762008411,
+          "magnitude_bias": -0.06984404409491776
+        },
+        {
+          "lower": 1.0,
+          "upper": 2.0,
+          "sites": 477,
+          "complexes": 216,
+          "mae": 0.6700578220891502,
+          "rmse": 0.8023556019200309,
+          "signed_bias": 0.04659598779940755,
+          "magnitude_bias": -0.41300437386993094
+        },
+        {
+          "lower": 2.0,
+          "upper": 4.0,
+          "sites": 205,
+          "complexes": 116,
+          "mae": 1.1793291552582892,
+          "rmse": 1.3745282132296481,
+          "signed_bias": -0.34672837062943274,
+          "magnitude_bias": -1.0544509639645494
+        },
+        {
+          "lower": 4.0,
+          "upper": null,
+          "sites": 38,
+          "complexes": 23,
+          "mae": 2.4591423524053475,
+          "rmse": 2.7394288207143913,
+          "signed_bias": -1.039804640569185,
+          "magnitude_bias": -2.4591423524053475
+        }
+      ]
+    },
+    {
+      "run": "control-v2-50-s29",
+      "fraction": 0.5,
+      "seed": 29,
+      "weight": "none",
+      "variant": "none",
+      "kind": "unweighted-control",
+      "epoch": 20,
+      "selection": 0.6509606067445524,
+      "state_mae": 0.41305475058061153,
+      "interface_mae": 0.2379058561639409,
+      "pkpdb_mae": 0.4959281082361259,
+      "benchmark_mae": 0.52002373962502,
+      "bins": [
+        {
+          "lower": 0,
+          "upper": 0.1,
+          "sites": 3758,
+          "complexes": 730,
+          "mae": 0.0857236681842087,
+          "rmse": 0.18092044349443676,
+          "signed_bias": 0.00015770254370187938,
+          "magnitude_bias": 0.053579214841381166
+        },
+        {
+          "lower": 0.1,
+          "upper": 0.25,
+          "sites": 1518,
+          "complexes": 478,
+          "mae": 0.18348135522472253,
+          "rmse": 0.2928779201849398,
+          "signed_bias": -0.0019891685051585846,
+          "magnitude_bias": 0.04590845383747882
+        },
+        {
+          "lower": 0.25,
+          "upper": 0.5,
+          "sites": 962,
+          "complexes": 361,
+          "mae": 0.2863813047907209,
+          "rmse": 0.41384024656582613,
+          "signed_bias": 0.004067421610043104,
+          "magnitude_bias": 0.032743896460334876
+        },
+        {
+          "lower": 0.5,
+          "upper": 1.0,
+          "sites": 745,
+          "complexes": 293,
+          "mae": 0.4272793985453228,
+          "rmse": 0.5869337438832123,
+          "signed_bias": 0.03769367993277992,
+          "magnitude_bias": -0.07066977020078058
+        },
+        {
+          "lower": 1.0,
+          "upper": 2.0,
+          "sites": 477,
+          "complexes": 216,
+          "mae": 0.6496737925667683,
+          "rmse": 0.7926687307978387,
+          "signed_bias": 0.04122359349355258,
+          "magnitude_bias": -0.39756620706564727
+        },
+        {
+          "lower": 2.0,
+          "upper": 4.0,
+          "sites": 205,
+          "complexes": 116,
+          "mae": 1.2063080312093584,
+          "rmse": 1.381599385051183,
+          "signed_bias": -0.3598890308381581,
+          "magnitude_bias": -0.9897067624439554
+        },
+        {
+          "lower": 4.0,
+          "upper": null,
+          "sites": 38,
+          "complexes": 23,
+          "mae": 2.129080245369359,
+          "rmse": 2.490889995449143,
+          "signed_bias": -0.8401341940227308,
+          "magnitude_bias": -2.129080245369359
+        }
+      ]
+    },
+    {
+      "run": "control-v2-50-s43",
+      "fraction": 0.5,
+      "seed": 43,
+      "weight": "none",
+      "variant": "none",
+      "kind": "unweighted-control",
+      "epoch": 17,
+      "selection": 0.6529216919816848,
+      "state_mae": 0.4109061556113817,
+      "interface_mae": 0.24201553637030307,
+      "pkpdb_mae": 0.4963133566303307,
+      "benchmark_mae": 0.5154660842419707,
+      "bins": [
+        {
+          "lower": 0,
+          "upper": 0.1,
+          "sites": 3758,
+          "complexes": 730,
+          "mae": 0.08693305895668259,
+          "rmse": 0.17733973125829952,
+          "signed_bias": 0.0087565790570404,
+          "magnitude_bias": 0.05337110006940879
+        },
+        {
+          "lower": 0.1,
+          "upper": 0.25,
+          "sites": 1518,
+          "complexes": 478,
+          "mae": 0.1901089734310709,
+          "rmse": 0.2996265280861528,
+          "signed_bias": 0.011056449994376133,
+          "magnitude_bias": 0.052627004426566586
+        },
+        {
+          "lower": 0.25,
+          "upper": 0.5,
+          "sites": 962,
+          "complexes": 361,
+          "mae": 0.2790054733750726,
+          "rmse": 0.40877630913666624,
+          "signed_bias": 0.022457371785338357,
+          "magnitude_bias": 0.030367762872682044
+        },
+        {
+          "lower": 0.5,
+          "upper": 1.0,
+          "sites": 745,
+          "complexes": 293,
+          "mae": 0.4249050671222226,
+          "rmse": 0.5965182840105011,
+          "signed_bias": 0.05196859248532545,
+          "magnitude_bias": -0.05381654760981566
+        },
+        {
+          "lower": 1.0,
+          "upper": 2.0,
+          "sites": 477,
+          "complexes": 216,
+          "mae": 0.6713192185672074,
+          "rmse": 0.7970823263604796,
+          "signed_bias": 0.02347321656827407,
+          "magnitude_bias": -0.3973701002868966
+        },
+        {
+          "lower": 2.0,
+          "upper": 4.0,
+          "sites": 205,
+          "complexes": 116,
+          "mae": 1.1975205074541453,
+          "rmse": 1.3903793927605277,
+          "signed_bias": -0.35365855034168175,
+          "magnitude_bias": -1.0352018428103227
+        },
+        {
+          "lower": 4.0,
+          "upper": null,
+          "sites": 38,
+          "complexes": 23,
+          "mae": 2.5867721156070105,
+          "rmse": 2.9242136443656577,
+          "signed_bias": -1.327521424544485,
+          "magnitude_bias": -2.5867721156070105
+        }
+      ]
+    },
+    {
+      "run": "invsqrt-v2-50-fourier-s17",
+      "fraction": 0.5,
+      "seed": 17,
+      "weight": "invsqrt",
+      "variant": "fourier",
+      "kind": "ablation",
+      "epoch": 17,
+      "selection": 0.6795419753260088,
+      "state_mae": 0.42959657234686993,
+      "interface_mae": 0.2499454029791389,
+      "pkpdb_mae": 0.5157508500652346,
+      "benchmark_mae": 0.5248772351927564,
+      "bins": [
+        {
+          "lower": 0,
+          "upper": 0.1,
+          "sites": 3758,
+          "complexes": 730,
+          "mae": 0.10160227947654782,
+          "rmse": 0.20284625277287816,
+          "signed_bias": 0.00996618927865348,
+          "magnitude_bias": 0.07021238315630429
+        },
+        {
+          "lower": 0.1,
+          "upper": 0.25,
+          "sites": 1518,
+          "complexes": 478,
+          "mae": 0.1937798265483088,
+          "rmse": 0.3128320486852414,
+          "signed_bias": 0.001436553874613818,
+          "magnitude_bias": 0.07156263471351586
+        },
+        {
+          "lower": 0.25,
+          "upper": 0.5,
+          "sites": 962,
+          "complexes": 361,
+          "mae": 0.30025234542740603,
+          "rmse": 0.4360584241438562,
+          "signed_bias": 0.017158413162598245,
+          "magnitude_bias": 0.06306136221375139
+        },
+        {
+          "lower": 0.5,
+          "upper": 1.0,
+          "sites": 745,
+          "complexes": 293,
+          "mae": 0.4067308193485209,
+          "rmse": 0.5604211147122157,
+          "signed_bias": 0.020432041835464886,
+          "magnitude_bias": -0.045035362203649225
+        },
+        {
+          "lower": 1.0,
+          "upper": 2.0,
+          "sites": 477,
+          "complexes": 216,
+          "mae": 0.6652167410876766,
+          "rmse": 0.8252380725862176,
+          "signed_bias": 0.03402205359823299,
+          "magnitude_bias": -0.37075809889182104
+        },
+        {
+          "lower": 2.0,
+          "upper": 4.0,
+          "sites": 205,
+          "complexes": 116,
+          "mae": 1.1795411023970057,
+          "rmse": 1.3874804224767863,
+          "signed_bias": -0.3716636452187852,
+          "magnitude_bias": -1.0136609515584096
+        },
+        {
+          "lower": 4.0,
+          "upper": null,
+          "sites": 38,
+          "complexes": 23,
+          "mae": 2.588914915135032,
+          "rmse": 2.9210179432052734,
+          "signed_bias": -1.240573437590348,
+          "magnitude_bias": -2.588914915135032
+        }
+      ]
+    },
+    {
+      "run": "invsqrt-v2-50-rope-s17",
+      "fraction": 0.5,
+      "seed": 17,
+      "weight": "invsqrt",
+      "variant": "rope",
+      "kind": "ablation",
+      "epoch": 17,
+      "selection": 0.6597470956634572,
+      "state_mae": 0.41531601491977954,
+      "interface_mae": 0.24443108074367773,
+      "pkpdb_mae": 0.50393248396969,
+      "benchmark_mae": 0.5166927342827657,
+      "bins": [
+        {
+          "lower": 0,
+          "upper": 0.1,
+          "sites": 3758,
+          "complexes": 730,
+          "mae": 0.09649963346827913,
+          "rmse": 0.19756241487603796,
+          "signed_bias": 0.0021514569752675667,
+          "magnitude_bias": 0.0654124818908813
+        },
+        {
+          "lower": 0.1,
+          "upper": 0.25,
+          "sites": 1518,
+          "complexes": 478,
+          "mae": 0.19393153018557388,
+          "rmse": 0.30911085719351816,
+          "signed_bias": -0.009554430323362114,
+          "magnitude_bias": 0.06847588481241654
+        },
+        {
+          "lower": 0.25,
+          "upper": 0.5,
+          "sites": 962,
+          "complexes": 361,
+          "mae": 0.2929487998854841,
+          "rmse": 0.43632854680780375,
+          "signed_bias": 0.005215840286375827,
+          "magnitude_bias": 0.05095912894067546
+        },
+        {
+          "lower": 0.5,
+          "upper": 1.0,
+          "sites": 745,
+          "complexes": 293,
+          "mae": 0.43093534183982235,
+          "rmse": 0.6050155660298797,
+          "signed_bias": 0.037992909330649666,
+          "magnitude_bias": -0.046088598678576065
+        },
+        {
+          "lower": 1.0,
+          "upper": 2.0,
+          "sites": 477,
+          "complexes": 216,
+          "mae": 0.6336739333326962,
+          "rmse": 0.7652764006055476,
+          "signed_bias": 0.04859784115847802,
+          "magnitude_bias": -0.3411734444196619
+        },
+        {
+          "lower": 2.0,
+          "upper": 4.0,
+          "sites": 205,
+          "complexes": 116,
+          "mae": 1.1338600468163083,
+          "rmse": 1.3247718983464625,
+          "signed_bias": -0.3246291734278202,
+          "magnitude_bias": -0.9641055905782595
+        },
+        {
+          "lower": 4.0,
+          "upper": null,
+          "sites": 38,
+          "complexes": 23,
+          "mae": 2.3224097176602014,
+          "rmse": 2.575672826197594,
+          "signed_bias": -0.8562453546022114,
+          "magnitude_bias": -2.3224097176602014
+        }
+      ]
+    },
+    {
+      "run": "invsqrt-v2-50-shared-projection-s17",
+      "fraction": 0.5,
+      "seed": 17,
+      "weight": "invsqrt",
+      "variant": "shared-projection",
+      "kind": "ablation",
+      "epoch": 17,
+      "selection": 0.6517178064907372,
+      "state_mae": 0.409607549767257,
+      "interface_mae": 0.24211025672348022,
+      "pkpdb_mae": 0.49554700281151287,
+      "benchmark_mae": 0.5044114633199482,
+      "bins": [
+        {
+          "lower": 0,
+          "upper": 0.1,
+          "sites": 3758,
+          "complexes": 730,
+          "mae": 0.09875176826163833,
+          "rmse": 0.1985678822225415,
+          "signed_bias": 0.0008770722703549252,
+          "magnitude_bias": 0.06861789600488478
+        },
+        {
+          "lower": 0.1,
+          "upper": 0.25,
+          "sites": 1518,
+          "complexes": 478,
+          "mae": 0.19494941515654168,
+          "rmse": 0.3060285664940457,
+          "signed_bias": -0.0054549849426498995,
+          "magnitude_bias": 0.07227327929728705
+        },
+        {
+          "lower": 0.25,
+          "upper": 0.5,
+          "sites": 962,
+          "complexes": 361,
+          "mae": 0.28493606303808844,
+          "rmse": 0.42353212171100824,
+          "signed_bias": -0.0010696131263602054,
+          "magnitude_bias": 0.06367119728527545
+        },
+        {
+          "lower": 0.5,
+          "upper": 1.0,
+          "sites": 745,
+          "complexes": 293,
+          "mae": 0.41404992522009265,
+          "rmse": 0.5917542207274504,
+          "signed_bias": 0.034411119014624784,
+          "magnitude_bias": -0.021594330088404202
+        },
+        {
+          "lower": 1.0,
+          "upper": 2.0,
+          "sites": 477,
+          "complexes": 216,
+          "mae": 0.6441519445499534,
+          "rmse": 0.7804289191533851,
+          "signed_bias": 0.01929420046898804,
+          "magnitude_bias": -0.3557208724148119
+        },
+        {
+          "lower": 2.0,
+          "upper": 4.0,
+          "sites": 205,
+          "complexes": 116,
+          "mae": 1.0635477951205359,
+          "rmse": 1.2566569777081986,
+          "signed_bias": -0.36342900186413674,
+          "magnitude_bias": -0.8926067633418048
+        },
+        {
+          "lower": 4.0,
+          "upper": null,
+          "sites": 38,
+          "complexes": 23,
+          "mae": 2.370249352957073,
+          "rmse": 2.6727901587598186,
+          "signed_bias": -1.0188631697704917,
+          "magnitude_bias": -2.370249352957073
+        }
+      ]
+    },
+    {
+      "run": "invsqrt-v2-50-relations-s17",
+      "fraction": 0.5,
+      "seed": 17,
+      "weight": "invsqrt",
+      "variant": "relations",
+      "kind": "ablation",
+      "epoch": 17,
+      "selection": 0.6458951360555769,
+      "state_mae": 0.405218498735989,
+      "interface_mae": 0.240676637319588,
+      "pkpdb_mae": 0.4906267132292528,
+      "benchmark_mae": 0.5107580039049712,
+      "bins": [
+        {
+          "lower": 0,
+          "upper": 0.1,
+          "sites": 3758,
+          "complexes": 730,
+          "mae": 0.09511433002707995,
+          "rmse": 0.2015353357263303,
+          "signed_bias": -0.005608219129963718,
+          "magnitude_bias": 0.0635140415671628
+        },
+        {
+          "lower": 0.1,
+          "upper": 0.25,
+          "sites": 1518,
+          "complexes": 478,
+          "mae": 0.19613088154122332,
+          "rmse": 0.31474398473133747,
+          "signed_bias": -0.007097869965447817,
+          "magnitude_bias": 0.0682934951491173
+        },
+        {
+          "lower": 0.25,
+          "upper": 0.5,
+          "sites": 962,
+          "complexes": 361,
+          "mae": 0.2871870861046032,
+          "rmse": 0.4205383446171176,
+          "signed_bias": -0.002250409020951285,
+          "magnitude_bias": 0.050339846594913584
+        },
+        {
+          "lower": 0.5,
+          "upper": 1.0,
+          "sites": 745,
+          "complexes": 293,
+          "mae": 0.4194341468731029,
+          "rmse": 0.5994344208148906,
+          "signed_bias": 0.03357236613363228,
+          "magnitude_bias": -0.032436637230367465
+        },
+        {
+          "lower": 1.0,
+          "upper": 2.0,
+          "sites": 477,
+          "complexes": 216,
+          "mae": 0.6156488006750993,
+          "rmse": 0.7613855219360165,
+          "signed_bias": 0.05559462222975505,
+          "magnitude_bias": -0.3276102907908788
+        },
+        {
+          "lower": 2.0,
+          "upper": 4.0,
+          "sites": 205,
+          "complexes": 116,
+          "mae": 1.097841026270535,
+          "rmse": 1.289156970092622,
+          "signed_bias": -0.3254068576162908,
+          "magnitude_bias": -0.8961980362309189
+        },
+        {
+          "lower": 4.0,
+          "upper": null,
+          "sites": 38,
+          "complexes": 23,
+          "mae": 2.4024085873051693,
+          "rmse": 2.684311919022928,
+          "signed_bias": -1.0384905589254279,
+          "magnitude_bias": -2.3930575094724955
+        }
+      ]
+    },
+    {
+      "run": "invsqrt-v2-50-paired-delta-s17",
+      "fraction": 0.5,
+      "seed": 17,
+      "weight": "invsqrt",
+      "variant": "paired-delta",
+      "kind": "ablation",
+      "epoch": 17,
+      "selection": 0.6561952509679774,
+      "state_mae": 0.41075248433052197,
+      "interface_mae": 0.2454427666374554,
+      "pkpdb_mae": 0.4926842360618642,
+      "benchmark_mae": 0.5169409007985282,
+      "bins": [
+        {
+          "lower": 0,
+          "upper": 0.1,
+          "sites": 3758,
+          "complexes": 730,
+          "mae": 0.10179483945451244,
+          "rmse": 0.20151753769600317,
+          "signed_bias": 0.002237504797215916,
+          "magnitude_bias": 0.07254530949207809
+        },
+        {
+          "lower": 0.1,
+          "upper": 0.25,
+          "sites": 1518,
+          "complexes": 478,
+          "mae": 0.19547540965528082,
+          "rmse": 0.30868798484637555,
+          "signed_bias": 0.001297934202916616,
+          "magnitude_bias": 0.0785803814579356
+        },
+        {
+          "lower": 0.25,
+          "upper": 0.5,
+          "sites": 962,
+          "complexes": 361,
+          "mae": 0.29601337436950625,
+          "rmse": 0.42957343500662853,
+          "signed_bias": 0.010194974511923761,
+          "magnitude_bias": 0.0719239674276225
+        },
+        {
+          "lower": 0.5,
+          "upper": 1.0,
+          "sites": 745,
+          "complexes": 293,
+          "mae": 0.41368694941469486,
+          "rmse": 0.5889037931389683,
+          "signed_bias": 0.05827774813511227,
+          "magnitude_bias": -0.019341687988114836
+        },
+        {
+          "lower": 1.0,
+          "upper": 2.0,
+          "sites": 477,
+          "complexes": 216,
+          "mae": 0.6278507549713992,
+          "rmse": 0.7803385720644739,
+          "signed_bias": 0.0821860961350505,
+          "magnitude_bias": -0.3307623733420792
+        },
+        {
+          "lower": 2.0,
+          "upper": 4.0,
+          "sites": 205,
+          "complexes": 116,
+          "mae": 1.1040230787200171,
+          "rmse": 1.2796421875047101,
+          "signed_bias": -0.25956606961241585,
+          "magnitude_bias": -0.887372298556857
+        },
+        {
+          "lower": 4.0,
+          "upper": null,
+          "sites": 38,
+          "complexes": 23,
+          "mae": 2.4367826863339075,
+          "rmse": 2.6684444490444554,
+          "signed_bias": -1.2195026498091848,
+          "magnitude_bias": -2.4367826863339075
+        }
+      ]
+    },
+    {
+      "run": "prod-100pct-w64-drop10-bur1-orient-dihed",
+      "fraction": 1.0,
+      "seed": 17,
+      "weight": "none",
+      "variant": "none",
+      "kind": "existing-control",
+      "epoch": 17,
+      "selection": 0.6182964503130073,
+      "state_mae": 0.39028434776587523,
+      "interface_mae": 0.22801210254713203,
+      "pkpdb_mae": 0.47017612465969844,
+      "benchmark_mae": 0.4960474877896492,
+      "bins": [
+        {
+          "lower": 0,
+          "upper": 0.1,
+          "sites": 3758,
+          "complexes": 730,
+          "mae": 0.08465191827191831,
+          "rmse": 0.16929879299988587,
+          "signed_bias": 0.0009663076243576945,
+          "magnitude_bias": 0.051925802392217946
+        },
+        {
+          "lower": 0.1,
+          "upper": 0.25,
+          "sites": 1518,
+          "complexes": 478,
+          "mae": 0.175225637991801,
+          "rmse": 0.2691708041269638,
+          "signed_bias": 0.00027060001102007425,
+          "magnitude_bias": 0.037169206999144146
+        },
+        {
+          "lower": 0.25,
+          "upper": 0.5,
+          "sites": 962,
+          "complexes": 361,
+          "mae": 0.26755000502180903,
+          "rmse": 0.3816763239210244,
+          "signed_bias": 0.0061206718802204255,
+          "magnitude_bias": 0.015276758654697522
+        },
+        {
+          "lower": 0.5,
+          "upper": 1.0,
+          "sites": 745,
+          "complexes": 293,
+          "mae": 0.4054248543793723,
+          "rmse": 0.5643780685086637,
+          "signed_bias": 0.03970786489096264,
+          "magnitude_bias": -0.08136173602718635
+        },
+        {
+          "lower": 1.0,
+          "upper": 2.0,
+          "sites": 477,
+          "complexes": 216,
+          "mae": 0.6331547067756423,
+          "rmse": 0.7586117470520737,
+          "signed_bias": 0.05662108493863412,
+          "magnitude_bias": -0.40933987706024944
+        },
+        {
+          "lower": 2.0,
+          "upper": 4.0,
+          "sites": 205,
+          "complexes": 116,
+          "mae": 1.1128650823562611,
+          "rmse": 1.3110018249100364,
+          "signed_bias": -0.3360718114528714,
+          "magnitude_bias": -0.9478882308958507
+        },
+        {
+          "lower": 4.0,
+          "upper": null,
+          "sites": 38,
+          "complexes": 23,
+          "mae": 2.1759472254075503,
+          "rmse": 2.4657809593327333,
+          "signed_bias": -0.8585868070000097,
+          "magnitude_bias": -2.164724406443144
+        }
+      ]
+    },
+    {
+      "run": "prod-100pct-w64-drop10-bur1-orient-dihed-s29",
+      "fraction": 1.0,
+      "seed": 29,
+      "weight": "none",
+      "variant": "none",
+      "kind": "existing-control",
+      "epoch": 17,
+      "selection": 0.6181794938978087,
+      "state_mae": 0.39163673645326263,
+      "interface_mae": 0.22654275744454602,
+      "pkpdb_mae": 0.47552761852346076,
+      "benchmark_mae": 0.49518075047959786,
+      "bins": [
+        {
+          "lower": 0,
+          "upper": 0.1,
+          "sites": 3758,
+          "complexes": 730,
+          "mae": 0.08132003677365562,
+          "rmse": 0.16238519829520934,
+          "signed_bias": 0.0049992470906382236,
+          "magnitude_bias": 0.04885291782598853
+        },
+        {
+          "lower": 0.1,
+          "upper": 0.25,
+          "sites": 1518,
+          "complexes": 478,
+          "mae": 0.17423538476037295,
+          "rmse": 0.27969782007766153,
+          "signed_bias": 0.010889573244817251,
+          "magnitude_bias": 0.03996303603813857
+        },
+        {
+          "lower": 0.25,
+          "upper": 0.5,
+          "sites": 962,
+          "complexes": 361,
+          "mae": 0.2790896678478951,
+          "rmse": 0.3962147517522137,
+          "signed_bias": 0.03402390019685464,
+          "magnitude_bias": 0.01843837278424578
+        },
+        {
+          "lower": 0.5,
+          "upper": 1.0,
+          "sites": 745,
+          "complexes": 293,
+          "mae": 0.40703525027172677,
+          "rmse": 0.5599397448369066,
+          "signed_bias": 0.049571970685216404,
+          "magnitude_bias": -0.07657720462587855
+        },
+        {
+          "lower": 1.0,
+          "upper": 2.0,
+          "sites": 477,
+          "complexes": 216,
+          "mae": 0.6306367120559111,
+          "rmse": 0.7559941014888105,
+          "signed_bias": 0.09038177052946211,
+          "magnitude_bias": -0.3984880100162524
+        },
+        {
+          "lower": 2.0,
+          "upper": 4.0,
+          "sites": 205,
+          "complexes": 116,
+          "mae": 1.1163481736873708,
+          "rmse": 1.3165624368024476,
+          "signed_bias": -0.32493348566860686,
+          "magnitude_bias": -0.9063358041389686
+        },
+        {
+          "lower": 4.0,
+          "upper": null,
+          "sites": 38,
+          "complexes": 23,
+          "mae": 1.936269484068218,
+          "rmse": 2.2975200704770193,
+          "signed_bias": -0.5814284023485685,
+          "magnitude_bias": -1.8834657920034308
+        }
+      ]
+    },
+    {
+      "run": "prod-100pct-w64-drop10-bur1-orient-dihed-s43",
+      "fraction": 1.0,
+      "seed": 43,
+      "weight": "none",
+      "variant": "none",
+      "kind": "existing-control",
+      "epoch": 18,
+      "selection": 0.627208860538139,
+      "state_mae": 0.3950236904036044,
+      "interface_mae": 0.23218517013453455,
+      "pkpdb_mae": 0.47763540210474176,
+      "benchmark_mae": 0.5001003092083977,
+      "bins": [
+        {
+          "lower": 0,
+          "upper": 0.1,
+          "sites": 3758,
+          "complexes": 730,
+          "mae": 0.08309356936269964,
+          "rmse": 0.16832598021114722,
+          "signed_bias": 0.005791156272690876,
+          "magnitude_bias": 0.051599696371753906
+        },
+        {
+          "lower": 0.1,
+          "upper": 0.25,
+          "sites": 1518,
+          "complexes": 478,
+          "mae": 0.1782442774925484,
+          "rmse": 0.27745450498646157,
+          "signed_bias": 0.0031402784342017412,
+          "magnitude_bias": 0.04610397513435567
+        },
+        {
+          "lower": 0.25,
+          "upper": 0.5,
+          "sites": 962,
+          "complexes": 361,
+          "mae": 0.27613763281932246,
+          "rmse": 0.3908647537666248,
+          "signed_bias": 0.024149971326770506,
+          "magnitude_bias": 0.01921653273571554
+        },
+        {
+          "lower": 0.5,
+          "upper": 1.0,
+          "sites": 745,
+          "complexes": 293,
+          "mae": 0.4178785616519467,
+          "rmse": 0.6094589933646248,
+          "signed_bias": 0.0490864685317814,
+          "magnitude_bias": -0.06713791353590537
+        },
+        {
+          "lower": 1.0,
+          "upper": 2.0,
+          "sites": 477,
+          "complexes": 216,
+          "mae": 0.6428868098485145,
+          "rmse": 0.7639835322358665,
+          "signed_bias": 0.021926323588414263,
+          "magnitude_bias": -0.40030482381707216
+        },
+        {
+          "lower": 2.0,
+          "upper": 4.0,
+          "sites": 205,
+          "complexes": 116,
+          "mae": 1.1536760360547682,
+          "rmse": 1.3540494688999292,
+          "signed_bias": -0.3648140701760606,
+          "magnitude_bias": -1.0026031234460633
+        },
+        {
+          "lower": 4.0,
+          "upper": null,
+          "sites": 38,
+          "complexes": 23,
+          "mae": 2.25150896373548,
+          "rmse": 2.5742825019007594,
+          "signed_bias": -0.7727737426757812,
+          "magnitude_bias": -2.239700718929893
+        }
+      ]
+    }
+  ],
+  "test_data_included": false
+}

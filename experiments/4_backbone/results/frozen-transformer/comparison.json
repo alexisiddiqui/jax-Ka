@@ -1,0 +1,95 @@
+{
+  "runs": [
+    {
+      "seed": 17,
+      "head": "original-mlp",
+      "epoch": 1,
+      "site_macro_ap": 0.4738522118619113,
+      "pooled_ap": 0.2753381113572882,
+      "auroc": 0.6196711140355561
+    },
+    {
+      "seed": 17,
+      "head": "transformer",
+      "epoch": 3,
+      "site_macro_ap": 0.4654698561917183,
+      "pooled_ap": 0.28596615799800995,
+      "auroc": 0.6088868074275491
+    },
+    {
+      "seed": 17,
+      "head": "mlp",
+      "epoch": 2,
+      "site_macro_ap": 0.46301576392919586,
+      "pooled_ap": 0.2753168189100508,
+      "auroc": 0.6159937145904698
+    },
+    {
+      "seed": 29,
+      "head": "original-mlp",
+      "epoch": 1,
+      "site_macro_ap": 0.4636771354201246,
+      "pooled_ap": 0.2707470793327934,
+      "auroc": 0.615570809120801
+    },
+    {
+      "seed": 29,
+      "head": "transformer",
+      "epoch": 2,
+      "site_macro_ap": 0.45662145222432,
+      "pooled_ap": 0.2988034012321536,
+      "auroc": 0.6121344982682864
+    },
+    {
+      "seed": 29,
+      "head": "mlp",
+      "epoch": 2,
+      "site_macro_ap": 0.4666219548340236,
+      "pooled_ap": 0.26599275028134384,
+      "auroc": 0.6105430947852107
+    },
+    {
+      "seed": 43,
+      "head": "original-mlp",
+      "epoch": 3,
+      "site_macro_ap": 0.47562724133713347,
+      "pooled_ap": 0.27705501340942484,
+      "auroc": 0.621995684963546
+    },
+    {
+      "seed": 43,
+      "head": "transformer",
+      "epoch": 1,
+      "site_macro_ap": 0.4624151927240934,
+      "pooled_ap": 0.2844449962555974,
+      "auroc": 0.612806859132892
+    },
+    {
+      "seed": 43,
+      "head": "mlp",
+      "epoch": 1,
+      "site_macro_ap": 0.46601348944307447,
+      "pooled_ap": 0.28231660169204775,
+      "auroc": 0.6227855875330981
+    }
+  ],
+  "means": {
+    "original-mlp": {
+      "site_macro_ap": 0.4710521962063898,
+      "pooled_ap": 0.27438006803316883,
+      "auroc": 0.6190792027066343
+    },
+    "transformer": {
+      "site_macro_ap": 0.46150216704671054,
+      "pooled_ap": 0.28973818516192035,
+      "auroc": 0.6112760549429092
+    },
+    "mlp": {
+      "site_macro_ap": 0.465217069402098,
+      "pooled_ap": 0.2745420569611475,
+      "auroc": 0.6164407989695929
+    }
+  },
+  "identical_validation_support": true,
+  "test_data_included": false
+}

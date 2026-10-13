@@ -1,0 +1,27 @@
+{
+  "fourier": {
+    "finite_update": true,
+    "chain_relabeling": true,
+    "paired_loss": 0.05939415842294693
+  },
+  "rope": {
+    "finite_update": true,
+    "chain_relabeling": true,
+    "paired_loss": 0.0602002777159214
+  },
+  "shared-projection": {
+    "finite_update": true,
+    "chain_relabeling": true,
+    "paired_loss": 0.0697815865278244
+  },
+  "relations": {
+    "finite_update": true,
+    "chain_relabeling": true,
+    "paired_loss": 0.0697815865278244
+  },
+  "paired-delta": {
+    "finite_update": true,
+    "chain_relabeling": true,
+    "paired_loss": 0.0697815865278244
+  }
+}

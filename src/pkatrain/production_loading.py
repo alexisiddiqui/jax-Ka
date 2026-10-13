@@ -143,6 +143,7 @@ class _Source:
         return rows, bucket, self.manifest["capacities"][bucket]
 
     def _side(self, graph, cid, n):
+        graph = {**graph, "allow_cross_chain": np.asarray([True, False]) if graph["nodes"].ndim == 3 else np.asarray(True)}
         if self.sidechains is None: return graph
         features = self.sidechains(cid)
         if len(features) != self.by_id[cid]["n"]: raise AssertionError((cid, "side-chain table does not match the store"))

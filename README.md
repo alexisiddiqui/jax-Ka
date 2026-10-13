@@ -6,6 +6,16 @@ Frozen-structure, soft-sequence titration in JAX, with Biotite topology handling
 
 The compiled readouts accept only `P[N,20]`. Geometry, candidate side chains, residue identities/keys, terminal masks, neighbor graphs and geometric kernels are prepared once outside JIT. An output selection never removes the other residues or chains from the physical environment.
 
+## Default frozen GQT checkpoint
+
+For representation and auxiliary-head experiments, use the frozen **50% relational
+GQT, seed 17, epoch 18**, via
+`pkatrain.production_defaults.load_frozen_default()`. The pinned export is
+[`models/ogqt-relational-50-frozen`](models/ogqt-relational-50-frozen).
+New experiments start with one seed; the three-seed relational baseline is already
+available. See [the current experiment summary](experiments/4_backbone/08_frozen_relational.md).
+The standalone `ogqt predict` CLI remains a separate inference path.
+
 ## Install
 
 ```bash

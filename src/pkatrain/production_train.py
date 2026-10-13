@@ -336,7 +336,7 @@ class AuxEngine:
     tokens) against the interface soft target, PINDER pKa-labelled sites; operand bind_operand."""
 
     def __init__(self, params, weight, rate=0.0, mode="ce", interface_branch="bound", heads="both", site_embeddings=None, geometry_weight=0.0, chi_weight=0.0,
-                 ph_weight=0.0, ph_probe=False, bind_weight=0.0, bind_operand="product"):
+                 ph_weight=0.0, ph_probe=False, bind_weight=0.0, bind_operand="product", shift_weights=None):
         import jax
         import jax.numpy as jnp
         import optax
@@ -368,6 +368,7 @@ class AuxEngine:
         self.ph_weight = ph_weight = float(ph_weight)
         self.bind_weight = bind_weight = float(bind_weight); self.bind_operand = bind_operand
         from . import production_bind
+        paired_delta = "delta_head" in params
 
         def predict_all(p, graph, key=None):
             tokens, query_site = site_embeddings_indexed(p, graph, key=key, dropout_rate=rate if key is not None else 0.0)
@@ -381,7 +382,7 @@ class AuxEngine:
             ph = production_ph.pooled_logits(p["aux_ph"], jax.lax.stop_gradient(tokens) if ph_probe else tokens, graph["site_mask"]) if ph_weight else jnp.zeros((len(production_ph.THRESHOLDS),), jnp.float32)
             return (8 * jnp.tanh(linear(p["head"], tokens)[:, 0]))[query_site], linear(p["aux_burial"], tokens)[query_site], \
                 (linear(p["aux_interface"], tokens)[query_site] if use_interface else jnp.zeros((query_site.shape[0], 1), jnp.float32)), geometry, ph, \
-                tokens[query_site] if bind_weight else jnp.zeros((query_site.shape[0], 1), jnp.float32)
+                tokens[query_site] if bind_weight or paired_delta else jnp.zeros((query_site.shape[0], 1), jnp.float32)
 
         def geometry_loss(g, sites, valid):
             """Weighted side-chain auxiliaries, each averaged per structure over sites with a target: geometry =
@@ -403,7 +404,13 @@ class AuxEngine:
             flat, batch, branches = flatten(graphs)
             if key is None: out = jax.vmap(predict_all, in_axes=(None, 0))(p, flat)
             else: out = jax.vmap(lambda graph, k: predict_all(p, graph, k))(flat, jnp.repeat(jax.random.split(key, batch), branches, axis=0))
-            return jax.tree.map(lambda value: value.reshape((batch, branches) + value.shape[1:]), out)
+            out = jax.tree.map(lambda value: value.reshape((batch, branches) + value.shape[1:]), out)
+            if paired_delta:
+                from .production_position import delta_correction
+                correction = delta_correction(p["delta_head"], out[5][:,0], out[5][:,1])
+                shift = out[0].at[:,0].add(correction / 2).at[:,1].add(-correction / 2)
+                out = (shift, *out[1:])
+            return out
 
         def structure_mean(per_site, sites, valid):
             n = jnp.sum(sites, axis=1); per = jnp.sum(per_site * sites, axis=1) / jnp.maximum(n, 1)
@@ -419,6 +426,9 @@ class AuxEngine:
             expected = targets - reference[graphs["query_group"][:, 0]][:, None, :]
             state_error = jnp.square(predicted - expected) * mask[:, None, :]
             pair_error = jnp.square((predicted[:, 0] - predicted[:, 1]) - (expected[:, 0] - expected[:, 1])) * mask
+            if shift_weights is not None:
+                from .production_shift_weight import site_weights
+                pair_error = pair_error * site_weights(targets, shift_weights)
             state_loss = jnp.sum(state_error, axis=(1, 2)) / jnp.maximum(2 * jnp.sum(mask, axis=1), 1)
             pair_loss = jnp.sum(pair_error, axis=1) / jnp.maximum(jnp.sum(mask, axis=1), 1)
             denominator = jnp.maximum(jnp.sum(valid), 1)
@@ -561,7 +571,7 @@ def parameter_count(params):
 
 
 def make_model(seed, query_norm="shared", paired_weight="none", reduction="structure", width=None, sidechains=False, depth=2, loops=1,
-               orientation=False, sidechain_view="all", sidechain_drop=0.0, table=None, dihedrals=False, hbonds=False):
+               orientation=False, sidechain_view="all", sidechain_drop=0.0, table=None, dihedrals=False, hbonds=False, variant="none"):
     """(params, engine, predict): scratch oGQT and its engine; separate query norm starts as a copy of query norm1.
     depth / loops (production_depth), orientation / side-chain views (production_inputs): the engine returned is
     JointEngine, valid for depth alone; the others take DropoutEngine / AuxEngine with model_inputs(...) (train())."""
@@ -580,7 +590,9 @@ def make_model(seed, query_norm="shared", paired_weight="none", reduction="struc
         if orientation: params = add_orientation(params, seed)
         if dihedrals: params = add_dihedral_inputs(params, seed)
         if hbonds: params = add_hbond_inputs(params, seed)
-        predict_shift = model_inputs(loops, orientation, sidechain_view, sidechain_drop, table, dihedrals, hbonds)[1]
+        from .production_position import initialize as initialize_variant
+        params = initialize_variant(params, seed, variant)
+        predict_shift = model_inputs(loops, orientation, sidechain_view, sidechain_drop, table, dihedrals, hbonds, variant)[1]
         return params, JointEngine(params), jax.jit(jax.vmap(predict_shift, in_axes=(None, 0)))
     if query_norm == "separate":
         params = {**params, "query_context_norm": jnp.array(params["query"]["norm1"])}
@@ -592,10 +604,26 @@ def make_model(seed, query_norm="shared", paired_weight="none", reduction="struc
     return params, engine, jax.jit(jax.vmap(predict_shift, in_axes=(None, 0)))
 
 
-def model_inputs(loops=1, orientation=False, sidechain_view="all", sidechain_drop=0.0, table=None, dihedrals=False, hbonds=False):
+def model_inputs(loops=1, orientation=False, sidechain_view="all", sidechain_drop=0.0, table=None, dihedrals=False, hbonds=False, variant="none"):
     """(site_embeddings, predict_shift) for the looped encoder and the input variants (pkanet.site_model's by default);
     table: the loader appends backbone-v1 (default: with orientation)."""
-    return input_functions(model_functions(loops), sidechain_view, sidechain_drop, orientation, table, dihedrals, hbonds)
+    if variant == "global-query":
+        from .production_global_query import functions
+        funcs = input_functions(functions(), sidechain_view, sidechain_drop, orientation, table, dihedrals, hbonds)
+        def wrap(fn):
+            def call(params, graph, **kwargs):
+                if "allow_cross_chain" not in graph: raise ValueError("global query requires explicit branch isolation flag")
+                return fn(params, {**graph, "global_backbone": graph["nodes"][:, -BACKBONE_WIDTH:]}, **kwargs)
+            return call
+        return tuple(wrap(fn) for fn in funcs)
+    if variant in ("none", "paired-delta"):
+        return input_functions(model_functions(loops), sidechain_view, sidechain_drop, orientation, table, dihedrals, hbonds)
+    from .production_position import annotate, functions
+    embeddings, predict = input_functions(functions(variant), sidechain_view, sidechain_drop, orientation, table, dihedrals, hbonds)
+    def wrap(fn):
+        def call(params, graph, **kwargs): return fn(params, annotate(graph, variant), **kwargs)
+        return call
+    return wrap(embeddings), wrap(predict)
 
 
 def interface_weighted(engine):
@@ -644,7 +672,8 @@ def code_hashes():
     paths = [Path(__file__), src / "pkatrain/production_loading.py", src / "pkatrain/production_graphs.py",
              src / "pkatrain/loading.py", src / "pkatrain/production_depth.py", src / "pkatrain/production_inputs.py", src / "pkatrain/gqt_multitask_replay.py", src / "pkatrain/gqt_paired_pinder.py",
              src / "pkatrain/site_graph_data.py", src / "pkanet/ogqt.py", src / "pkanet/model.py", src / "pkanet/triton_attention.py",
-             src / "pkatrain/production_ph.py", src / "pkabench/experimental_ph.py"]
+             src / "pkatrain/production_ph.py", src / "pkabench/experimental_ph.py",
+             src / "pkatrain/production_shift_weight.py", src / "pkatrain/production_position.py", src / "pkatrain/production_global_query.py"]
     return {str(p.relative_to(src)): digest(p) for p in paths}
 
 
@@ -806,6 +835,8 @@ def validate(engine, predict, params, sources, manifests, config, out=None, epoc
     bench_rows = _benchmark_rows(predict, params, sources["benchmark"], select(manifests["benchmark-val"], "val"), config)
     pinder = _metrics(pair_rows); overall, bins, equal_bin = metrics_from_rows(bench_rows)
     pinder_squared, bench_squared = squared_errors(pair_rows, bench_rows); pinder.update(pinder_squared)
+    from .production_shift_weight import validation_bins
+    pinder["binding_shift_bins"] = validation_bins(pair_rows)
     pkpdb = None
     if "pkpdb-val" in sources:
         pk_rows = _pkpdb_rows(predict, params, sources["pkpdb-val"], select(manifests["pkpdb"], "val"), config); pkpdb = pkpdb_metrics(pk_rows)
@@ -823,7 +854,7 @@ def validate(engine, predict, params, sources, manifests, config, out=None, epoc
 def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none", seed=SEED, query_norm="shared", reduction="structure",
           mask_pmin=None, dropout=0.0, aux_weight=None, aux_loss="ce", aux_interface_branch="bound", aux_heads="both", width=None,
           sidechains=False, depth=2, loops=1, orientation=False, sidechain_view="all", sidechain_drop=0.0, geometry_weight=0.0,
-          dihedrals=False, chi_weight=0.0, hbonds=False, epochs=None, ph_weight=0.0, ph_sources="all", ph_probe=False, bind_weight=0.0, bind_operand="product"):
+          dihedrals=False, chi_weight=0.0, hbonds=False, epochs=None, ph_weight=0.0, ph_sources="all", ph_probe=False, bind_weight=0.0, bind_operand="product", shift_weight="none", variant="none"):
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
@@ -840,6 +871,13 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     jax.config.update("jax_compilation_cache_dir", str(out.parent / "compilation-cache"))
     manifests = {d: read(output(root, d) / MANIFEST) for d in ("pinder", "pkpdb", "benchmark-val")}
     norms = normalization(manifests["pinder"], fraction); scale = lr_scale(batch)
+    if variant != "none" and (not orientation or not dihedrals or loops != 1 or aux_weight is None):
+        raise ValueError("positional ablations require base A orientation/dihedrals/burial settings")
+    shift_table = None
+    if shift_weight != "none":
+        if aux_weight is None or aux_heads != "burial": raise ValueError("shift weighting requires burial AuxEngine")
+        from .production_shift_weight import fit
+        shift_table = fit(manifests["pinder"], fraction, out.parent / f"invsqrt-weights-{fraction:.3f}-v1.json")
     protocol = {"version": "gqt-production-joint-v1", "run": run, "fraction": fraction, "seed": seed, "batch": batch,
         "architecture": {**architecture(width, sidechains, depth, loops), **({"orientation_edges": ORIENTATION_EDGE} if orientation else {}),
                          **({"dihedral_features": DIHEDRAL_FEATURES} if dihedrals else {}),
@@ -916,6 +954,10 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
            if sidechains else {}),
         "pinder_weight_normalization": norms, "smoke": smoke, "test_data_included": False,
         "manifests": {d: digest(output(root, d) / MANIFEST) for d in manifests}, "code": code_hashes()}
+    if shift_table is not None:
+        protocol["binding_shift_weights"] = shift_table
+        protocol["objective"] += "; binding-shift MSE weighted by capped inverse-sqrt training-bin count"
+    if variant != "none": protocol["production_variant"] = variant
     if (out / "protocol.json").exists():
         stored = read(out / "protocol.json")
         if {k: v for k, v in stored.items() if k != "code"} != json.loads(json.dumps({k: v for k, v in protocol.items() if k != "code"})):
@@ -955,12 +997,12 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
         raise ValueError("--geometry-weight / --chi-weight need --sidechains --sidechain-view dropout (side chains hidden from validation) and --aux-weight")
     table = bool(orientation or geometry_weight or chi_weight or dihedrals or hbonds)
     params, engine, predict = make_model(seed, query_norm, paired_weight, reduction, width, sidechains, depth, loops,
-                                         orientation, sidechain_view, sidechain_drop, table, dihedrals, hbonds); state = engine.optimizer.init(params)
+                                         orientation, sidechain_view, sidechain_drop, table, dihedrals, hbonds, variant); state = engine.optimizer.init(params)
     custom_inputs = loops != 1 or table or sidechain_view != "all"
     if custom_inputs and aux_weight is None and not dropout:
         raise ValueError("--loops / --orientation / --sidechain-view run through DropoutEngine / AuxEngine (use --dropout or --aux-weight)")
     if (depth != 2 or custom_inputs) and mask_pmin is not None: raise ValueError("depth / loops / input variants do not combine with site masking")
-    embeddings_fn, shift_fn = model_inputs(loops, orientation, sidechain_view, sidechain_drop, table, dihedrals, hbonds)
+    embeddings_fn, shift_fn = model_inputs(loops, orientation, sidechain_view, sidechain_drop, table, dihedrals, hbonds, variant)
     step_key = None
     if aux_weight is not None:
         if query_norm != "shared" or paired_weight != "none" or reduction != "structure" or mask_pmin is not None:
@@ -977,7 +1019,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
             from .production_bind import initialize as initialize_bind
             params = initialize_bind(params, seed)
         engine = AuxEngine(params, aux_weight, dropout, aux_loss, aux_interface_branch, aux_heads, embeddings_fn, geometry_weight, chi_weight, ph_weight, ph_probe,
-                           bind_weight, bind_operand)
+                           bind_weight, bind_operand, shift_table)
         engine.ph_table = ph_table
         state = engine.optimizer.init(params)
         step_key = jax.random.PRNGKey(seed + 200003)
@@ -1140,17 +1182,20 @@ def protocol_inputs(protocol):
     return view, drop, orientation, table, dihedrals, hbonds
 
 
-def selected_model(root, run):
+def selected_model(root, run=None):
     """(params at the selected epoch, model_inputs functions (site_embeddings, predict_shift)) rebuilt from a run's
     protocol: architecture, input variants and auxiliary heads, as train() built them."""
     import optax
     from .gqt_regularization import decay_mask
     from .trainer import load_checkpoint
+    if run is None:
+        from .production_defaults import DEFAULT_RUN
+        run = DEFAULT_RUN
     out = run_dir(root, run); protocol = read(out / "protocol.json"); selection = read(out / "selection.json"); arch = protocol["architecture"]
     view, drop, orientation, table, dihedrals, hbonds = protocol_inputs(protocol)
     params, _, _ = make_model(protocol["seed"], width=arch["width"], sidechains="sidechains" in protocol, depth=arch.get("depth", 2),
                               loops=arch.get("loops", 1), orientation=orientation, sidechain_view=view, sidechain_drop=drop, table=table, dihedrals=dihedrals,
-                              hbonds=hbonds)
+                              hbonds=hbonds, variant=protocol.get("production_variant", "none"))
     if "auxiliary" in protocol:
         text = protocol["auxiliary"]; mode = "ce" if text.startswith("AuxEngine ce") else "ordinal"
         heads = "burial" if text.startswith("AuxEngine ce burial-only") else "burial-siamese" if text.startswith("AuxEngine ce burial-siamese") else "both"
@@ -1160,7 +1205,7 @@ def selected_model(root, run):
     # the engines' optimizer (JointEngine / DropoutEngine / AuxEngine), only for the checkpoint's tree structure
     state = optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(1.0, weight_decay=1e-4, mask=decay_mask(params))).init(params)
     params, _, _ = load_checkpoint(out / "checkpoints" / f"epoch-{selection['selected_epoch']:03d}", (params, state))
-    return params, model_inputs(arch.get("loops", 1), orientation, view, drop, table, dihedrals, hbonds)
+    return params, model_inputs(arch.get("loops", 1), orientation, view, drop, table, dihedrals, hbonds, protocol.get("production_variant", "none"))
 
 
 def export_model(root, run, destination):
@@ -1169,6 +1214,7 @@ def export_model(root, run, destination):
     selection metrics, checkpoint and params sha256). Load with load_exported."""
     import jax
     root = Path(root); out = run_dir(root, run); protocol = read(out / "protocol.json"); selection = read(out / "selection.json")
+    if protocol.get("production_variant") == "paired-delta": raise NotImplementedError("paired-delta needs paired inference packaging")
     params, _ = selected_model(root, run)
     flat = {"/".join(str(getattr(k, "key", getattr(k, "idx", k))) for k in path): np.asarray(v) for path, v in jax.tree_util.tree_flatten_with_path(params)[0]}
     destination = Path(destination); destination.mkdir(parents=True, exist_ok=True)
@@ -1201,7 +1247,7 @@ def exported_functions(path):
     """model_inputs functions (site_embeddings, predict_shift) for an exported model, rebuilt from its model.json; use
     with load_exported's params on graphs carrying the node tables the model was trained with (model.json "protocol")."""
     model = read(Path(path) / "model.json"); view, drop, orientation, table, dihedrals, hbonds = protocol_inputs(model["protocol"])
-    return model_inputs(model["architecture"].get("loops", 1), orientation, view, drop, table, dihedrals, hbonds)
+    return model_inputs(model["architecture"].get("loops", 1), orientation, view, drop, table, dihedrals, hbonds, model["protocol"].get("production_variant", "none"))
 
 
 def main(argv=None):
@@ -1230,6 +1276,8 @@ def main(argv=None):
     p.add_argument("--ph-sources", choices=("all", "crystal"), default="all", help="pH targets: all deposited sources, or crystallisation pH only")
     p.add_argument("--bind-weight", type=float, default=0.0, help="paired binding head weight (production_bind; needs --aux-weight)")
     p.add_argument("--bind-operand", choices=("product", "difference"), default="product", help="binding head operand: a * b or a - b")
+    p.add_argument("--shift-weight", choices=("none", "invsqrt"), default="none")
+    p.add_argument("--variant", choices=("none", "fourier", "rope", "relations", "shared-projection", "paired-delta", "global-query"), default="none")
     p.add_argument("--ph-probe", action="store_true", help="pH head on stop-gradient site tokens with its own optimizer (trunk unaffected)")
     p = sub.add_parser("count"); p.add_argument("widths", type=int, nargs="+"); p.add_argument("--sidechains", action="store_true")
     p.add_argument("--depth", type=int, default=2); p.add_argument("--loops", type=int, default=1)
@@ -1258,7 +1306,7 @@ def main(argv=None):
                        args.dropout, args.aux_weight, args.aux_loss, args.aux_interface_branch,
                        args.aux_heads, args.width, args.sidechains, args.depth, args.loops, args.orientation, args.sidechain_view, args.sidechain_drop,
                        args.geometry_weight, args.dihedrals, args.chi_weight, args.hbonds, args.epochs, args.ph_weight,
-                       args.ph_sources, args.ph_probe, args.bind_weight, args.bind_operand)
+                       args.ph_sources, args.ph_probe, args.bind_weight, args.bind_operand, args.shift_weight, args.variant)
         print(json.dumps({"selected_epoch": result["selected_epoch"], "selection": result["validation"]["selection"]}))
 
 

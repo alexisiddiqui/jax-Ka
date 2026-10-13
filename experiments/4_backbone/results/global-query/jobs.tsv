@@ -1,0 +1,6 @@
+job_id	run	dependency
+7366994	global_query_check	none
+7366998	global-query-v1-50-s17	afterok:7366994
+7366999	global-query-v1-50-s29	afterok:7366994
+7367000	global-query-v1-50-s43	afterok:7366994
+7367003	global_query_report	afterok:7366998:7366999:7367000
