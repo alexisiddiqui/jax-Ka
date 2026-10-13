@@ -1,0 +1,7 @@
+# Isolated CPU/CUDA repair probe; keep the production training environment separate.
+numpy==2.5.4
+scipy==1.18.1
+prody==2.6.1
+openmm[cuda12]==8.6.1
+nvidia-cuda-nvrtc-cu12==12.6.85
+zstandard==0.25.0
