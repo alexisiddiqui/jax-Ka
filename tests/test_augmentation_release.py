@@ -156,3 +156,45 @@ def test_production_geometry_features_are_finite_for_both_branches():
         assert np.isfinite(edges).all() and np.isfinite(angles).all()
         oriented.append(edges)
     assert not np.array_equal(oriented[0], oriented[1])
+
+
+def test_indexed_repair_templates_roundtrip_and_reject_corruption(tmp_path):
+    from pkatrain.augmentation_repair_benchmark import bundle, read_template
+    coordinates = tmp_path/"coordinates"; pilot = tmp_path/"pilot"
+    expected = {}
+    with ReleaseWriter(coordinates, {"fixture": True}) as writer:
+        for i, dataset in enumerate(("pkpdb", "pinder", "atlas")):
+            source = dict(dataset=dataset, index=i)
+            parent = f"{dataset}/{i}/A"; unit = pilot/"units"/f"{i:03d}"; unit.mkdir(parents=True)
+            for name in ("preparation.json", "prepared.npz", "system.xml"):
+                data = (name+str(i)).encode()*100
+                (unit/name).write_bytes(data); expected[parent, name] = data
+            writer.add(parent, dict(source=source), {"xyz": np.ones((2, 3), np.float32)},
+                       summary=dict(dataset=dataset, status="usable", n=i+1))
+        writer.finish()
+    archive = tmp_path/"inputs.tar"
+    manifest = bundle(pilot, coordinates, archive, per_dataset=1, all_complete=True)
+    for row in manifest["parents"]:
+        files = read_template(archive, row)
+        for name in ("preparation.json", "prepared.npz", "system.xml"):
+            assert files[name] == expected[row["parent"], name]
+        record = decode(files["record.zst"], max_output_size=row["raw_size"])
+        np.testing.assert_array_equal(record["arrays"]["xyz"], np.ones((2, 3)))
+    row = manifest["parents"][0]
+    with archive.open("r+b") as stream:
+        stream.seek(row["files"]["system.xml"]["offset"]); byte = stream.read(1)
+        stream.seek(-1, 1); stream.write(bytes([byte[0]^1]))
+    with pytest.raises(ValueError, match="checksum"):
+        read_template(archive, row)
+
+
+def test_mixed_repair_workers_have_disjoint_affinity_and_leave_writer_capacity():
+    from pkatrain.augmentation_repair_benchmark import worker_layout
+    layout = worker_layout(list(range(72)), 64, 4)
+    assert len({cpu for _, cpu in layout}) == 68
+    assert {cpu for platform, cpu in layout if platform == "CPU"}.isdisjoint(
+        {cpu for platform, cpu in layout if platform == "CUDA"})
+    with pytest.raises(ValueError, match="writer"):
+        worker_layout(list(range(72)), 68, 4)
+    with pytest.raises(ValueError, match="invalid"):
+        worker_layout(list(range(72)), -1, 4)

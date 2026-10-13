@@ -6,61 +6,79 @@ an end-to-end estimate. Inputs are packed; conformers never become loose files.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import multiprocessing as mp
 import os
 from pathlib import Path
 import resource
+import queue
 import subprocess
 import tarfile
 import time
 import traceback
 
 import numpy as np
+import zstandard
 
 from pkabench.runtime import atomic_json, digest, require_compute
 from .augmentation_quality import quality, rmsd, verify_coordinate_record
 from .augmentation_store import AugmentationStore, ReleaseWriter, decode, encode
 
 
-def bundle(pilot, coordinates, output, per_dataset=8):
+def bundle(pilot, coordinates, output, per_dataset=8, all_complete=False):
     """Select size-spread complete parents; include zero-control failures."""
-    rows = []; files = {}
-    with AugmentationStore(coordinates) as store:
+    rows = []
+    with AugmentationStore(coordinates) as store, tarfile.open(output, "x:") as archive:
         for dataset in ("pkpdb", "pinder", "atlas"):
             cohort = sorted((r for r in store.rows if r["summary"]["dataset"] == dataset
                              and r["summary"]["status"] != "preparation_failed"),
                             key=lambda r: (r["summary"]["n"], r["id"]))
             if len(cohort) < per_dataset: raise ValueError("pilot cohort too small")
-            positions = np.linspace(0, len(cohort)-1, per_dataset).round().astype(int)
+            positions = range(len(cohort)) if all_complete else np.linspace(0, len(cohort)-1, per_dataset).round().astype(int)
             for position in positions:
                 row = cohort[position]; record = store.raw(row["id"])
                 index = record["metadata"]["source"]["index"]
                 unit = Path(pilot)/"units"/f"{index:03d}"
                 prefix = f"{index:03d}"
                 frame, raw_size = encode(record["metadata"], record["arrays"])
-                files[prefix+"/record.zst"] = frame
+                files = {"record.zst": frame}
                 for name in ("preparation.json", "prepared.npz", "system.xml"):
-                    files[prefix+"/"+name] = (unit/name).read_bytes()
+                    files[name] = (unit/name).read_bytes()
+                members = {}
+                for name, data in sorted(files.items()):
+                    compressed = data if name == "record.zst" else zstandard.ZstdCompressor(level=3).compress(data)
+                    entry = tarfile.TarInfo(prefix+"/"+name); entry.size = len(compressed)
+                    members[name] = dict(offset=archive.offset+512, bytes=len(compressed),
+                        sha256=hashlib.sha256(compressed).hexdigest(), compressed=name != "record.zst")
+                    archive.addfile(entry, io.BytesIO(compressed))
                 rows.append(dict(parent=row["id"], prefix=prefix, raw_size=raw_size,
-                                 source=record["metadata"]["source"]))
+                                 source=record["metadata"]["source"], files=members))
         manifest = dict(parents=rows, coordinate_manifest_sha256=digest(Path(coordinates)/"manifest.json"),
-                        selection="size-spread complete parents, including failed zero controls",
+                        format="indexed-zstd-templates-v1",
+                        selection="all complete parents" if all_complete else "size-spread complete parents, including failed zero controls",
                         scope="Audited completed templates; source preparation and CG2ALL excluded")
-    files["manifest.json"] = json.dumps(manifest, sort_keys=True).encode()
-    with tarfile.open(output, "x:gz") as archive:
-        for name, data in sorted(files.items()):
-            info = tarfile.TarInfo(name); info.size = len(data)
-            archive.addfile(info, io.BytesIO(data))
+        data = json.dumps(manifest, sort_keys=True).encode()
+        entry = tarfile.TarInfo("manifest.json"); entry.size = len(data)
+        archive.addfile(entry, io.BytesIO(data))
     return manifest
 
 
-def _initialise():
-    # Distinct physical affinity slots; OpenMM/BLAS each use one thread.
-    available = sorted(os.sched_getaffinity(0))
-    slot = (mp.current_process()._identity[0]-1) % len(available)
-    os.sched_setaffinity(0, {available[slot]})
+def read_template(archive_path, row):
+    if "files" in row:
+        result = {}; fd = os.open(archive_path, os.O_RDONLY)
+        try:
+            for name, field in row["files"].items():
+                data = os.pread(fd, field["bytes"], field["offset"])
+                if len(data) != field["bytes"] or hashlib.sha256(data).hexdigest() != field["sha256"]:
+                    raise ValueError("packed template checksum changed")
+                result[name] = zstandard.ZstdDecompressor().decompress(data) if field["compressed"] else data
+        finally: os.close(fd)
+        return result
+    with tarfile.open(archive_path, "r:gz") as archive:
+        return {name: archive.extractfile(row["prefix"]+"/"+name).read()
+                for name in ("record.zst", "preparation.json", "prepared.npz", "system.xml")}
 
 
 def _stereo(system, xyz, info):
@@ -93,13 +111,12 @@ def _unit(task):
     from prody import ANM
     archive_path, row, platform = task; started = time.perf_counter()
     try:
-        with tarfile.open(archive_path, "r:gz") as archive:
-            def read(name): return archive.extractfile(row["prefix"]+"/"+name).read()
-            record = decode(read("record.zst"), max_output_size=row["raw_size"])
-            info = json.loads(read("preparation.json"))
-            with np.load(io.BytesIO(read("prepared.npz"))) as z:
-                xyz = z["xyz"].copy(); bb = z["source_bb"].copy()
-            system = mm.XmlSerializer.deserialize(read("system.xml").decode())
+        inputs = read_template(archive_path, row)
+        record = decode(inputs["record.zst"], max_output_size=row["raw_size"])
+        info = json.loads(inputs["preparation.json"])
+        with np.load(io.BytesIO(inputs["prepared.npz"])) as z:
+            xyz = z["xyz"].copy(); bb = z["source_bb"].copy()
+        system = mm.XmlSerializer.deserialize(inputs["system.xml"].decode())
         meta = record["metadata"]; arrays = record["arrays"]
         heavy = np.flatnonzero(np.asarray(info["is_native"]) & np.asarray(info["is_heavy"]))
         if not np.allclose(xyz[heavy], arrays["native_coordinates"], atol=0.001, rtol=0):
@@ -160,6 +177,7 @@ def _unit(task):
         verify_coordinate_record(dict(metadata=updated, arrays=packed))
         return dict(parent=row["parent"], passed=True, dataset=meta["source"]["dataset"], n=len(bb),
                     anm_s=anm_s, context_s=context_s, wall_s=time.perf_counter()-started,
+                    target_sha256=hashlib.sha256(np.asarray(targets, np.float64).tobytes()).hexdigest(),
                     peak_rss_GiB=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024**2,
                     selected=chosen, zero_valid=metrics[0]["geometry_valid"], metrics=metrics,
                     metadata=updated, arrays=packed)
@@ -167,7 +185,90 @@ def _unit(task):
         return dict(parent=row["parent"], passed=False, error=traceback.format_exc())
 
 
-def run(bundle_path, output, cpu_workers=24):
+def worker_layout(cpus, cpu_workers, gpu_workers):
+    if cpu_workers < 0 or gpu_workers < 0 or not cpu_workers+gpu_workers:
+        raise ValueError("invalid worker counts")
+    if cpu_workers+gpu_workers >= len(cpus):
+        raise ValueError("workers must leave at least one CPU for the writer")
+    return [("CPU", cpu) for cpu in cpus[:cpu_workers]]+[
+        ("CUDA", cpu) for cpu in cpus[cpu_workers:cpu_workers+gpu_workers]]
+
+
+def _worker(archive, inputs, outputs, platform, cpu, number):
+    os.sched_setaffinity(0, {cpu})
+    while True:
+        row = inputs.get()
+        if row is None: return
+        try: result = _unit((archive, row, platform))
+        except Exception: result = dict(parent=row["parent"], passed=False, error=traceback.format_exc())
+        result.update(platform=platform, worker=number, affinity_cpu=cpu)
+        outputs.put(result)
+
+
+def _rss_gib(pids):
+    total = 0
+    for pid in pids:
+        try:
+            for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+                if line.startswith("VmRSS:"): total += int(line.split()[1])*1024
+        except FileNotFoundError: pass
+    return total/1024**3
+
+
+def _phase(bundle_path, rows, output, provenance, label, cpu_workers, gpu_workers, cpus, gpu_id):
+    layout = worker_layout(cpus, cpu_workers, gpu_workers)
+    context = mp.get_context("spawn"); inputs = context.Queue(); outputs = context.Queue(maxsize=len(layout))
+    # Largest first reduces the idle tail for both standalone and mixed phases.
+    for row in sorted(rows, key=lambda r: (r["source"]["n"], r["parent"]), reverse=True): inputs.put(row)
+    for _ in layout: inputs.put(None)
+    processes = [context.Process(target=_worker, args=(str(bundle_path), inputs, outputs, platform, cpu, i))
+                 for i, (platform, cpu) in enumerate(layout)]
+    results = []; peak_rss = 0.; gpu_peak = None; last_gpu_probe = 0.; started = time.perf_counter()
+    try:
+        for process in processes: process.start()
+        os.sched_setaffinity(0, set(cpus[len(layout):]))
+        with ReleaseWriter(output/label, dict(provenance, cpu_workers=cpu_workers, gpu_workers=gpu_workers)) as writer:
+            while len(results) < len(rows):
+                peak_rss = max(peak_rss, _rss_gib([os.getpid()]+[p.pid for p in processes]))
+                now = time.perf_counter()
+                if gpu_workers and now-last_gpu_probe >= 3:
+                    try:
+                        memory = int(subprocess.check_output(["nvidia-smi", "-i", gpu_id,
+                            "--query-gpu=memory.used", "--format=csv,noheader,nounits"], text=True).strip())
+                        gpu_peak = max(gpu_peak or 0, memory)
+                    except (subprocess.SubprocessError, ValueError): pass
+                    last_gpu_probe = now
+                try: result = outputs.get(timeout=.5)
+                except queue.Empty:
+                    if any(p.exitcode not in (None, 0) for p in processes):
+                        raise RuntimeError("repair worker exited unexpectedly")
+                    if all(p.exitcode is not None for p in processes):
+                        raise RuntimeError("workers finished without complete inventory")
+                    continue
+                if result["passed"]:
+                    writer.add(result["parent"], result.pop("metadata"), result.pop("arrays"),
+                        summary=dict(dataset=result["dataset"], selected=len(result["selected"]), platform=result["platform"]))
+                else: writer.add(result["parent"], result, {}, summary=dict(status="error"))
+                results.append(result)
+                print(json.dumps(dict(phase=label, completed=len(results), total=len(rows),
+                    parent=result["parent"], platform=result["platform"], passed=result["passed"])), flush=True)
+            for process in processes:
+                process.join(timeout=30)
+                if process.exitcode != 0: raise RuntimeError("repair worker did not shut down cleanly")
+            writer.finish(expected_ids=[r["parent"] for r in rows])
+    finally:
+        for process in processes:
+            if process.is_alive(): process.terminate()
+            if process.pid is not None: process.join(timeout=5)
+        inputs.close(); outputs.close(); os.sched_setaffinity(0, set(cpus))
+    return dict(label=label, cpu_workers=cpu_workers, gpu_workers=gpu_workers,
+        elapsed_s=time.perf_counter()-started, passed=all(r["passed"] for r in results), results=results,
+        peak_sum_process_rss_GiB=peak_rss, peak_gpu_memory_MiB=gpu_peak,
+        affinity=dict(CPU=[cpu for platform, cpu in layout if platform == "CPU"],
+                      CUDA=[cpu for platform, cpu in layout if platform == "CUDA"]))
+
+
+def run(bundle_path, output, cpu_workers=24, mixed=False, mixed_cpu_workers=(32, 48, 64)):
     import openmm as mm
     import prody
     require_compute(threads=int(os.environ["SLURM_CPUS_PER_TASK"]), gpu_benchmark=True)
@@ -176,30 +277,27 @@ def run(bundle_path, output, cpu_workers=24):
     gpu = subprocess.check_output(["nvidia-smi", "-i", visible[0],
         "--query-gpu=name,uuid,memory.total", "--format=csv,noheader"], text=True).strip().splitlines()
     if len(gpu) != 1: raise RuntimeError("pilot requires exactly one visible GPU")
-    with tarfile.open(bundle_path, "r:gz") as archive: manifest = json.load(archive.extractfile("manifest.json"))
+    with tarfile.open(bundle_path, "r:*") as archive: manifest = json.load(archive.extractfile("manifest.json"))
     rows = manifest["parents"]; output = Path(output); output.mkdir(parents=True, exist_ok=True)
     report = dict(input_sha256=digest(bundle_path), job=os.environ["SLURM_JOB_ID"],
         node=os.environ["SLURMD_NODENAME"], gpu=gpu, openmm=mm.__version__, prody=prody.__version__,
         cpus=int(os.environ["SLURM_CPUS_PER_TASK"]), parents=len(rows),
         git_commit=subprocess.check_output(["git", "-C", str(Path(__file__).resolve().parents[2]), "rev-parse", "HEAD"], text=True).strip(),
         scope="Completed-template generation, including ANM, zero control, 24 candidates, quality, selection and packing. Source preparation/CG2ALL, full random I/O and graphs excluded.", phases=[])
-    for platform, workers in (("CPU", cpu_workers), ("CUDA", 1), ("CUDA", 4)):
-        label = f"{platform.lower()}-{workers}"; results = []; ts = time.perf_counter()
-        provenance = dict(kind="gh200-repair-probe-v1", input_sha256=report["input_sha256"], platform=platform,
-                          workers=workers, openmm=mm.__version__, code_sha256=digest(__file__))
-        with ReleaseWriter(output/label, provenance) as writer:
-            with mp.get_context("spawn").Pool(workers, initializer=_initialise) as pool:
-                for result in pool.imap_unordered(_unit, [(str(bundle_path), r, platform) for r in rows]):
-                    if result["passed"]:
-                        writer.add(result["parent"], result.pop("metadata"), result.pop("arrays"),
-                                   summary=dict(dataset=result["dataset"], selected=len(result["selected"])))
-                    else:
-                        writer.add(result["parent"], result, {}, summary=dict(status="error"))
-                    results.append(result)
-                    print(json.dumps(dict(phase=label, completed=len(results), parent=result["parent"], passed=result["passed"])), flush=True)
-            writer.finish(expected_ids=[r["parent"] for r in rows])
-        phase = dict(label=label, workers=workers, platform=platform, elapsed_s=time.perf_counter()-ts,
-                     passed=all(r["passed"] for r in results), results=results)
+    cpus = sorted(os.sched_getaffinity(0))
+    phases = [(f"cpu-{cpu_workers}", cpu_workers, 0), ("cuda-1", 0, 1), ("cuda-4", 0, 4)]
+    if mixed:
+        phases = [("cuda-4-warmup", 0, 4), ("cuda-4-before", 0, 4), (f"cpu-{cpu_workers}", cpu_workers, 0)]+[
+            (f"mixed-{n}+4", n, 4) for n in mixed_cpu_workers]+[("cuda-4-after", 0, 4)]
+    for _, cpu_count, gpu_count in phases: worker_layout(cpus, cpu_count, gpu_count)
+    report.update(order="largest first, common queue dynamically claimed by CPU and CUDA workers",
+        cache_scope="Pilot working set; CUDA warmup excluded from comparisons; before/after GPU controls detect drift",
+        phase_plan=[dict(label=label, cpu_workers=c, gpu_workers=g) for label, c, g in phases])
+    atomic_json(output/"report.json", report)
+    for label, cpu_count, gpu_count in phases:
+        provenance = dict(kind="gh200-repair-probe-v2", input_sha256=report["input_sha256"],
+                          openmm=mm.__version__, code_sha256=digest(__file__))
+        phase = _phase(bundle_path, rows, output, provenance, label, cpu_count, gpu_count, cpus, visible[0])
         report["phases"].append(phase); atomic_json(output/"report.json", report)
     report["passed"] = all(p["passed"] for p in report["phases"])
     report["summary"] = {}
@@ -212,6 +310,9 @@ def run(bundle_path, output, cpu_workers=24):
             yield_four=sum(len(r["selected"]) == 4 for r in complete),
             mean_unit_s=float(np.mean([r["wall_s"] for r in complete])) if complete else None,
             max_worker_rss_GiB=max((r["peak_rss_GiB"] for r in complete), default=None),
+            peak_sum_process_rss_GiB=phase["peak_sum_process_rss_GiB"],
+            peak_gpu_memory_MiB=phase["peak_gpu_memory_MiB"],
+            platform_counts={p: sum(r["platform"] == p for r in complete) for p in ("CPU", "CUDA")},
             selected_ca_rmsd_A=dict(zip(("p05", "median", "p95"),
                 np.quantile(selected_rmsds, [.05, .5, .95]).tolist())) if selected_rmsds else None)
     atomic_json(output/"report.json", report)
@@ -223,15 +324,21 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__); sub = parser.add_subparsers(dest="command", required=True)
     b = sub.add_parser("bundle"); b.add_argument("pilot", type=Path); b.add_argument("coordinates", type=Path)
     b.add_argument("output", type=Path); b.add_argument("--per-dataset", type=int, default=8)
+    b.add_argument("--all-complete", action="store_true")
     r = sub.add_parser("run"); r.add_argument("bundle", type=Path); r.add_argument("output", type=Path)
     r.add_argument("--cpu-workers", type=int, default=24)
+    r.add_argument("--mixed", action="store_true")
+    r.add_argument("--mixed-cpu-workers", type=int, nargs="+", default=[32, 48, 64])
     args = parser.parse_args()
     if args.command == "bundle":
-        require_compute(); print(json.dumps(bundle(args.pilot, args.coordinates, args.output, args.per_dataset)))
+        require_compute()
+        manifest = bundle(args.pilot, args.coordinates, args.output, args.per_dataset, args.all_complete)
+        print(json.dumps(dict(parents=len(manifest["parents"]), format=manifest["format"],
+            input_bytes=args.output.stat().st_size, input_sha256=digest(args.output))))
     else:
         if not 1 <= args.cpu_workers <= int(os.environ.get("SLURM_CPUS_PER_TASK", "1")):
             raise ValueError("CPU workers exceed allocation")
-        run(args.bundle, args.output, args.cpu_workers)
+        run(args.bundle, args.output, args.cpu_workers, args.mixed, args.mixed_cpu_workers)
 
 
 if __name__ == "__main__": main()

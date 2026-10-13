@@ -105,7 +105,7 @@ alone is insufficient. A failed or missing readiness check blocks full generatio
 Short GH200 repair probe
 -----------------------
 
-``augmentation_repair_benchmark bundle PILOT COORDINATES inputs.tar.gz`` selects
+``augmentation_repair_benchmark bundle PILOT COORDINATES inputs.tar`` selects
 eight size-spread complete parents per dataset, retaining failed zero controls.
 Run bundling in a CPU Slurm allocation. The single archive contains audited
 completed templates, portable OpenMM systems and coordinate mappings.
@@ -127,3 +127,25 @@ preparation and conditional CG2ALL completion are excluded. Its sample covers
 sizes rather than population frequencies, so aggregate throughput is not a
 population-weighted whole-dataset runtime estimate. Cold context startup and
 packing are included; full graph generation remains separate.
+
+Mixed CPU/CUDA repair probe
+---------------------------
+
+Bundle with ``--all-complete`` to include all 493 successfully prepared pilot
+parents. The new input format stores independently compressed members in one
+indexed tar file. Workers read the exact byte ranges and verify member hashes;
+there is no outer gzip scan or extraction of loose structures. Old 24-parent
+gzip bundles remain readable.
+
+``augmentation-mixed-isambard.sbatch`` requests one GPU and 72 CPUs. It uses
+four CUDA processes and compares CPU-only 64-worker repair with concurrent
+32/48/64 CPU workers plus the CUDA workers. All processes claim units from one
+queue, ordered largest first. CPU and CUDA workers have disjoint core affinity,
+with cores reserved for the writer. The report includes per-platform counts,
+sampled aggregate process RSS and GPU memory, and exact target hashes.
+
+A full CUDA warmup precedes the comparisons; GPU-only controls before and after
+the mixed phases check drift. All phases use the same input inventory, controls,
+five modes, candidates, filters and packed output verification. This remains a
+completed-template probe: source completion and hydrogen/system preparation are
+separate costs, and measured repair-worker memory does not cover those stages.
