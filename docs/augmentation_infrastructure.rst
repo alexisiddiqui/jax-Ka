@@ -149,3 +149,33 @@ the mixed phases check drift. All phases use the same input inventory, controls,
 five modes, candidates, filters and packed output verification. This remains a
 completed-template probe: source completion and hydrogen/system preparation are
 separate costs, and measured repair-worker memory does not cover those stages.
+
+Measured mixed probe (Isambard job 7379908)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+All seven phases completed on one GH200 with 72 allocated cores. The two
+GPU-only controls differed by 4.6%. The comparison below uses their mean and
+excludes the initial warmup; every setting processed the same 493 templates.
+
+========================= ========== =====================
+Repair configuration      Elapsed    Peak process RSS sum
+========================= ========== =====================
+4 CUDA processes          728 s      2.5 GiB
+64 CPU workers            320 s      18.5 GiB
+32 CPU + 4 CUDA workers   321 s      11.4 GiB
+48 CPU + 4 CUDA workers   260 s      15.5 GiB
+64 CPU + 4 CUDA workers   222 s      19.4 GiB
+========================= ========== =====================
+
+Settings retained four valid variants for 481--482 parents; failed zero controls
+were excluded. All 16,939 control/variant frames passed independent archive and
+geometry verification. ANM target hashes matched across phases, and selected
+aligned CA RMSD medians were approximately 1.94 Angstrom.
+
+For an eventual pipeline in the same allocation, 48 CPU repair workers and four
+CUDA processes leave 16 cores for source preparation and four for coordination.
+Population weighting gives about 46 hours of ideal completed-template repair.
+The original CPU preparation measurement transfers to about 36 hours at 16
+workers; these stages can overlap. A provisional coordinate-release allowance
+is 3--4 days, excluding queues and full graphs. Source preparation on GH200,
+its concurrent contention, and full-dataset random I/O remain unmeasured.
