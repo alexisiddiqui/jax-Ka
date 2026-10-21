@@ -54,7 +54,7 @@ def _site_bias(block, edge, source_type, neighbor_type):
 
 def attend_sites_indexed(block, tokens, graph, *, key=None, dropout_rate=0.0):
     """One indexed site-to-site attention/FF block with directed pair bias."""
-    from .triton_attention import indexed_attention_one
+    from .attention_backend import indexed_attention_one
     width = block["q"]["w"].shape[0]
     normalized = norm(block["norm1"], tokens)
     query = linear(block["q"], normalized).reshape((-1, HEADS, width // HEADS))

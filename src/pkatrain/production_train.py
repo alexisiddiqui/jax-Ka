@@ -1189,8 +1189,8 @@ def selected_model(root, run=None):
     from .gqt_regularization import decay_mask
     from .trainer import load_checkpoint
     if run is None:
-        from .production_defaults import DEFAULT_RUN
-        run = DEFAULT_RUN
+        from .production_defaults import RELATIONAL_RUN
+        run = RELATIONAL_RUN
     out = run_dir(root, run); protocol = read(out / "protocol.json"); selection = read(out / "selection.json"); arch = protocol["architecture"]
     view, drop, orientation, table, dihedrals, hbonds = protocol_inputs(protocol)
     params, _, _ = make_model(protocol["seed"], width=arch["width"], sidechains="sidechains" in protocol, depth=arch.get("depth", 2),

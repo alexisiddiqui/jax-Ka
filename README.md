@@ -6,18 +6,23 @@ Frozen-structure, soft-sequence titration in JAX, with Biotite topology handling
 
 The compiled readouts accept only `P[N,20]`. Geometry, candidate side chains, residue identities/keys, terminal masks, neighbor graphs and geometric kernels are prepared once outside JIT. An output selection never removes the other residues or chains from the physical environment.
 
-## Default frozen GQT checkpoint
+## Default GQT checkpoint
 
-For representation and auxiliary-head experiments, use the frozen **50% relational
-GQT, seed 17, epoch 18**, via
-`pkatrain.production_defaults.load_frozen_default()`. The pinned export is
-[`models/ogqt-relational-50-frozen`](models/ogqt-relational-50-frozen).
-For differentiable structural inputs, use
-`TorchStructureReadout.from_default(features, state="bound" | "free")`; see
-[the structural endpoint](docs/TORCH_STRUCTURES.md#default-frozen-relational-gqt).
-New experiments start with one seed; the three-seed relational baseline is already
-available. See [the current experiment summary](experiments/4_backbone/08_frozen_relational.md).
-The standalone `ogqt predict` CLI remains a separate inference path.
+The default model is the **all-residue GQT** (50% training fraction, seed 17, epoch 17):
+[`models/ogqt-allres15-siamese-50`](models/ogqt-allres15-siamese-50). Every residue is a pKa
+token (side-chain, N-terminus and C-terminus outputs), with titratable-gate, burial and
+residue contact-edge heads; inputs are backbone and sequence only.
+
+- Python: `pkatrain.production_defaults.load_default()` (all heads) or `load_frozen_default()`
+  (embeddings and query-site shifts).
+- Files: `ogqt predict` uses it when `--model` is omitted; see [standalone inference](docs/INFERENCE.md).
+- Gradients: `TorchStructureReadout.from_default(features, state="bound" | "free")`; see
+  [the structural endpoint](docs/TORCH_STRUCTURES.md#default-all-residue-gqt).
+
+The previous default, the frozen **50% relational GQT** (seed 17, epoch 18,
+[`models/ogqt-relational-50-frozen`](models/ogqt-relational-50-frozen)), remains available as
+`load_relational_frozen()` and `TorchStructureReadout.from_relational`; see
+[its experiment summary](experiments/4_backbone/08_frozen_relational.md).
 
 ## Install
 
@@ -290,7 +295,7 @@ compressed graph release and completed GPU smoke checks.
 
 ## Trained transformer prediction
 
-The repository includes the production oGQT checkpoint at
-`models/ogqt-production-50k`. Use `ogqt predict` (or `python -m pkanet.cli predict`)
-for PDB/mmCIF/BCIF inputs, cached features and mixed-size batches.
+`ogqt predict` (or `python -m pkanet.cli predict`) runs the default all-residue model
+for PDB/mmCIF/BCIF inputs, cached features and mixed-size batches. The earlier
+24-feature production oGQT, `models/ogqt-production-50k`, still runs with `--model`.
 See [standalone inference](docs/INFERENCE.md) for CPU/GPU commands and compilation behaviour.

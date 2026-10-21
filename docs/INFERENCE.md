@@ -1,5 +1,35 @@
 # Standalone oGQT prediction
 
+## Default all-residue model
+
+Without `--model`, `ogqt predict` runs the default all-residue GQT
+(`models/ogqt-allres15-siamese-50`, or `GQT_DEFAULT_MODEL`):
+
+```bash
+ogqt predict complex.pdb --cache prepared/ogqt --output predictions.jsonl
+```
+
+`--state` selects what is predicted: `bound` (the structure as supplied), `free`
+(every chain alone: edges between chains removed at the supplied conformation) or
+`both` (default). Each JSONL record has:
+
+- `sites`: the titratable query sites (as below), with `pka`, `shift` and `gate`
+  per state (suffixed `_bound` / `_free` for `both`) and, for `both`,
+  `binding_shift` = bound − free pKa;
+- `residues` (omit with `--no-residues`): every residue with its `side_chain`,
+  `n_terminus` and `c_terminus` outputs where present (group, pKa and titratable-gate
+  probability per state), `burial` probability per state and, for `both` on
+  multi-chain inputs, `interface_logit`: the free-state contact-edge logit, maximised
+  over residues on other chains.
+
+Arg and bonded-Cys side-chain pKa are reported but were never supervised; read them
+with the gate. `--backend triton` (CUDA) uses the training kernels; `--backend jax`
+uses the plain-JAX equivalent (`pkanet.attention_backend`). The feature cache schema
+is now `ogqt-backbone-inference-v2` (it also stores backbone coordinates and chain
+indices); older v1 caches still serve the legacy model.
+
+## Legacy 24-feature model
+
 The repository ships a trained backbone-only transformer in
 `models/ogqt-production-50k/`: `params.npz` plus `model.json`. This is the
 67,770-parameter production oGQT, including a training-time burial head.

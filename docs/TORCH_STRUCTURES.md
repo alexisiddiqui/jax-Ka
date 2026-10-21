@@ -7,11 +7,12 @@ device. First-order reverse-mode gradients flow back to those inputs and their
 upstream Torch operations. Model parameters captured by the readout are fixed;
 this is not a Torch parameter-training wrapper.
 
-## Default frozen relational GQT
+## Default all-residue GQT
 
-Use the pinned 50% relational checkpoint (seed 17, epoch 18) for new structural
-readouts. This adapter rebuilds the backbone table, orientation/dihedral inputs
-and relation edges from the supplied coordinates:
+`from_default` uses the pinned all-residue model
+([`models/ogqt-allres15-siamese-50`](../models/ogqt-allres15-siamese-50)). Its adapter,
+`pkanet.allres.AllResidueStructureFeatures`, appends the backbone table to the dense
+template graph and masks every edge between chains in the free state:
 
 ```python
 from pkanet.differentiable import StructureFeatures
@@ -20,6 +21,32 @@ from pkanet.torch import TorchStructureReadout
 features, arrays, metadata = StructureFeatures.from_file("protein.pdb")
 bound = TorchStructureReadout.from_default(features, state="bound")
 free = TorchStructureReadout.from_default(features, state="free")
+binding_shift = bound(sequence, backbone, sidechains) - free(sequence, backbone, sidechains)
+burial = TorchStructureReadout.from_default(features, state="free", output="burial")
+```
+
+`output` is `"pka"` (default) or `"shift"` at the template's query sites, `"gate"`
+(sigmoid titratable gate per residue for its side-chain, N-terminus and C-terminus
+outputs, `[N, 3]`) or `"burial"` (`[N]`). Weights are fixed; derivatives reach
+sequence and backbone coordinates, including the attention switch weights:
+indexed attention runs through `pkanet.attention_backend`, whose plain-JAX path
+matches the Triton kernel's arithmetic and is used off CUDA (or with
+`GQT_ATTENTION=jax`). The model is backbone-only, so side-chain derivatives are zero.
+Use `model_path=` or `GQT_DEFAULT_MODEL` for the model directory outside a checkout.
+
+## Frozen relational GQT (previous default)
+
+`TorchStructureReadout.from_relational` keeps the pinned 50% relational checkpoint
+(seed 17, epoch 18). This adapter rebuilds the backbone table, orientation/dihedral inputs
+and relation edges from the supplied coordinates:
+
+```python
+from pkanet.differentiable import StructureFeatures
+from pkanet.torch import TorchStructureReadout
+
+features, arrays, metadata = StructureFeatures.from_file("protein.pdb")
+bound = TorchStructureReadout.from_relational(features, state="bound")
+free = TorchStructureReadout.from_relational(features, state="free")
 # sequence, backbone, sidechains are Torch tensors constructed from arrays.
 binding_shift = bound(sequence, backbone, sidechains) - free(sequence, backbone, sidechains)
 ```

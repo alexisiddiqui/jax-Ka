@@ -1,4 +1,4 @@
-"""Pinned endpoint parity, coordinate derivatives and partner isolation."""
+"""Frozen relational endpoint (the previous default): parity, coordinate derivatives and partner isolation."""
 from pathlib import Path
 import jax
 import jax.numpy as jnp
@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from pkanet.differentiable import StructureFeatures
 from pkanet.relational import RelationalStructureFeatures
-from pkatrain.production_defaults import load_frozen_default
+from pkatrain.production_defaults import load_relational_frozen as load_frozen_default
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -62,7 +62,7 @@ def test_torch_default():
     torch=pytest.importorskip('torch')
     from pkanet.torch import TorchStructureReadout
     base,features,inputs=case()
-    module=TorchStructureReadout.from_default(base,compilation_cache=False,output='shift')
+    module=TorchStructureReadout.from_relational(base,compilation_cache=False,output='shift')
     assert not list(module.parameters())
     x=[torch.tensor(np.asarray(v),requires_grad=True) for v in inputs]
     y=module(*x); y.sum().backward()
@@ -72,4 +72,4 @@ def test_torch_default():
     assert all(torch.isfinite(v.grad).all() for v in x)
     assert x[1].grad.abs().max()>1e-6
     with pytest.raises(ValueError):
-        TorchStructureReadout.from_default(base,state='invalid')
+        TorchStructureReadout.from_relational(base,state='invalid')

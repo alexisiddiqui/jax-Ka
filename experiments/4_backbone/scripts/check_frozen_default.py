@@ -2,7 +2,7 @@ import os,json
 from pathlib import Path
 import jax,jax.numpy as jnp,numpy as np
 from pkatrain.production_train import export_model,selected_model,_with_policy,load_exported
-from pkatrain.production_defaults import DEFAULT_RUN,DEFAULT_EXPORT,load_frozen_default
+from pkatrain.production_defaults import RELATIONAL_RUN as DEFAULT_RUN,RELATIONAL_EXPORT as DEFAULT_EXPORT,load_relational_frozen as load_frozen_default
 from pkatrain.production_loading import PinderSource
 from pkatrain.production_inputs import BackboneTable
 from pkatrain.production_graphs import output,read

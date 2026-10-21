@@ -21,7 +21,10 @@ from .graph import geometry
 
 SITE_EDGE_DIM = 34
 RADIUS = 20.0
-SCHEMA = "ogqt-backbone-inference-v1"
+SCHEMA = "ogqt-backbone-inference-v2"
+# v2 (2026-10-21): the cache also stores backbone (N, 4, 3) and chain_index (N,) for the all-residue model's backbone
+# table, and per-residue keys, types and terminal flags in the metadata. v1 caches still load for the legacy model.
+SCHEMAS = ("ogqt-backbone-inference-v1", SCHEMA)
 
 def frames(backbone):
     ca = backbone[:, 1]; x = backbone[:, 2] - ca; y = backbone[:, 0] - ca
@@ -93,8 +96,11 @@ def featurise(path, *, gap_policy="cap", ignore_nonprotein=False):
         raise ValueError(f"No supported titratable query sites in {path}")
     graph.update(query_residue=queries[:, 0], query_group=queries[:, 1])
     graph.update(build_site_graph(top.backbone, top.chain_index, nodes, queries[:, 0], queries[:, 1]))
+    graph.update(backbone=np.asarray(top.backbone, np.float32), chain_index=np.asarray(top.chain_index, np.int32))
     metadata = dict(schema=SCHEMA, topology=top.metadata, source=str(Path(path).resolve()),
         sites=[dict(**asdict(top.keys[int(r)]), group=GROUPS[int(g)]) for r, g in queries],
+        residues=[asdict(k) for k in top.keys], residue_types=[int(x) for x in top.native_index],
+        terminal_flags=[[bool(x) for x in top.nterm], [bool(x) for x in top.cterm]],
         dimensions=[len(nodes), graph['neighbors'].shape[1], len(queries),
                     len(graph['site_residue']), graph['site_neighbors'].shape[1]])
     return graph, metadata
@@ -134,6 +140,6 @@ def prepare_file(path, directory, **options):
 def load_features(path):
     with np.load(path, allow_pickle=False) as data:
         metadata = json.loads(str(data['metadata']))
-        if metadata['schema'] != SCHEMA:
+        if metadata['schema'] not in SCHEMAS:
             raise ValueError(f"Unsupported feature schema: {metadata['schema']}")
         return {k: data[k] for k in data.files if k != 'metadata'}, metadata

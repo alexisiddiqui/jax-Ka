@@ -6,9 +6,13 @@ Its 189,730 parameters include width-64 relation projections. It does not includ
 an interface probe head. Frozen interface experiments did not update GQT or its
 pKa predictions.
 
+Since 2026-10-21 the repository default is the all-residue GQT
+(`models/ogqt-allres15-siamese-50`); this relational checkpoint loads with
+`load_relational_frozen` (formerly `load_frozen_default`).
+
 ```python
-from pkatrain.production_defaults import load_frozen_default
-embeddings, predict_shift, metadata = load_frozen_default()
+from pkatrain.production_defaults import load_relational_frozen
+embeddings, predict_shift, metadata = load_relational_frozen()
 # graph: production graph with its 14-column backbone table appended to nodes
 site_tokens, query_site = embeddings(graph)
 ```

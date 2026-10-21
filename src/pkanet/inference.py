@@ -62,6 +62,8 @@ def shapes(cap):
 
 def pad_graph(graph, cap):
     expected = shapes(cap)
+    # v2 feature caches also carry backbone / chain_index (all-residue model); the legacy model ignores them
+    graph = {k: v for k, v in graph.items() if k not in ('backbone', 'chain_index')}
     if set(graph) != set(expected): raise ValueError('Unexpected graph fields')
     result = {}
     for name, value in graph.items():

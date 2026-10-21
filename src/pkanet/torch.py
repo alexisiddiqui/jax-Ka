@@ -61,12 +61,36 @@ class TorchStructureReadout(torch.nn.Module):
 
     @classmethod
     def from_default(cls, features, *, state='bound', output='pka', model_path=None, **kwargs):
-        """Pinned frozen relational GQT, with gradients to structural inputs.
+        """Default all-residue GQT (pkanet.allres), with gradients to structural inputs.
+
+        Pass a backbone-only StructureFeatures template. Free-state attention is restricted
+        to each chain; bound-state attention includes partner chains. output: 'pka' / 'shift'
+        at the template's query sites, 'gate' (sigmoid of the side-chain / N / C gate logits,
+        [N,3]) or 'burial' (sigmoid burial per residue, [N]).
+        """
+        from pkatrain.production_defaults import load_default
+        from pkanet.allres import AllResidueStructureFeatures
+        import jax
+        if output not in ('pka', 'shift', 'gate', 'burial'):
+            raise ValueError('output must be pka, shift, gate or burial')
+        adapter = AllResidueStructureFeatures(features, state)
+        model = load_default(model_path, input_gradients=True)
+        key = {'pka': 'query_pka', 'shift': 'query_shift', 'gate': 'gate_logit', 'burial': 'burial_logit'}[output]
+        def predict(graph):
+            value = model.outputs(graph)[key]
+            return jax.nn.sigmoid(value) if output in ('gate', 'burial') else value
+        result = cls(adapter, predict, **kwargs)
+        result.model_metadata = model.info
+        return result
+
+    @classmethod
+    def from_relational(cls, features, *, state='bound', output='pka', model_path=None, **kwargs):
+        """Frozen relational GQT (the previous default), with gradients to structural inputs.
 
         Pass a backbone-only StructureFeatures template. Free-state attention is
         restricted to each chain; bound-state attention includes partner chains.
         """
-        from pkatrain.production_defaults import load_frozen_default
+        from pkatrain.production_defaults import load_relational_frozen as load_frozen_default
         from .relational import RelationalStructureFeatures
         from .model import PKPDB_PK_MOD
         if output not in ('pka', 'shift'):

@@ -63,8 +63,8 @@ def attend(p,x,context,neighbors,edge,mask,switch,*,key=None,dropout_rate=0.,con
 
 
 def attend_indexed(p,x,context,neighbors,edge,mask,switch,*,key=None,dropout_rate=0.):
-    """Attention using the optional float32 Triton indexed-message kernel."""
-    from .triton_attention import indexed_attention_one
+    """Indexed attention: the float32 Triton kernel on CUDA, its plain-JAX reference elsewhere (pkanet.attention_backend)."""
+    from .attention_backend import indexed_attention_one
     width=p['q']['w'].shape[0]
     q=linear(p['q'],norm(p['norm1'],x)).reshape((-1,HEADS,width//HEADS))
     c=norm(p['norm1'],context)
