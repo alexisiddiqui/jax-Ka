@@ -9,7 +9,7 @@ neighbour slots, multiplied by the edge mask and the cosine switch, then
 renormalised with the same epsilon). The reference path is differentiable in
 every input, including the switch weights.
 
-``GQT_ATTENTION`` = ``auto`` (default), ``triton`` or ``jax``; ``set_backend``
+Non-float32 inputs always use the reference. ``GQT_ATTENTION`` = ``auto`` (default), ``triton`` or ``jax``; ``set_backend``
 overrides it in-process (before functions are traced).
 """
 from __future__ import annotations
@@ -64,7 +64,8 @@ def indexed_attention_reference(q, k, v, neighbors, bias, mask, switch):
 
 
 def indexed_attention_one(q, k, v, neighbors, bias, mask, switch):
-    if backend() == "triton":
+    # the Triton kernel is float32 only; other precisions (e.g. float64 gradient checks) use the reference
+    if backend() == "triton" and q.dtype == k.dtype == v.dtype == jnp.float32:
         from .triton_attention import indexed_attention_one as triton_one
         return triton_one(q, k, v, neighbors, bias, mask, switch)
     return indexed_attention_reference(q, k, v, neighbors, bias, mask, switch)
