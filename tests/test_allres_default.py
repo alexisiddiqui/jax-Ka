@@ -12,7 +12,7 @@ from pkanet.allres import AllResidueStructureFeatures, graph_from_features, stat
 from pkanet.attention_backend import indexed_attention_reference
 from pkanet.differentiable import StructureFeatures
 from pkanet.features import featurise
-from pkatrain.production_defaults import DEFAULT_RUN, load_default
+from pkatrain.production_defaults import DECOY_EXPORT, DECOY_RUN, DEFAULT_RUN, load_default
 
 ROOT = Path(__file__).resolve().parents[1]
 PDB = ROOT / 'tests/data/two_chains.pdb'
@@ -111,3 +111,28 @@ def test_cli_default(tmp_path):
     main(['predict', str(PDB), '--cache', str(tmp_path / 'cache'), '--output', str(out), '--state', 'bound', '--no-residues',
           '--no-compilation-cache'])
     row = json.loads(out.read_text().splitlines()[0]); assert 'residues' not in row and 'pka' in row['sites'][0]
+
+
+def test_decoy_export_selectable(model, tmp_path):
+    """The decoy-ranking export loads by name (same tree, extra protocol keys), differs from the default, and the CLI
+    takes it with --model; an unpinned export is refused."""
+    import shutil
+    from pkanet.cli import main
+    decoy = load_default(DECOY_EXPORT)
+    assert decoy.info['run'] == DECOY_RUN and decoy.info['parameter_count'] == 180000
+    assert {'decoy_retype', 'decoy_batch'} <= set(decoy.info['protocol'])
+    assert jax.tree.structure(decoy.params) == jax.tree.structure(model.params)
+    graph, _ = featurise(PDB); g = {k: jnp.asarray(v) for k, v in graph_from_features(graph).items()}
+    a, b = model.outputs(g)['query_pka'], decoy.outputs(g)['query_pka']
+    assert np.isfinite(b).all() and np.max(np.abs(np.asarray(a - b))) > 1e-3
+    out = tmp_path / 'out.jsonl'
+    main(['predict', str(PDB), '--model', DECOY_EXPORT, '--cache', str(tmp_path / 'cache'), '--output', str(out),
+          '--state', 'bound', '--no-residues', '--no-compilation-cache'])
+    row = json.loads(out.read_text().splitlines()[0])
+    assert row['model'] == DECOY_RUN
+    # the CLI runs on CPU; on a GPU host the direct forward uses GPU matmul precision (~3e-4 apart)
+    np.testing.assert_allclose([s['pka'] for s in row['sites']], b, atol=2e-3)
+    copy = tmp_path / 'unpinned'; shutil.copytree(decoy.path, copy)
+    info = json.loads((copy / 'model.json').read_text()); info['run'] = 'other'; (copy / 'model.json').write_text(json.dumps(info))
+    with pytest.raises(ValueError):
+        load_default(copy)

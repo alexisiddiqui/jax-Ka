@@ -26,8 +26,9 @@ def main(argv=None):
         p.add_argument('--ignore-nonprotein', action='store_true')
         p.add_argument('--output', type=Path, required=True)
         if name == 'predict':
-            p.add_argument('--model', type=Path, help='export containing model.json and params.npz (default: the pinned '
-                           'all-residue model, models/ogqt-allres15-siamese-50, or GQT_DEFAULT_MODEL)')
+            p.add_argument('--model', help='export directory containing model.json and params.npz, or the name of one '
+                           'under models/, e.g. ogqt-allres15-siamese-decoy-50 (default: the pinned all-residue model, '
+                           'models/ogqt-allres15-siamese-50, or GQT_DEFAULT_MODEL)')
             p.add_argument('--state', choices=('bound','free','both'), default='both',
                            help='all-residue models: bound = the structure as given; free = every chain alone (edges '
                                 'between chains removed); both adds the binding shift and free-state interface scores')
@@ -65,9 +66,8 @@ def main(argv=None):
             records=[dict(input=str(p), cache=str(cache.resolve()), metadata=meta)
                      for p,(cache,meta) in zip(paths,records)]))
         return
-    if args.model is None:
-        from pkatrain.production_defaults import default_model_path
-        args.model = default_model_path()
+    from pkatrain.production_defaults import default_model_path, resolve_model
+    args.model = default_model_path() if args.model is None else resolve_model(args.model)
     from .allres import is_allres_export
     if is_allres_export(args.model):
         return _predict_allres(args, paths, records, prep_seconds, began)

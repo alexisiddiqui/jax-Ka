@@ -9,6 +9,11 @@ Without `--model`, `ogqt predict` runs the default all-residue GQT
 ogqt predict complex.pdb --cache prepared/ogqt --output predictions.jsonl
 ```
 
+An alternative all-residue export trained with decoy-partner ranking on the contact-edge
+head, `models/ogqt-allres15-siamese-decoy-50` (see its README), runs with
+`--model ogqt-allres15-siamese-decoy-50` (a name under `models/` or a directory) or
+`GQT_DEFAULT_MODEL=ogqt-allres15-siamese-decoy-50`; the default is unchanged.
+
 `--state` selects what is predicted: `bound` (the structure as supplied), `free`
 (every chain alone: edges between chains removed at the supplied conformation) or
 `both` (default). Each JSONL record has:
