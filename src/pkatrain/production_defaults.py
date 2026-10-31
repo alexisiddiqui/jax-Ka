@@ -4,9 +4,11 @@ Default (2026-10-21): the all-residue model ``ogqt-allres15-siamese-50`` (pkanet
 (side chain, N-terminus, C-terminus outputs), titratable gate, burial and residue contact-edge heads; backbone and
 sequence only; 50% training fraction, seed 17, selected epoch 17.
 
-Alternative (2026-10-29): ``ogqt-allres15-siamese-decoy-50`` (DECOY_*), the same recipe plus two decoy-partner margin
-terms on the residue edge head. It is not the default; select it with ``load_default("ogqt-allres15-siamese-decoy-50")``,
-``GQT_DEFAULT_MODEL`` or ``ogqt predict --model``. ``load_default`` accepts either pinned all-residue export.
+Alternative (2026-10-31): ``ogqt-allres15-within-hmask-50`` (HMASK_*), the same recipe plus a within-complex listwise
+partner-ranking term on the residue edge head and PeSTo hotspot-mask augmentation during training (the exported model
+runs unmasked). It is not the default; select it with ``load_default("ogqt-allres15-within-hmask-50")``,
+``GQT_DEFAULT_MODEL`` or ``ogqt predict --model``. ``load_default`` accepts either pinned all-residue export. It
+replaces the decoy-ranking export (2026-10-29), withdrawn because its gain was a family-similarity shortcut.
 
 The previous default, the frozen relational backbone ``ogqt-relational-50-frozen`` (2026-10-13), stays available
 through ``load_relational_frozen`` / ``RELATIONAL_*`` for the frozen-representation experiments built on it.
@@ -23,14 +25,14 @@ DEFAULT_EPOCH = 17
 DEFAULT_CHECKPOINT_SHA256 = "395beb5c43382987e5ca69ecb12cc78eb3577a83c2f55145489211f444cedbfd"
 DEFAULT_EXPORT = "ogqt-allres15-siamese-50"
 
-DECOY_RUN = "decoy-v1-50-both-w064-s17"
-DECOY_EPOCH = 17
-DECOY_CHECKPOINT_SHA256 = "b94b5b477011d495b6583e30244b132a509071c86c9db3ac9230c9a3f9b5bdb2"
-DECOY_EXPORT = "ogqt-allres15-siamese-decoy-50"
+HMASK_RUN = "hmask-v2-50-within03-asym50-w064-s17"
+HMASK_EPOCH = 18
+HMASK_CHECKPOINT_SHA256 = "9fe46802253020c1691fc0e88d1725e5507d6855424753a1df7718009bfde1da"
+HMASK_EXPORT = "ogqt-allres15-within-hmask-50"
 
 # pinned all-residue exports load_default accepts: export name -> (run, selected epoch, checkpoint sha256)
 ALLRES_EXPORTS = {DEFAULT_EXPORT: (DEFAULT_RUN, DEFAULT_EPOCH, DEFAULT_CHECKPOINT_SHA256),
-                  DECOY_EXPORT: (DECOY_RUN, DECOY_EPOCH, DECOY_CHECKPOINT_SHA256)}
+                  HMASK_EXPORT: (HMASK_RUN, HMASK_EPOCH, HMASK_CHECKPOINT_SHA256)}
 
 RELATIONAL_RUN = "control-v2-50-relations-s17"
 RELATIONAL_EPOCH = 18
@@ -94,7 +96,7 @@ class DefaultModel:
 
 def load_default(path=None, *, input_gradients=False):
     """The default all-residue model with all heads (DefaultModel); path may name another pinned all-residue export
-    (ALLRES_EXPORTS, e.g. "ogqt-allres15-siamese-decoy-50") or give its directory."""
+    (ALLRES_EXPORTS, e.g. "ogqt-allres15-within-hmask-50") or give its directory."""
     return DefaultModel(path, input_gradients=input_gradients)
 
 

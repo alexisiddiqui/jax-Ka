@@ -27,7 +27,7 @@ def main(argv=None):
         p.add_argument('--output', type=Path, required=True)
         if name == 'predict':
             p.add_argument('--model', help='export directory containing model.json and params.npz, or the name of one '
-                           'under models/, e.g. ogqt-allres15-siamese-decoy-50 (default: the pinned all-residue model, '
+                           'under models/, e.g. ogqt-allres15-within-hmask-50 (default: the pinned all-residue model, '
                            'models/ogqt-allres15-siamese-50, or GQT_DEFAULT_MODEL)')
             p.add_argument('--state', choices=('bound','free','both'), default='both',
                            help='all-residue models: bound = the structure as given; free = every chain alone (edges '

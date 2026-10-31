@@ -5,7 +5,7 @@
     "orientation_edges": 13,
     "width": 64
   },
-  "checkpoint_sha256": "b94b5b477011d495b6583e30244b132a509071c86c9db3ac9230c9a3f9b5bdb2",
+  "checkpoint_sha256": "9fe46802253020c1691fc0e88d1725e5507d6855424753a1df7718009bfde1da",
   "code": {
     "pkabench/experimental_ph.py": "32a1f4a0bdd5c7d21e499ebf9bd49046cf5bd65763a16d9afcb0fae4a76ff4f5",
     "pkanet/model.py": "1183538950c01e7beacbe9a7574203583c3838453fa159f82ff84cdd43351ab7",
@@ -17,17 +17,17 @@
     "pkatrain/production_depth.py": "adc692ed8560aa3874d9535ad2652e27453e9c1ef551263cf5d658a5c246aed6",
     "pkatrain/production_graphs.py": "1e9d774d767e02d5effc1c4330e9adb82451c65ae5c4df67b52675cc92a2b70c",
     "pkatrain/production_inputs.py": "650ae29bf2d7402951586c43fe8c027db606296979247f9f30da5330486ed860",
-    "pkatrain/production_loading.py": "03e1be80b6bc0eae5a4a7ccf100df9aaecf4a9ecba938081120e41f4f58a2115",
+    "pkatrain/production_loading.py": "ef37fdef5b7f358125470de07c38329e7b26f70f5b540c4533fe4410888be6a7",
     "pkatrain/production_ph.py": "aebbb7a1e42963f5f74e0990cd4f61f889fb5174b7683b9ae70168a86b219364",
     "pkatrain/production_position.py": "bd0ba86e09981fe152b3b51b54fcfa37e4c64f4ff7c8219539e509ecfe841286",
     "pkatrain/production_shift_weight.py": "35ba7f71379089d57a46eba68650e4285889e1830ae45b80813727f35463bd50",
-    "pkatrain/production_train.py": "b7a50ae136a3c3ecd79c3d783f42ff2109f9cfa016b50fcb4ac8601dc33a6a7f",
+    "pkatrain/production_train.py": "969f3d9d4fa5fdca86b6d6ef71f3d2007be40f9c910736aa7e7e5d6f391ec0d6",
     "pkatrain/site_graph_data.py": "eb5e657f74eafbe49c86c999ff64eeb93051ec6783e0eefe4739a83d6702d5f4"
   },
   "epochs_run": 20,
   "model": "oGQT (pkanet.ogqt), shift head predicts pKa - PKPDB_PK_MOD[group]",
   "parameter_count": 180000,
-  "params_sha256": "4eb98ac36f6cc2dd0d6513207fae86fc560a64f7ab5e94c565793348bb15e8bd",
+  "params_sha256": "fd46dd6159ddcec450213c5d2d83be8bb73dc4ff611d1e65c13d19c3ef6a17ce",
   "protocol": {
     "architecture": {
       "dihedral_features": 6,
@@ -45,44 +45,6 @@
       "pkpdb_train": 27778,
       "pkpdb_val": 800
     },
-    "decoy_batch": {
-      "definition": "free-branch embeddings: contact pair (a_i, b_i) vs (a_i, b'_j), b'_j from complex j = i + 1..K (mod batch)'s own contact pairs; softplus(margin - (logit_true - logit_decoy)); homologous complexes may share a batch (production_residue)",
-      "margin": 1.0,
-      "partners": 4,
-      "weight": 0.1
-    },
-    "decoy_retype": {
-      "composition": {
-        "A": 5.5,
-        "C": 1.0,
-        "D": 5.0,
-        "E": 6.0,
-        "F": 4.5,
-        "G": 6.0,
-        "H": 2.5,
-        "I": 5.5,
-        "K": 6.0,
-        "L": 8.5,
-        "M": 2.5,
-        "N": 4.5,
-        "P": 4.5,
-        "Q": 4.0,
-        "R": 7.0,
-        "S": 6.0,
-        "T": 5.5,
-        "V": 6.0,
-        "W": 2.0,
-        "Y": 6.0
-      },
-      "definition": "third pass on the free branch with one chain's interface residues re-typed (D/E <-> K/R, others to an interface-composition type outside their chemistry class); softplus(margin - (logit_true - logit_decoy)) over sampled contacts with target > 0.5 (production_residue)",
-      "fraction": 0.5,
-      "interface_A": 6.0,
-      "margin": 1.0,
-      "minimum": 3,
-      "never_retyped": "GPC",
-      "slots": 32,
-      "weight": 0.1
-    },
     "dihedrals": "production_inputs.backbone_dihedrals: sin/cos phi, psi, omega from backbone-v1 appended to the node features (6); embedding +6 rows",
     "disulfide_tables": {
       "benchmark-val": "disulfide(4f34fb3ca2ef235ce5a360766fa4bec44961626876236abe8644b8853c3cd040+039e60166583b8e9f9bc472e6859b0d6c192fd27c7718f5dcc7db94eb8b42486)",
@@ -92,6 +54,24 @@
     "drop_bonded_cys": "training pKa loss excludes Cys queries whose SG is within 2.3 A of another SG (sidechains-v1, bound structure; PINDER AB and free together); validation unchanged (production_gate)",
     "dropout": "oGQT residual dropout 0.1 on attention and feed-forward outputs during training (DropoutEngine); one key per complex shared by its AB and free branches",
     "fraction": 0.5,
+    "hotspot_mask": {
+      "augmentation": "hotspot-mask-v2: per visit (own stream [MASK2_SALT, crc32(id), visit]) masked with probability prob, else identity mask (every residue kept); sides one: the v1 rule on one chain drawn uniformly, the other chain fully unmasked; mask_side -1 / 0 / 1 / 2 (history pinder_mask_visit_fraction, pinder_mask_side_fraction = chain-1 share of one-sided visits)",
+      "buried_masked": true,
+      "definition": "third pass on the free branch with the residue-type one-hot zeroed on every residue outside the unmasked set: per chain the top round(keep x surface) surface residues (free RSA >= 0.1) by the oracle (NaN lowest, ties by a random draw; random: uniform), plus round(soft x rest) of the remaining surface residues at random; buried residues always masked (no interface chemistry). Edge BCE free part + free -> bound distillation and the within listwise loss on the masked pass; bound BCE, Siamese burial, gate, pKa unchanged (production_residue.hotspot_keep / mask_nodes; replaces the re-typed pass)",
+      "fallback": "complex without a store record -> random oracle for that visit (counted: history pinder_mask_fallbacks)",
+      "keep": 0.5,
+      "oracle": "pesto",
+      "oracle_field": "pesto",
+      "prob": 0.5,
+      "salt": 16381,
+      "salt2": 32749,
+      "sides": "one",
+      "soft": 0.0,
+      "store": "/scratch/u6xq/hussain.u6xq/_runtime/jax-Ka/pkabench/training/gqt-production-v2/pinder/store-hotspot-v1",
+      "store_records": 14748,
+      "store_verification_sha256": "314a451bcb88561587ef495bda074d4f5e1c1166d364b09877c47ab01ecbdc46",
+      "surface_rsa_min": 0.1
+    },
     "initialization": "scratch (pkanet.ogqt.initialize, PRNGKey(17))",
     "manifests": {
       "benchmark-val": "c28fb3fb1b26579623124ab22eb87d94684d2dd4fcd646f73d6e3625a1e460ab",
@@ -122,7 +102,7 @@
       "weight": 0.1
     },
     "residue_table_verification_sha256": "8d016e2bc5c2006beaabdac4e2dd48db17ca7efd0e2f6ca7471670a924c338db",
-    "run": "decoy-v1-50-both-w064-s17",
+    "run": "hmask-v2-50-within03-asym50-w064-s17",
     "sampling": "full PINDER fraction per epoch; one pKPDB batch per PINDER batch from a continuing shuffled stream",
     "schedule": "gqt_crop_radius.learning_rate x 1.4142 (1e-3 hold to epoch 10, cosine to 1e-5 by epoch 20); patience 8, min delta 0.001",
     "seed": 17,
@@ -139,236 +119,245 @@
       "pKPDB pool-v4 validation (pKPDB labels, train_mask)",
       "benchmark-val 142 (PypKa)"
     ],
-    "version": "gqt-production-joint-v1"
+    "version": "gqt-production-joint-v1",
+    "within_listwise": {
+      "anchors": 64,
+      "candidates": 32,
+      "contact_A": 10.0,
+      "definition": "free branch; anchors = interface residues (surface, a cross-chain partner <= 10 A) of both chains; candidates = interface residues of the other chain, all contacts (soft target min(1, exp(-(d - 4) / 3))) + non-contacts (target 0); softmax cross-entropy vs normalised target, mean over valid anchors per complex, then over complexes (production_residue.within_sample / within_loss)",
+      "reserve": 8,
+      "surface_rsa_min": 0.1,
+      "weight": 0.3
+    }
   },
-  "run": "decoy-v1-50-both-w064-s17",
-  "selected_epoch": 17,
+  "run": "hmask-v2-50-within03-asym50-w064-s17",
+  "selected_epoch": 18,
   "validation": {
     "auxiliary": {
       "pinder_burial": {
         "boundaries": [
           {
-            "auroc": 0.9835286420238792,
+            "auroc": 0.9836886249325228,
             "boundary": 0.1,
             "positive_fraction": 0.13218083327760316,
-            "recall_at_fpr_0.1": 0.9668606121932709
+            "recall_at_fpr_0.1": 0.9719200607133822
           },
           {
-            "auroc": 0.974015182797921,
+            "auroc": 0.9758945062404998,
             "boundary": 0.25,
             "positive_fraction": 0.2878017789072427,
-            "recall_at_fpr_0.1": 0.9215754618333915
+            "recall_at_fpr_0.1": 0.9273846868827699
           },
           {
-            "auroc": 0.9599843352090912,
+            "auroc": 0.9622715710629628,
             "boundary": 0.5,
             "positive_fraction": 0.6751153614659265,
-            "recall_at_fpr_0.1": 0.8809311540366518
+            "recall_at_fpr_0.1": 0.8860326894502228
           }
         ],
-        "mean_cross_entropy": 0.559446578304092,
+        "mean_cross_entropy": 0.558797253712836,
         "sites": 29906,
-        "spearman_vs_target": 0.9365882455090634
+        "spearman_vs_target": 0.9390257393142739
       },
       "pkpdb_burial": {
         "boundaries": [
           {
-            "auroc": 0.9803745658800224,
+            "auroc": 0.9803511325592383,
             "boundary": 0.1,
             "positive_fraction": 0.13158866426659283,
-            "recall_at_fpr_0.1": 0.9579095054366888
+            "recall_at_fpr_0.1": 0.9589617678007717
           },
           {
-            "auroc": 0.9727246965860536,
+            "auroc": 0.973842108883029,
             "boundary": 0.25,
             "positive_fraction": 0.30670174466906674,
-            "recall_at_fpr_0.1": 0.9187358916478555
+            "recall_at_fpr_0.1": 0.9289691497366441
           },
           {
-            "auroc": 0.9640664381690741,
+            "auroc": 0.9643607348071013,
             "boundary": 0.5,
             "positive_fraction": 0.7032216375888489,
-            "recall_at_fpr_0.1": 0.8873063796271987
+            "recall_at_fpr_0.1": 0.8915069572066159
           }
         ],
-        "mean_cross_entropy": 0.5609461476407959,
+        "mean_cross_entropy": 0.5605171664544578,
         "sites": 21666,
-        "spearman_vs_target": 0.9384524892630314
+        "spearman_vs_target": 0.9391945128860423
       }
     },
     "benchmark": {
       "bins": [
         {
           "bin": "<0.5",
-          "mae": 0.2860709519734229,
+          "mae": 0.2931726687391361,
           "sites": 3557
         },
         {
           "bin": "0.5-1",
-          "mae": 0.42204098796455763,
+          "mae": 0.41569134334188346,
           "sites": 1766
         },
         {
           "bin": "1-2",
-          "mae": 0.6968673601984822,
+          "mae": 0.6906908971652889,
           "sites": 1481
         },
         {
           "bin": ">=2",
-          "mae": 1.2174339556690874,
+          "mae": 1.2440987528255314,
           "sites": 1182
         }
       ],
-      "equal_bin_mae": 0.6556033139513875,
-      "group_macro_mse": 0.6033586048742328,
+      "equal_bin_mae": 0.6609134155179599,
+      "group_macro_mse": 0.6093104991850616,
       "overall": {
         "complexes": 142,
         "error_cancellation": null,
         "error_cancellation_ci95": null,
         "error_cancellation_groups": 0,
         "groups": 76,
-        "mae": 0.5058146868073516,
+        "mae": 0.5069481444638534,
         "mae_ci95": [
-          0.5227206639242469,
-          0.5227206639242469
+          0.5208149134902176,
+          0.5208149134902176
         ],
         "mae_groups": 76,
-        "rmse": 0.732035494001206,
+        "rmse": 0.7365349241379022,
         "rmse_ci95": [
-          0.77465074607746,
-          0.77465074607746
+          0.775624136704848,
+          0.775624136704848
         ],
         "rmse_groups": 76,
-        "sign_accuracy": 0.9506224308379835,
+        "sign_accuracy": 0.9508760632592469,
         "sign_accuracy_ci95": [
-          0.943386689372259,
-          0.943386689372259
+          0.9419755714152126,
+          0.9419755714152126
         ],
         "sign_accuracy_groups": 76,
         "sites": 7986,
-        "skill": 0.6632922157117046,
+        "skill": 0.6587904053636648,
         "skill_ci95": [
-          0.6387503135254861,
-          0.6387503135254861
+          0.6340310923150864,
+          0.6340310923150864
         ],
         "skill_groups": 76,
-        "spearman": 0.798026602291242,
+        "spearman": 0.8066967663013828,
         "spearman_ci95": [
-          0.7932334156321718,
-          0.7932334156321718
+          0.8040196671785795,
+          0.8040196671785795
         ],
         "spearman_groups": 76
       },
-      "site_mae": 0.5410685443037511,
-      "site_mse": 0.6803519318655541
+      "site_mae": 0.5448748563340966,
+      "site_mse": 0.6973694550087435
     },
     "pinder": {
       "binding_shift_bins": [
         {
           "complexes": 730,
           "lower": 0,
-          "mae": 0.08942129541269765,
-          "magnitude_bias": 0.057232920342125494,
-          "rmse": 0.1801577029515614,
-          "signed_bias": -0.00270327082485706,
+          "mae": 0.08898141779731156,
+          "magnitude_bias": 0.0559844318727758,
+          "rmse": 0.1778077639297279,
+          "signed_bias": -0.0026410928708781203,
           "sites": 3758,
           "upper": 0.1
         },
         {
           "complexes": 478,
           "lower": 0.1,
-          "mae": 0.17449094638920468,
-          "magnitude_bias": 0.03913608096093332,
-          "rmse": 0.26928222645571936,
-          "signed_bias": -0.005153059224415281,
+          "mae": 0.178642395801587,
+          "magnitude_bias": 0.044370815303907955,
+          "rmse": 0.28274839864921225,
+          "signed_bias": -0.005181001473527416,
           "sites": 1518,
           "upper": 0.25
         },
         {
           "complexes": 361,
           "lower": 0.25,
-          "mae": 0.27068950694340926,
-          "magnitude_bias": 0.011997716435523638,
-          "rmse": 0.3854762905266862,
-          "signed_bias": 0.011824657571290982,
+          "mae": 0.2703452348523229,
+          "magnitude_bias": 0.004661797207011502,
+          "rmse": 0.38231265448507956,
+          "signed_bias": 0.0020236976739026902,
           "sites": 962,
           "upper": 0.5
         },
         {
           "complexes": 293,
           "lower": 0.5,
-          "mae": 0.40655451584982394,
-          "magnitude_bias": -0.09548525966253857,
-          "rmse": 0.5610602266888775,
-          "signed_bias": 0.04249849515473283,
+          "mae": 0.40542950178152765,
+          "magnitude_bias": -0.0983005873708917,
+          "rmse": 0.5359892245418411,
+          "signed_bias": 0.022691277889597336,
           "sites": 745,
           "upper": 1.0
         },
         {
           "complexes": 216,
           "lower": 1.0,
-          "mae": 0.6486432297580897,
-          "magnitude_bias": -0.44452406401966604,
-          "rmse": 0.7829571545321861,
-          "signed_bias": 0.030214034551969363,
+          "mae": 0.6396553980135817,
+          "magnitude_bias": -0.4006349610738784,
+          "rmse": 0.7750676879465939,
+          "signed_bias": 0.036854118686677026,
           "sites": 477,
           "upper": 2.0
         },
         {
           "complexes": 116,
           "lower": 2.0,
-          "mae": 1.1657624449490047,
-          "magnitude_bias": -0.9699364821176704,
-          "rmse": 1.3443791066916135,
-          "signed_bias": -0.3069313913765477,
+          "mae": 1.1622752609594567,
+          "magnitude_bias": -0.9411422638449727,
+          "rmse": 1.3599155529125244,
+          "signed_bias": -0.2840136339933407,
           "sites": 205,
           "upper": 4.0
         },
         {
           "complexes": 23,
           "lower": 4.0,
-          "mae": 2.2287982639513517,
-          "magnitude_bias": -2.1515845750507556,
-          "rmse": 2.5042398332441658,
-          "signed_bias": -0.8958191620676141,
+          "mae": 2.1743867209083154,
+          "magnitude_bias": -2.0561261867222034,
+          "rmse": 2.466020890005712,
+          "signed_bias": -0.6015722939842626,
           "sites": 38,
           "upper": null
         }
       ],
       "distance_bins": {
         "4-6": {
-          "paired_mae": 0.20911237585254694,
+          "paired_mae": 0.2087392780143031,
           "sites": 1411
         },
         "6-10": {
-          "paired_mae": 0.10671237234130868,
+          "paired_mae": 0.10565136423920002,
           "sites": 3986
         },
         "<=4": {
-          "paired_mae": 0.46580361641647106,
+          "paired_mae": 0.46632282255669205,
           "sites": 2313
         },
         ">10": {
-          "paired_mae": 0.012532949645007101,
+          "paired_mae": 0.010723366698645513,
           "sites": 22196
         }
       },
-      "interface_paired_mae": 0.23332303439803914,
-      "interface_paired_mse": 0.19612303400362863,
+      "interface_paired_mae": 0.23285696480050103,
+      "interface_paired_mse": 0.19363405388537785,
       "interface_sites": 7703,
-      "paired_mae": 0.06941744778881413,
-      "paired_mse": 0.051916702454992594,
+      "paired_mae": 0.06795552715015038,
+      "paired_mse": 0.051213720145355676,
       "sites": 29906,
-      "state_mae": 0.39976606925461994,
-      "state_mse": 0.39087343054571305
+      "state_mae": 0.3986176852022825,
+      "state_mse": 0.3925208486471713
     },
     "pkpdb": {
-      "site_mae": 0.48220035116806403,
-      "site_mse": 0.5470794404014555,
+      "site_mae": 0.4823372841785031,
+      "site_mse": 0.5450875815817361,
       "sites": 21666,
-      "structure_macro_mae": 0.3852218532734522,
+      "structure_macro_mae": 0.3860729848070534,
       "structures": 800
     },
-    "selection": 0.6330891036526591
+    "selection": 0.6314746500027836
   }
 }
