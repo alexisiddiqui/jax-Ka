@@ -14,6 +14,12 @@ augmentation on the contact-edge head, `models/ogqt-allres15-within-hmask-50` (s
 runs with `--model ogqt-allres15-within-hmask-50` (a name under `models/` or a directory) or
 `GQT_DEFAULT_MODEL=ogqt-allres15-within-hmask-50`; the default is unchanged.
 
+The dRSA-weighted version of that recipe is available as `ogqt-allres15-within-drsa-50` (seed 17),
+`ogqt-allres15-within-drsa-50-s29` and `ogqt-allres15-within-drsa-50-s43`. Select one with `--model`,
+`GQT_DEFAULT_MODEL`, or `load_default(name)`. They favour interface identification and swapped-partner ranking;
+they do not consistently improve pKa binding shifts. Inference uses backbone and sequence, without RSA or PeSTo
+inputs. See [the dRSA model card](../models/ogqt-allres15-within-drsa-50/README.md) for training and validation.
+
 `--state` selects what is predicted: `bound` (the structure as supplied), `free`
 (every chain alone: edges between chains removed at the supplied conformation) or
 `both` (default). Each JSONL record has:

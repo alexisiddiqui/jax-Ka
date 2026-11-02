@@ -12,7 +12,7 @@ from pkanet.allres import AllResidueStructureFeatures, graph_from_features, stat
 from pkanet.attention_backend import indexed_attention_reference
 from pkanet.differentiable import StructureFeatures
 from pkanet.features import featurise
-from pkatrain.production_defaults import DEFAULT_RUN, HMASK_EXPORT, HMASK_RUN, load_default
+from pkatrain.production_defaults import DEFAULT_RUN, DRSA_EXPORTS, HMASK_EXPORT, HMASK_RUN, load_default
 
 ROOT = Path(__file__).resolve().parents[1]
 PDB = ROOT / 'tests/data/two_chains.pdb'
@@ -113,23 +113,26 @@ def test_cli_default(tmp_path):
     row = json.loads(out.read_text().splitlines()[0]); assert 'residues' not in row and 'pka' in row['sites'][0]
 
 
-def test_hmask_export_selectable(model, tmp_path):
-    """The within-ranking hotspot-mask export loads by name (same tree, extra protocol keys), differs from the default,
+@pytest.mark.parametrize('export,run', [(HMASK_EXPORT, HMASK_RUN)] + [(name, pin[0]) for name, pin in DRSA_EXPORTS.items()])
+def test_ranking_export_selectable(model, tmp_path, export, run):
+    """Each within-ranking export loads by name (same tree, extra protocol keys), differs from the default,
     and the CLI takes it with --model; an unpinned export is refused."""
     import shutil
     from pkanet.cli import main
-    alt = load_default(HMASK_EXPORT)
-    assert alt.info['run'] == HMASK_RUN and alt.info['parameter_count'] == 180000
+    alt = load_default(export)
+    assert alt.info['run'] == run and alt.info['parameter_count'] == 180000
     assert {'within_listwise', 'hotspot_mask'} <= set(alt.info['protocol'])
+    if export in DRSA_EXPORTS:
+        assert alt.info['protocol']['within_listwise']['target'] == 'drsa'
     assert jax.tree.structure(alt.params) == jax.tree.structure(model.params)
     graph, _ = featurise(PDB); g = {k: jnp.asarray(v) for k, v in graph_from_features(graph).items()}
     a, b = model.outputs(g)['query_pka'], alt.outputs(g)['query_pka']
     assert np.isfinite(b).all() and np.max(np.abs(np.asarray(a - b))) > 1e-3
     out = tmp_path / 'out.jsonl'
-    main(['predict', str(PDB), '--model', HMASK_EXPORT, '--cache', str(tmp_path / 'cache'), '--output', str(out),
+    main(['predict', str(PDB), '--model', export, '--cache', str(tmp_path / 'cache'), '--output', str(out),
           '--state', 'bound', '--no-residues', '--no-compilation-cache'])
     row = json.loads(out.read_text().splitlines()[0])
-    assert row['model'] == HMASK_RUN
+    assert row['model'] == run
     # the CLI runs on CPU; on a GPU host the direct forward uses GPU matmul precision (~3e-4 apart)
     np.testing.assert_allclose([s['pka'] for s in row['sites']], b, atol=2e-3)
     copy = tmp_path / 'unpinned'; shutil.copytree(alt.path, copy)

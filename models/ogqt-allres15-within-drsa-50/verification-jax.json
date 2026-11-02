@@ -1,0 +1,22 @@
+{
+ "model": "/scratch/u6xq/hussain.u6xq/_submission/drsa-weight-release-v1/models/ogqt-allres15-within-drsa-50",
+ "run": "drsa-v1-50-within03-asym50-w064-s17",
+ "backend": "jax",
+ "device": "cuda:0",
+ "complexes": 20,
+ "matched_sites": 628,
+ "unmatched_sites": 25,
+ "seconds": 79.1,
+ "bound_abs_diff": {
+  "max": 0.0013437271118164062,
+  "mean": 0.00012442507561604687,
+  "frac_lt_1e-3": 0.9936305732484076,
+  "frac_lt_1e-2": 1.0
+ },
+ "free_abs_diff": {
+  "max": 0.0013561248779296875,
+  "mean": 0.00011390865228737995,
+  "frac_lt_1e-3": 0.9936305732484076,
+  "frac_lt_1e-2": 1.0
+ }
+}

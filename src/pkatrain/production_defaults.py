@@ -7,8 +7,12 @@ sequence only; 50% training fraction, seed 17, selected epoch 17.
 Alternative (2026-10-31): ``ogqt-allres15-within-hmask-50`` (HMASK_*), the same recipe plus a within-complex listwise
 partner-ranking term on the residue edge head and PeSTo hotspot-mask augmentation during training (the exported model
 runs unmasked). It is not the default; select it with ``load_default("ogqt-allres15-within-hmask-50")``,
-``GQT_DEFAULT_MODEL`` or ``ogqt predict --model``. ``load_default`` accepts either pinned all-residue export. It
+``GQT_DEFAULT_MODEL`` or ``ogqt predict --model``. ``load_default`` accepts the pinned all-residue exports. It
 replaces the decoy-ranking export (2026-10-29), withdrawn because its gain was a family-similarity shortcut.
+
+Alternative (2026-11-02): ``ogqt-allres15-within-drsa-50`` (seed 17), with ``-s29`` and ``-s43`` replicas,
+uses dRSA-weighted within-complex ranking with the same hotspot masking. These improve interface identification;
+large binding-shift improvements are inconsistent across seeds. Native RSA and PeSTo are training targets only.
 
 The previous default, the frozen relational backbone ``ogqt-relational-50-frozen`` (2026-10-13), stays available
 through ``load_relational_frozen`` / ``RELATIONAL_*`` for the frozen-representation experiments built on it.
@@ -30,9 +34,21 @@ HMASK_EPOCH = 18
 HMASK_CHECKPOINT_SHA256 = "9fe46802253020c1691fc0e88d1725e5507d6855424753a1df7718009bfde1da"
 HMASK_EXPORT = "ogqt-allres15-within-hmask-50"
 
+DRSA_EXPORT = "ogqt-allres15-within-drsa-50"
+DRSA_RUN = "drsa-v1-50-within03-asym50-w064-s17"
+DRSA_EPOCH = 18
+DRSA_CHECKPOINT_SHA256 = "703e17a7e2fcb109d44e510eb58db802f4f0c1cf2a3e994fad73d1d7a2427607"
+DRSA_EXPORTS = {
+    DRSA_EXPORT: (DRSA_RUN, DRSA_EPOCH, DRSA_CHECKPOINT_SHA256),
+    DRSA_EXPORT + "-s29": ("drsa-v1-50-within03-asym50-w064-s29", 20,
+                           "1de40443be8dcfc7e9294821a133c6ef794095481dbd481421b24adfa0dc12d2"),
+    DRSA_EXPORT + "-s43": ("drsa-v1-50-within03-asym50-w064-s43", 16,
+                           "d457cd9a6edaa0b619d0cfa063415d4a6e0c2d46f5da96ca4ecc5d8dce8ffc63"),
+}
+
 # pinned all-residue exports load_default accepts: export name -> (run, selected epoch, checkpoint sha256)
 ALLRES_EXPORTS = {DEFAULT_EXPORT: (DEFAULT_RUN, DEFAULT_EPOCH, DEFAULT_CHECKPOINT_SHA256),
-                  HMASK_EXPORT: (HMASK_RUN, HMASK_EPOCH, HMASK_CHECKPOINT_SHA256)}
+                  HMASK_EXPORT: (HMASK_RUN, HMASK_EPOCH, HMASK_CHECKPOINT_SHA256), **DRSA_EXPORTS}
 
 RELATIONAL_RUN = "control-v2-50-relations-s17"
 RELATIONAL_EPOCH = 18

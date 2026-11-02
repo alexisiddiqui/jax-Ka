@@ -1,0 +1,9 @@
+{
+  "run": "drsa-v1-50-within03-asym50-w064-s17",
+  "selected_epoch": 18,
+  "checkpoint_sha256": "703e17a7e2fcb109d44e510eb58db802f4f0c1cf2a3e994fad73d1d7a2427607",
+  "params_sha256": "000ae61a87c88d0f883968944e355957f7465b3405a1beac1e0d7e2cd7901ea8",
+  "parameter_count": 180000,
+  "restored_parameter_equality": "bitwise",
+  "job": "7960629"
+}
