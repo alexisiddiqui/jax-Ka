@@ -16,6 +16,19 @@ NODE_FIELDS = ("nodes", "node_mask", "neighbors", "edge", "edge_mask", "switch")
 TOKEN_FIELDS = ("site_residue", "site_type", "site_mask", "site_neighbors", "site_edge", "site_edge_mask", "site_switch")
 
 
+def same_padded(a,b):
+    """Equal values allowing only extra zero padding from another branch's capacity."""
+    if a.ndim!=b.ndim or a.dtype!=b.dtype:return False
+    common=tuple(slice(0,min(x,y)) for x,y in zip(a.shape,b.shape))
+    if not np.array_equal(a[common],b[common]):return False
+    for axis,(x,y) in enumerate(zip(a.shape,b.shape)):
+        if x==y:continue
+        larger=a if x>y else b
+        tail=[slice(None)]*larger.ndim;tail[axis]=slice(min(x,y),None)
+        if np.any(larger[tuple(tail)]!=0):return False
+    return True
+
+
 def backbone_table(backbone, chain, sequence):
     return np.concatenate((np.asarray(backbone).reshape(len(backbone), 12),
                            np.asarray(chain)[:, None], np.asarray(sequence)[:, None]), axis=1).astype(np.float32)

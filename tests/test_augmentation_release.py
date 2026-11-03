@@ -48,6 +48,43 @@ def test_shard_boundaries_corruption_and_incomplete_inventory(tmp_path):
         with pytest.raises(ValueError, match="digest"): store.raw("a")
 
 
+def test_explicit_compression_is_resume_pinned_and_preserved_in_worker_manifest(tmp_path):
+    worker=tmp_path/'workers'/'one'
+    with ReleaseWriter(worker,{},zstd_level=1,shard_bytes=4096) as writer:
+        writer.add('a',{},dict(xyz=np.ones((4,3),np.float32)));writer.checkpoint()
+    with pytest.raises(ValueError,match='provenance'):
+        ReleaseWriter(worker,{},zstd_level=3,shard_bytes=4096)
+    with ReleaseWriter(worker,{},zstd_level=1,shard_bytes=4096) as writer:writer.finish()
+    manifest=finalize_workers(tmp_path,[worker],{},expected_ids=['a'])
+    assert manifest['zstd_level']==1 and manifest['shard_bytes']==4096
+    with AugmentationStore(tmp_path) as store:
+        np.testing.assert_array_equal(store.raw('a')['arrays']['xyz'],np.ones((4,3),np.float32))
+
+
+def test_legacy_level_three_checkpoint_can_resume_without_changing_compression(tmp_path):
+    from pkatrain.augmentation_store import fingerprint,FORMAT,SHARD_BYTES
+    with ReleaseWriter(tmp_path,{},zstd_level=3) as writer:
+        writer.add('a',{},dict(xyz=np.ones((4,3),np.float32)));writer.checkpoint()
+    path=tmp_path/'checkpoint.json';checkpoint=json.loads(path.read_text())
+    checkpoint.pop('zstd_level')
+    checkpoint['signature']=fingerprint(dict(provenance={},shard_bytes=SHARD_BYTES,format=FORMAT))
+    path.write_text(json.dumps(checkpoint))
+    with pytest.raises(ValueError,match='provenance'):ReleaseWriter(tmp_path,{},zstd_level=1)
+    with ReleaseWriter(tmp_path,{},zstd_level=3) as writer:
+        assert writer.ids=={'a'}
+        assert writer.finish()['zstd_level']==3
+
+
+def test_worker_finalisation_rejects_mixed_compression_metadata(tmp_path):
+    workers=[tmp_path/'workers'/str(i) for i in range(2)]
+    for i,level in enumerate((1,3)):
+        with ReleaseWriter(workers[i],{},zstd_level=level) as writer:
+            writer.add(str(i),{},dict(xyz=np.ones((4,3),np.float32)));writer.finish()
+    with pytest.raises(ValueError,match='layouts differ'):
+        finalize_workers(tmp_path,workers,{},expected_ids=['0','1'])
+    assert not (tmp_path/'manifest.json').exists()
+
+
 def test_decompressed_size_and_whole_file_digest_are_verified(tmp_path):
     frame, size = encode({"parent": "a"}, {"xyz": np.ones((3, 3), np.float32)})
     with pytest.raises(ValueError, match="size"):
@@ -156,6 +193,17 @@ def test_production_geometry_features_are_finite_for_both_branches():
         assert np.isfinite(edges).all() and np.isfinite(angles).all()
         oriented.append(edges)
     assert not np.array_equal(oriented[0], oriented[1])
+
+
+def test_bound_identity_accepts_capacity_padding_but_rejects_changed_values():
+    from pkatrain.augmentation_graphs import same_padded
+    original=np.arange(12,dtype=np.float32).reshape(2,3,2)
+    padded=np.pad(original,((0,0),(0,2),(0,0)))
+    assert same_padded(original,padded) and same_padded(padded,original)
+    padded[0,4,1]=1
+    assert not same_padded(original,padded)
+    padded[0,4,1]=0;padded[0,1,1]+=1
+    assert not same_padded(original,padded)
 
 
 def test_indexed_repair_templates_roundtrip_and_reject_corruption(tmp_path):

@@ -143,33 +143,45 @@ def gpu_benchmark(path, output, *, workers=(8, 16, 32), prefetch=(2, 4), steps=2
     embeddings, _ = input_functions(model_functions(), orientation=True, dihedrals=True)
     def objective(p, graph, mask, key):
         b = graph["nodes"].shape[0]
-        flat = jax.tree.map(lambda a: a.reshape((b*2, *a.shape[2:])), graph)
-        keys = jnp.repeat(jax.random.split(key, b), 2, axis=0)
+        branches = graph["nodes"].shape[1]
+        flat = jax.tree.map(lambda a: a.reshape((b*branches, *a.shape[2:])), graph)
+        keys = jnp.repeat(jax.random.split(key, b), branches, axis=0)
         def single(g, draw):
             tokens, query = embeddings(p, g, key=draw, dropout_rate=0.1)
             shifted = 8*jnp.tanh(linear(p["head"], tokens)[:, 0])[query]
             burial = linear(p["auxiliary"]["burial"], tokens)[:, 0][query]
             return shifted, burial
         prediction, burial = jax.vmap(single)(flat, keys)
-        prediction = prediction.reshape(b, 2, -1); burial = burial.reshape(b, 2, -1)
+        prediction = prediction.reshape(b, branches, -1); burial = burial.reshape(b, branches, -1)
         # Synthetic loss only: representative paired+burial compute, no new labels or updates.
         m = mask[:, None, :]
-        return (jnp.sum(prediction**2*m) + jnp.sum(jax.nn.softplus(burial)*m) +
-                jnp.sum((prediction[:, 0]-prediction[:, 1])**2*mask))/jnp.maximum(mask.sum(), 1)
+        paired = jnp.sum((prediction[:, 0]-prediction[:, 1])**2*mask) if branches == 2 else 0.
+        return (jnp.sum(prediction**2*m) + jnp.sum(jax.nn.softplus(burial)*m) + paired)/jnp.maximum(mask.sum(), 1)
     step = jax.jit(jax.value_and_grad(objective)); results = []; finite_probes = []
     for w in workers:
         source = PilotSource(path, w, batch, pad_transform=spread_padding)
         try:
             for bucket in sorted(source.capacities, key=int):
                 micro = micro_size(batch, int(bucket))
+                print(json.dumps(dict(stage='gpu-bucket',workers=w,bucket=bucket,batch=batch,micro=micro)),flush=True)
                 for kind in ("native", "augmented"):
-                    spec_bucket, spec_ids = source.plans(bucket, kind, 1)[0]
-                    graph, mask, _ = source.load((spec_bucket, spec_ids[:micro]))
+                    spec = source.plans(bucket, kind, 1)[0]
+                    graph, mask, _ = source.load((*spec[:-1], spec[-1][:micro]))
                     device_graph = jax.device_put(jax.tree.map(lambda a: a[:micro], graph)); device_mask = jax.device_put(mask[:micro])
                     value, grads = step(params, device_graph, device_mask, jax.random.PRNGKey(17)); jax.block_until_ready((value, grads))
                     if not np.isfinite(float(value)) or not all(bool(jnp.isfinite(g).all()) for g in jax.tree.leaves(grads)):
                         raise ValueError("nonfinite forward/backward bucket probe")
-                    finite_probes.append(dict(bucket=bucket, kind=kind, micro=micro, passed=True))
+                    resident = {}
+                    if w == workers[0]:
+                        for _ in range(2):
+                            warm=step(params,device_graph,device_mask,jax.random.PRNGKey(17));jax.block_until_ready(warm)
+                        resident_start=time.perf_counter()
+                        for draw in range(20):
+                            measured=step(params,device_graph,device_mask,jax.random.PRNGKey(17+draw));jax.block_until_ready(measured)
+                        resident_s=time.perf_counter()-resident_start
+                        resident=dict(resident_seconds=resident_s,resident_structures_per_second=20*micro/resident_s)
+                        del warm,measured
+                    finite_probes.append(dict(bucket=bucket, kind=kind, micro=micro, passed=True, **resident))
                     del graph, mask, device_graph, device_mask, grads, value
                 for depth in prefetch:
                     for repeat in range(repeats):
@@ -191,7 +203,10 @@ def gpu_benchmark(path, output, *, workers=(8, 16, 32), prefetch=(2, 4), steps=2
                                 batch=batch, micro=micro, structures_per_second=steps*batch/elapsed, seconds=elapsed,
                                 materialised_bytes=touched, telemetry=telemetry,
                                 capacity=(source.native_capacities if kind == "native" else source.capacities)[bucket]))
+                        atomic_json(Path(output).with_name(Path(output).stem+'-progress.json'),dict(
+                            workers=w,prefetch=depth,bucket=bucket,repeat=repeat,completed_cases=len(results),last=results[-1]))
         finally: source.close()
+    if not results: raise ValueError('GPU preflight measured no cases')
     comparisons = []
     for w in workers:
         for d in prefetch:
@@ -206,7 +221,7 @@ def gpu_benchmark(path, output, *, workers=(8, 16, 32), prefetch=(2, 4), steps=2
     successful = [(w, d) for w in workers for d in prefetch if all(any(r["passed"] and
                   (r["workers"], r["prefetch"], r["bucket"]) == (w, d, b) for r in comparisons) for b in buckets)]
     report = dict(kind="synchronised-base-A-compute-preflight-v1", passed=bool(successful), viable_settings=successful,
-        finite_probes=finite_probes, comparisons=comparisons, results=results, manifest_sha256=digest(Path(path)/"manifest.json"),
+        finite_probes=finite_probes, comparisons=comparisons, results=results, manifest_sha256=digest(source.store.path/"manifest.json"),
         peak_rss_GiB=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024**2, gpu=str(devices[0]),
         device_memory_stats=devices[0].memory_stats(), job=os.environ.get("SLURM_JOB_ID"),
         production_protocol_sha256=digest(protocol) if protocol else None,
