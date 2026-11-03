@@ -14,7 +14,7 @@ from .runtime import atomic_json, digest, require_compute
 
 # Panel, source table under the runtime root, row filter, (training, evaluation) radii in Angstrom.
 PANELS = [
-    ('Ligands', 'audits/propka-components-v2-ligands/out/site_changes.csv', lambda r: r['kind'] == 'ligand', ((15, 'train'), (25, 'eval'))),
+    ('Ligands', 'audits/propka-components-v4-ligands/out/site_changes.csv', lambda r: r['kind'] == 'ligand', ((15, 'train'), (25, 'eval'))),
     ('Buffers', 'audits/buffer-propka-v2/site_changes.csv', lambda r: r['component_index'] == 'all', ((15, 'train'), (20, 'eval'))),
     ('Glycans', 'audits/glycan-propka-ccd-v1/site_changes.csv',
      lambda r: r['all_glycans_removed'] == 'True' and r['native_eligible'] == 'True', ((20, 'train'), (25, 'eval'))),
@@ -124,7 +124,7 @@ def render(out):
     handles += [Line2D([], [], color='0.35', ls=':', lw=1, label='0.01 and 0.001 targets'),
                 Line2D([], [], color='0.2', ls='--', lw=.9, label='Mask radius')]
     fig.legend(handles=[handles[i] for i in (0, 2, 1, 3, 4, 5)], loc='outside upper center', ncol=3, frameon=False, fontsize=9)
-    fig.text(.5, -.01, 'PROPKA 3.5.1, fixed coordinates • density shows binding ΔpKa • exact zeros in the bottom row, values below 10⁻⁵ at 10⁻⁵ • nothing changes beyond 22.5 Å • 5 Å percentile bins • repeated sites correlated',
+    fig.text(.5, -.01, 'PROPKA 3.5.1, fixed coordinates • density shows binding ΔpKa • exact zeros in the bottom row, values below 10⁻⁵ at 10⁻⁵ • no change beyond 27 Å • 5 Å percentile bins • repeated sites correlated',
              ha='center', va='top', fontsize=8.5)
     for suffix in ('png', 'pdf', 'svg'):
         fig.savefig(dest/f'component_cutoffs.{suffix}', bbox_inches='tight')
