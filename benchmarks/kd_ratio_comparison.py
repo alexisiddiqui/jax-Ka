@@ -32,6 +32,10 @@ MODELS = (
     "oGQT pKPDB-pretrained",
     "Backbone-pretrained pKAI",
     "smooth_propka",
+    "smooth-pKAI",
+    "smooth-pKAI+",
+    "pKAI-joint",
+    "pKAI-joint-aa20",
 )
 
 
@@ -91,6 +95,7 @@ def main() -> None:
         "pkai": audit / "pinder-pkai-backbone-eval-v1" / "matched-state.csv",
         "pkai_plus": audit / "pinder-pkai-plus-eval-v1" / "matched-state.csv",
         "smooth": audit / "smooth-propka-pinder-v1" / "matched-state.csv",
+        "pkai_feature": audit / "pkai-feature-pinder-v1" / "matched-state.csv",
     }
     for path in inputs.values():
         if not path.is_file():
@@ -100,6 +105,7 @@ def main() -> None:
     pkai_rows = read_csv(inputs["pkai"])
     plus_rows = read_csv(inputs["pkai_plus"])
     smooth_rows = read_csv(inputs["smooth"])
+    feature_rows = read_csv(inputs["pkai_feature"])
 
     observed_gqt = {r["model"] for r in gqt_rows}
     expected_gqt = {
@@ -114,6 +120,10 @@ def main() -> None:
         "pKAI+": index_values(plus_rows, "pkai_plus"),
         "smooth_propka": index_values(smooth_rows, "smooth_propka"),
     }
+    for model in ("smooth-pKAI", "smooth-pKAI+", "pKAI-joint", "pKAI-joint-aa20"):
+        values[model] = index_values(
+            [r for r in feature_rows if r["model"] == model], "prediction"
+        )
     for model in expected_gqt:
         values[model] = index_values(
             [r for r in gqt_rows if r["model"] == model], "ogqt"
@@ -123,6 +133,7 @@ def main() -> None:
         index_values(pkai_rows, "pypka"),
         index_values(plus_rows, "pypka"),
         index_values(smooth_rows, "pypka"),
+        index_values(feature_rows, "pypka"),
         index_values(gqt_rows, "pypka"),
     )
     common_states = set.intersection(

@@ -14,4 +14,4 @@ export MKL_NUM_THREADS=1
 mkdir -p /home/coulson/oc/lina4225/_runtime/jax-Ka/logs
 /home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/envs/runner/bin/python /home/coulson/oc/lina4225/jax-Ka/benchmarks/kd_ratio_comparison.py \
   --runtime /home/coulson/oc/lina4225/_runtime/jax-Ka \
-  --output /home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/audits/kd-ratio-comparison-v1
+  --output /home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/audits/kd-ratio-comparison-v2-pkai-feature

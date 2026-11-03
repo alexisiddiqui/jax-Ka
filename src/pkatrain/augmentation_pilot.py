@@ -208,6 +208,7 @@ def hashlib_array(value):
 
 
 def verify_graphs(output):
+    from .augmentation_graphs import same_padded
     with AugmentationStore(output) as store:
         buckets = {}; parents = {}; control = dict(parent=None, arrays=None)
         def check(record, row):
@@ -234,8 +235,7 @@ def verify_graphs(output):
                     control.update(parent=parent, arrays=store.raw(parent+"/native")["arrays"])
                 native = control["arrays"]
                 for key, value in native.items():
-                    slice_ = (0, *(slice(0, n) for n in value.shape[1:]))
-                    if not np.array_equal(graph[key][slice_], value[0]): raise ValueError(f"native bound array changed: {key}")
+                    if not same_padded(graph[key][0], value[0]): raise ValueError(f"native bound array changed: {key}")
                 # The current paired releases have one canonical chain per partner.
                 if record["metadata"]["dataset"] in ("pinder", "atlas"):
                     chain = graph["nodes"][1, :, -2]

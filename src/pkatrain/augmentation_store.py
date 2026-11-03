@@ -30,7 +30,9 @@ def fingerprint(value):
     return hashlib.sha256(canonical(value)).hexdigest()
 
 
-def encode(metadata, arrays):
+def encode(metadata, arrays, *, zstd_level=ZSTD_LEVEL):
+    if type(zstd_level) is not int or not -131072 <= zstd_level <= 22:
+        raise ValueError("invalid zstd compression level")
     fields = {}; buffers = []; offset = 0
     for name, value in sorted(arrays.items()):
         value = np.ascontiguousarray(value)
@@ -43,7 +45,7 @@ def encode(metadata, arrays):
         buffers.append(data); offset += len(data)
     header = canonical(dict(metadata=metadata, arrays=fields))
     raw = MAGIC + struct.pack("<Q", len(header)) + header + b"".join(buffers)
-    return zstandard.ZstdCompressor(level=ZSTD_LEVEL).compress(raw), len(raw)
+    return zstandard.ZstdCompressor(level=zstd_level).compress(raw), len(raw)
 
 
 def decode(data, *, max_output_size):
@@ -76,10 +78,15 @@ class ReleaseWriter:
     A checkpoint commits at most 64 records at once. On resume only this writer's
     uncommitted tail is truncated. Finalisation verifies every compressed record.
     """
-    def __init__(self, path, provenance, *, shard_bytes=SHARD_BYTES, file_limit=5000):
+    def __init__(self, path, provenance, *, shard_bytes=SHARD_BYTES, file_limit=5000, zstd_level=ZSTD_LEVEL):
+        if type(zstd_level) is not int or not -131072 <= zstd_level <= 22:
+            raise ValueError("invalid zstd compression level")
         self.path = Path(path); self.path.mkdir(parents=True, exist_ok=True)
         self.provenance = provenance; self.shard_bytes = shard_bytes; self.file_limit = file_limit
-        self.signature = fingerprint(dict(provenance=provenance, shard_bytes=shard_bytes, format=FORMAT))
+        self.zstd_level = zstd_level
+        layout = dict(provenance=provenance, shard_bytes=shard_bytes, format=FORMAT)
+        legacy_signature = fingerprint(layout)
+        self.signature = fingerprint(dict(layout, zstd_level=zstd_level))
         self.rows = []; self.handle = None; self.shard = 0; self.position = 0; self.since_checkpoint = 0
         self.lock = self.path / ".writer.lock"
         # flock survives crashes without a stale-lock recovery policy.
@@ -93,7 +100,8 @@ class ReleaseWriter:
         checkpoint = self.path/"checkpoint.json"
         if checkpoint.exists():
             old = json.loads(checkpoint.read_text())
-            if old["signature"] != self.signature:
+            legacy = old.get("zstd_level") is None and zstd_level == 3 and old["signature"] == legacy_signature
+            if old["signature"] != self.signature and not legacy:
                 self.close(); raise ValueError("resume provenance or layout differs")
             self.rows = old["records"]; self.shard = old["shard"]; self.position = old["position"]
             # Validate committed bytes before appending to them.
@@ -122,12 +130,12 @@ class ReleaseWriter:
     def checkpoint(self):
         self.handle.flush(); os.fsync(self.handle.fileno())
         atomic_json(self.path/"checkpoint.json", dict(signature=self.signature, records=self.rows,
-            shard=self.shard, position=self.position))
+            shard=self.shard, position=self.position, zstd_level=self.zstd_level))
         self.since_checkpoint = 0
 
     def add(self, parent, metadata, arrays, *, summary=None):
         if parent in self.ids: raise ValueError(f"duplicate parent: {parent}")
-        frame, raw_bytes = encode(dict(metadata, parent=parent), arrays)
+        frame, raw_bytes = encode(dict(metadata, parent=parent), arrays, zstd_level=self.zstd_level)
         if len(frame) > self.shard_bytes: raise ValueError("record exceeds shard limit")
         if self.position and self.position+len(frame) > self.shard_bytes:
             self.checkpoint(); self.handle.close(); self.shard += 1; self.position = 0
@@ -154,7 +162,7 @@ class ReleaseWriter:
                 if p.stat().st_size: raise ValueError("unindexed shard")
                 files[p.name] = hashlib.sha256(b"").hexdigest()
         for name in ("index.json", "verification.json"): files[name] = digest(self.path/name)
-        manifest = dict(format=FORMAT, zstd_level=ZSTD_LEVEL, shard_bytes=self.shard_bytes,
+        manifest = dict(format=FORMAT, zstd_level=self.zstd_level, shard_bytes=self.shard_bytes,
                         provenance=self.provenance, signature=self.signature, files=files,
                         records=len(self.rows), compressed_bytes=sum(r["bytes"] for r in self.rows),
                         raw_bytes=sum(r["raw_bytes"] for r in self.rows), verified=True)
@@ -263,7 +271,7 @@ class AugmentationStore:
     def __exit__(self, *args): self.close()
 
 
-def finalize_workers(path, workers, provenance, *, expected_ids, file_limit=5000):
+def finalize_workers(path, workers, provenance, *, expected_ids, file_limit=5000, check_record=None):
     """Adopt verified worker releases beneath the destination; no payload copying.
 
     Workers write under OUTPUT/workers/NNNN from the start. Only small final
@@ -271,14 +279,15 @@ def finalize_workers(path, workers, provenance, *, expected_ids, file_limit=5000
     """
     path = Path(path).resolve(); path.mkdir(parents=True, exist_ok=True)
     if (path/"manifest.json").exists(): raise FileExistsError("release already published")
-    rows = []; files = {}; ids = set(); manifests = {}
+    rows = []; files = {}; ids = set(); manifests = {}; layouts = set()
     for worker in workers:
         worker = Path(worker).resolve()
         if not worker.is_relative_to(path) or worker == path:
             raise ValueError("workers must already reside inside release root")
         prefix = str(worker.relative_to(path))
         with AugmentationStore(worker) as store:
-            verify_records(worker, store.rows, expected_files=store.manifest["files"])
+            layouts.add((store.manifest["zstd_level"], store.manifest["shard_bytes"]))
+            if len(layouts) != 1: raise ValueError("worker compression or shard layouts differ")
             manifests[prefix] = digest(worker/"manifest.json")
             for row in store.rows:
                 if row["id"] in ids: raise ValueError("duplicate parent across workers")
@@ -291,9 +300,13 @@ def finalize_workers(path, workers, provenance, *, expected_ids, file_limit=5000
     if len(files)+len(workers)*8+5 > file_limit: raise ValueError("release file budget exceeded")
     order = {key: i for i, key in enumerate(expected_ids)}; rows.sort(key=lambda row: order[row["id"]])
     atomic_json(path/"index.json", dict(format=FORMAT, records=rows))
-    atomic_json(path/"verification.json", verify_records(path, rows))
+    # Verify adopted bytes once against their published worker digests. Reading
+    # each worker here and then rereading the same shards globally doubles I/O.
+    atomic_json(path/"verification.json", verify_records(path, rows,
+        expected_files=files, check_record=check_record))
     for name in ("index.json", "verification.json"): files[name] = digest(path/name)
-    result = dict(format=FORMAT, verified=True, zstd_level=ZSTD_LEVEL, shard_bytes=SHARD_BYTES,
+    level, shard_bytes = next(iter(layouts)) if layouts else (ZSTD_LEVEL, SHARD_BYTES)
+    result = dict(format=FORMAT, verified=True, zstd_level=level, shard_bytes=shard_bytes,
                   records=len(rows), files=files, provenance=provenance, worker_manifests=manifests,
                   raw_bytes=sum(r["raw_bytes"] for r in rows), compressed_bytes=sum(r["bytes"] for r in rows))
     atomic_json(path/"manifest.json", result)
