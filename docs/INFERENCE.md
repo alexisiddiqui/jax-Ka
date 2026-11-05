@@ -20,6 +20,13 @@ The dRSA-weighted version of that recipe is available as `ogqt-allres15-within-d
 they do not consistently improve pKa binding shifts. Inference uses backbone and sequence, without RSA or PeSTo
 inputs. See [the dRSA model card](../models/ogqt-allres15-within-drsa-50/README.md) for training and validation.
 
+`ogqt-allres15-within-drsa-100-w128` is the same dRSA recipe trained on the full (100%) training pool at width 128
+(693,856 parameters, seed 17, epoch 20). Over three seeds it lowers the pKa selection MAE from 0.616 to 0.593 and
+raises same-stratum swapped-partner accuracy from 0.799 to 0.835 and interface AUROC from 0.700 to 0.721, compared
+with the 50% width-64 exports; antibody/antigen swaps are unchanged (0.704). Like the others it is selectable, not
+the default, and runs on backbone and sequence only (PeSTo masking and RSA targets were used in training only). See
+[its model card](../models/ogqt-allres15-within-drsa-100-w128/README.md).
+
 `--state` selects what is predicted: `bound` (the structure as supplied), `free`
 (every chain alone: edges between chains removed at the supplied conformation) or
 `both` (default). Each JSONL record has:

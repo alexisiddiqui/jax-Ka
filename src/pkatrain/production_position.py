@@ -84,7 +84,11 @@ def relation_maps(variant):
 def initialize(params,seed,variant):
     if variant=='none':return params
     width=params['head']['w'].shape[0]
-    if width!=64:raise ValueError('registered positional ablations use width 64')
+    # Width 64 for every registered ablation. Width 128 (ff 256) only for the all-residue relations-4-1 15 A recipe of the
+    # selectable export ogqt-allres15-within-drsa-100-w128 (run drsa100-v1-asym50-w128-s17, 2026-11-05), so that
+    # make_model rebuilds that tree; its training snapshot opened the same path behind GQT_PARAMETER_SCALING=1.
+    if width!=64 and not (width==128 and variant=='relations-4-1-allres-cut15'):
+        raise ValueError('registered positional ablations use width 64 (128: relations-4-1-allres-cut15 only)')
     key=jax.random.fold_in(jax.random.PRNGKey(seed),SALT)
     counts=relation_maps(variant)
     if variant=='fourier':

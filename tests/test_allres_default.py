@@ -12,10 +12,14 @@ from pkanet.allres import AllResidueStructureFeatures, graph_from_features, stat
 from pkanet.attention_backend import indexed_attention_reference
 from pkanet.differentiable import StructureFeatures
 from pkanet.features import featurise
-from pkatrain.production_defaults import DEFAULT_RUN, DRSA_EXPORTS, HMASK_EXPORT, HMASK_RUN, load_default
+from pkatrain.production_defaults import (DEFAULT_RUN, DRSA100_W128_EXPORT, DRSA100_W128_PARAMETERS, DRSA100_W128_RUN,
+                                          DRSA_EXPORTS, HMASK_EXPORT, HMASK_RUN, load_default)
 
 ROOT = Path(__file__).resolve().parents[1]
 PDB = ROOT / 'tests/data/two_chains.pdb'
+# within-ranking exports: (name, run, parameter count); the 100%-pool dRSA export is width 128, the others width 64
+RANKING_EXPORTS = ([(HMASK_EXPORT, HMASK_RUN, 180000)] + [(name, pin[0], 180000) for name, pin in DRSA_EXPORTS.items()]
+                   + [(DRSA100_W128_EXPORT, DRSA100_W128_RUN, DRSA100_W128_PARAMETERS)])
 
 
 @pytest.fixture(scope='module')
@@ -113,16 +117,18 @@ def test_cli_default(tmp_path):
     row = json.loads(out.read_text().splitlines()[0]); assert 'residues' not in row and 'pka' in row['sites'][0]
 
 
-@pytest.mark.parametrize('export,run', [(HMASK_EXPORT, HMASK_RUN)] + [(name, pin[0]) for name, pin in DRSA_EXPORTS.items()])
-def test_ranking_export_selectable(model, tmp_path, export, run):
+@pytest.mark.parametrize('export,run,count', RANKING_EXPORTS)
+def test_ranking_export_selectable(model, tmp_path, export, run, count):
     """Each within-ranking export loads by name (same tree, extra protocol keys), differs from the default,
     and the CLI takes it with --model; an unpinned export is refused."""
     import shutil
     from pkanet.cli import main
     alt = load_default(export)
-    assert alt.info['run'] == run and alt.info['parameter_count'] == 180000
+    assert alt.info['run'] == run and alt.info['parameter_count'] == count
+    width = alt.info['architecture']['width']
+    assert alt.params['head']['w'].shape[0] == width and alt.info['architecture']['ff'] == 2 * width
     assert {'within_listwise', 'hotspot_mask'} <= set(alt.info['protocol'])
-    if export in DRSA_EXPORTS:
+    if export in DRSA_EXPORTS or export == DRSA100_W128_EXPORT:
         assert alt.info['protocol']['within_listwise']['target'] == 'drsa'
     assert jax.tree.structure(alt.params) == jax.tree.structure(model.params)
     graph, _ = featurise(PDB); g = {k: jnp.asarray(v) for k, v in graph_from_features(graph).items()}
@@ -139,3 +145,20 @@ def test_ranking_export_selectable(model, tmp_path, export, run):
     info = json.loads((copy / 'model.json').read_text()); info['run'] = 'other'; (copy / 'model.json').write_text(json.dumps(info))
     with pytest.raises(ValueError):
         load_default(copy)
+
+
+def test_width128_registration():
+    """production_position registers width 128 for the all-residue relations-4-1 15 A variant only: make_model rebuilds
+    the 100%-pool dRSA export's tree at that width (every leaf it creates has the exported shape; the export adds the
+    auxiliary heads), and other variants keep the width-64 rule."""
+    from pkatrain.production_train import make_model, protocol_inputs
+    alt = load_default(DRSA100_W128_EXPORT); protocol = alt.info['protocol']
+    view, drop, orientation, table, dihedrals, hbonds = protocol_inputs(protocol)
+    inputs = dict(orientation=orientation, sidechain_view=view, sidechain_drop=drop, table=table, dihedrals=dihedrals, hbonds=hbonds)
+    params, _, _ = make_model(protocol['seed'], width=128, variant=protocol['production_variant'], **inputs)
+    shapes = lambda tree: {jax.tree_util.keystr(k): np.shape(v) for k, v in jax.tree_util.tree_flatten_with_path(tree)[0]}
+    built, exported = shapes(params), shapes(alt.params)
+    assert protocol['production_variant'] == 'relations-4-1-allres-cut15' and len(built) > 50
+    assert {k: exported.get(k) for k in built} == built
+    with pytest.raises(ValueError, match='width 64'):
+        make_model(protocol['seed'], width=128, variant='relations-4-1', **inputs)

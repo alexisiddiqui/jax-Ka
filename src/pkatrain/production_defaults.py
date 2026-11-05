@@ -14,6 +14,10 @@ Alternative (2026-11-02): ``ogqt-allres15-within-drsa-50`` (seed 17), with ``-s2
 uses dRSA-weighted within-complex ranking with the same hotspot masking. These improve interface identification;
 large binding-shift improvements are inconsistent across seeds. Native RSA and PeSTo are training targets only.
 
+Alternative (2026-11-05): ``ogqt-allres15-within-drsa-100-w128`` (DRSA100_W128_*), the dRSA recipe trained on the full
+(100%) training pool at width 128 (ff 256; 693,856 parameters), seed 17, selected epoch 20. Same heads and inputs
+(backbone and sequence only); selectable, not the default.
+
 The previous default, the frozen relational backbone ``ogqt-relational-50-frozen`` (2026-10-13), stays available
 through ``load_relational_frozen`` / ``RELATIONAL_*`` for the frozen-representation experiments built on it.
 """
@@ -46,9 +50,16 @@ DRSA_EXPORTS = {
                            "d457cd9a6edaa0b619d0cfa063415d4a6e0c2d46f5da96ca4ecc5d8dce8ffc63"),
 }
 
+DRSA100_W128_EXPORT = "ogqt-allres15-within-drsa-100-w128"
+DRSA100_W128_RUN = "drsa100-v1-asym50-w128-s17"
+DRSA100_W128_EPOCH = 20
+DRSA100_W128_CHECKPOINT_SHA256 = "50d53402c43c7e330e9db9e3e0ee86f00450236b04247f9f82e8a51da45ab25b"
+DRSA100_W128_PARAMETERS = 693856
+
 # pinned all-residue exports load_default accepts: export name -> (run, selected epoch, checkpoint sha256)
 ALLRES_EXPORTS = {DEFAULT_EXPORT: (DEFAULT_RUN, DEFAULT_EPOCH, DEFAULT_CHECKPOINT_SHA256),
-                  HMASK_EXPORT: (HMASK_RUN, HMASK_EPOCH, HMASK_CHECKPOINT_SHA256), **DRSA_EXPORTS}
+                  HMASK_EXPORT: (HMASK_RUN, HMASK_EPOCH, HMASK_CHECKPOINT_SHA256), **DRSA_EXPORTS,
+                  DRSA100_W128_EXPORT: (DRSA100_W128_RUN, DRSA100_W128_EPOCH, DRSA100_W128_CHECKPOINT_SHA256)}
 
 RELATIONAL_RUN = "control-v2-50-relations-s17"
 RELATIONAL_EPOCH = 18

@@ -1,0 +1,15 @@
+{
+  "run": "drsa100-v1-asym50-w128-s17",
+  "selected_epoch": 20,
+  "checkpoint_sha256": "50d53402c43c7e330e9db9e3e0ee86f00450236b04247f9f82e8a51da45ab25b",
+  "params_sha256": "e82c7bb426b1714ae9f2bc872d6b99a0bbd49d36811ea8cbb82473160d31c0ce",
+  "parameter_count": 693856,
+  "architecture": {
+    "dihedral_features": 6,
+    "ff": 256,
+    "orientation_edges": 13,
+    "width": 128
+  },
+  "restored_parameter_equality": "bitwise",
+  "job": "8104005"
+}

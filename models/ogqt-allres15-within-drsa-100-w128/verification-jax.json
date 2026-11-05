@@ -1,0 +1,22 @@
+{
+ "model": "/scratch/u6xq/hussain.u6xq/_submission/export-drsa100-w128-v1/models/ogqt-allres15-within-drsa-100-w128",
+ "run": "drsa100-v1-asym50-w128-s17",
+ "backend": "jax",
+ "device": "cuda:0",
+ "complexes": 20,
+ "matched_sites": 628,
+ "unmatched_sites": 25,
+ "seconds": 84.2,
+ "bound_abs_diff": {
+  "max": 0.0013201236724853516,
+  "mean": 0.0001483024305598751,
+  "frac_lt_1e-3": 0.9936305732484076,
+  "frac_lt_1e-2": 1.0
+ },
+ "free_abs_diff": {
+  "max": 0.0013675689697265625,
+  "mean": 0.00012691233568130786,
+  "frac_lt_1e-3": 0.9968152866242038,
+  "frac_lt_1e-2": 1.0
+ }
+}
