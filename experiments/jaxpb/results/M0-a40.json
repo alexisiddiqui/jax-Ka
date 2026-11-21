@@ -1,0 +1,170 @@
+{
+ "milestone": "M0",
+ "date": "2026-11-19",
+ "gpu": "1x NVIDIA A40 (sm_86, 46 GB), Coulson comp1400, partition oc, 12 CPUs, 2G/CPU",
+ "env": "~/_runtime/jax-Ka/pkabench/envs/ogqt-main-7c3e3e9 (JAX 0.11.1 + jax_cuda12_plugin 0.11.1; Isambard has 0.11.2)",
+ "code": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40-2026-11-19b (frozen, read-only, MANIFEST.sha256 = local src/tests/jobs + v2pilot (jaxrun2/maps2/jaxpb, sha256 == Isambard $S/_submission/jaxpb-pilot-v2) + v2mc/gmc.py (== mf-surrogate-v2 MANIFEST))",
+ "a40_shim": "jobs/a40site/sitecustomize.py (on PYTHONPATH via jobs/a40.sbatch only): JAX 0.11.1 pallas/triton/gpu_info has no 'NVIDIA A40' entry, so every Triton pallas_call fails ('No supported GPU devices found'); registers it as arch 8.6/cc 86 (= the A10 entry) via gpu_info.registry. Not needed on GH200 (listed).",
+ "status": "GPU closing test run on A40: PASS (v2 numbers reproduced within the 2e-6 repro bar, sweeps 100%; Pallas Triton executables served from the cache tarball in a fresh process). The single tautomer > 1e-6 (d0d5 AB, 1.05e-6) is a cross-architecture f32 difference (A40 v2 prototype vs GH200 v2 prototype, same code).",
+ "pallas_triton_smoke": {
+  "kernel": "x*2+y, 1024 f32, compiler_params=triton.CompilerParams(num_warps=1,num_stages=1)",
+  "values": [
+   76656.65625,
+   4608.0
+  ],
+  "hlo": [
+   "__gpu$xla.gpu.triton",
+   "custom_call"
+  ],
+  "works": true
+ },
+ "cache_tarball_pallas": {
+  "write_compiles": 2,
+  "read_compiles": 0,
+  "read_cache_hits": 2,
+  "hit_names": [
+   "jit_xla_prog",
+   "jit__lambda"
+  ],
+  "pass": true
+ },
+ "v2_repro_a40_vs_gh200": {
+  "criterion": "esolvM/esolvS max rel <= 2e-6 and sweeps 100% equal (jobs/m0_v2repro.py)",
+  "passed": true,
+  "per_state": {
+   "d0d5c619bd23b13d_B": {
+    "max_rel_energy": 3.0422356619179735e-07,
+    "n_energy_gt_1e6": 0,
+    "sitpotM_max_abs": 0.0,
+    "sweeps_equal": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "compiles": 208,
+    "cache_hits": 0,
+    "wall_s": 45.04
+   },
+   "d0d5c619bd23b13d_A": {
+    "max_rel_energy": 2.6786077213144386e-07,
+    "n_energy_gt_1e6": 0,
+    "sitpotM_max_abs": 0.0,
+    "sweeps_equal": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "compiles": 243,
+    "cache_hits": 0,
+    "wall_s": 96.44
+   },
+   "24d02660df3ac695_A": {
+    "max_rel_energy": 2.2686838593579351e-07,
+    "n_energy_gt_1e6": 0,
+    "sitpotM_max_abs": 0.0,
+    "sweeps_equal": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "compiles": 172,
+    "cache_hits": 2,
+    "wall_s": 64.31
+   },
+   "d0d5c619bd23b13d_AB": {
+    "max_rel_energy": 1.0535117015403828e-06,
+    "n_energy_gt_1e6": 1,
+    "sitpotM_max_abs": 1.52587890625e-05,
+    "sweeps_equal": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "compiles": 183,
+    "cache_hits": 0,
+    "wall_s": 76.34
+   },
+   "d6004cf2ee4008d2_AB": {
+    "max_rel_energy": 3.4065534139058915e-07,
+    "n_energy_gt_1e6": 0,
+    "sitpotM_max_abs": 0.0,
+    "sweeps_equal": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "compiles": 195,
+    "cache_hits": 2,
+    "wall_s": 109.96
+   }
+  },
+  "compiles_total": 1001,
+  "note": "v2 prototype compiles per state (~1,000 executables for 5 states, 208 s compile)",
+  "cross_arch": "v2 prototype on A40 vs its own GH200 outputs: max rel 1.05e-6 (1 tautomer, d0d5 AB esolvM) and sitpot 1.5e-5 kT/e abs; same tautomer as the v1->v2 note in the v2 report (f32 summation order)"
+ },
+ "v2_from_cache_new_process": {
+  "states": [
+   "d0d5c619bd23b13d_B",
+   "d0d5c619bd23b13d_A"
+  ],
+  "compiles": 0,
+  "cache_hits": 451,
+  "untar_entries": 1001,
+  "numbers_identical_to_run1": true,
+  "passed": true,
+  "per_state": {
+   "d0d5c619bd23b13d_B": {
+    "max_rel_energy": 3.0422356619179735e-07,
+    "n_energy_gt_1e6": 0,
+    "sitpotM_max_abs": 0.0,
+    "sweeps_equal": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "compiles": 0,
+    "cache_hits": 208,
+    "wall_s": 12.82
+   },
+   "d0d5c619bd23b13d_A": {
+    "max_rel_energy": 2.6786077213144386e-07,
+    "n_energy_gt_1e6": 0,
+    "sitpotM_max_abs": 0.0,
+    "sweeps_equal": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "compiles": 0,
+    "cache_hits": 243,
+    "wall_s": 31.68
+   }
+  }
+ },
+ "harness_fix": "jobs/m0_cachecheck.py: the staged probe passed pallas_call(backend='triton'), a kwarg JAX 0.11 does not accept, then fell back to plain pallas_call, which lowers to Mosaic GPU (fails pre-Hopper; on a GH200 it would have silently tested Mosaic, not Triton). Now selects Triton through triton.CompilerParams as titrate.py does; CPU stand-in re-run (interpret): write 2 compiles, read 0 compiles / 2 hits, pass.",
+ "cpu_recheck": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/cpu-recheck/cachecheck.{write,read}.json",
+ "jobs": {
+  "smoke": 803873,
+  "m0_m1": 803874,
+  "failed_first_smoke": [
+   803866,
+   "frozen copy a40-2026-11-19 (pre-fix; left unmodified)"
+  ]
+ },
+ "outputs": {
+  "cachecheck": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/m0/cachecheck.{write,read}.json",
+  "v2_a40_outputs": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/m0/v2a40/<sid>.final.npz (+ .json, v2repro.final.json)",
+  "v2_a40_sha256": {
+   "d0d5c619bd23b13d_B": "52835f85...",
+   "d0d5c619bd23b13d_A": "5eb7ccca...",
+   "24d02660df3ac695_A": "1d805a39...",
+   "d0d5c619bd23b13d_AB": "3f2ab4c1...",
+   "d6004cf2ee4008d2_AB": "8337e63e..."
+  },
+  "v2_cache_run": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/m0/v2repro/v2repro.run2cache.json",
+  "pallas_tar": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/m0/cc_pallas.tar (e2c08c70...)"
+ },
+ "inputs_sha256": "v1 rec.npz x5, GH200 v2 final.npz x5, goldens_pilot5.npz (ec537e59...), M0 shards x3, states-v2.npz (f4cc7831...), g_results.npz (91559c24...): Coulson == Isambard (sha256sum)",
+ "still_needs_gh200": "nothing for M0 parity; the Isambard run of m0_gpu.sh would only re-confirm the Pallas cache on Hopper (use the fixed m0_cachecheck.py).",
+ "frozen_copy_note": "a40-2026-11-19b used for M0-M3; a40-2026-11-19c (titrate.py fix only) for the final M4; a40-2026-11-19 was used once for the failed first smoke job (803866) and left unmodified"
+}

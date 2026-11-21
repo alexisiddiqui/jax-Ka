@@ -1,0 +1,127 @@
+{
+ "milestone": "M5 part A (determinism)",
+ "date": "2026-11-19",
+ "status": "CLOSED (PASS): 3 passes in one process, a tarball-served fresh process and TWO fresh-compile processes are bitwise identical (esolvM/S/M0, sitpotM, sweeps, maxchange, rho) on 5 pilot + 10 M0 states (6,218 tautomers); parity vs v2: sweeps 100%, 2,328/2,329 tautomers <= 1e-6, one fixed cross-implementation difference at 1.41e-6 (esolvM0, diagnostic only)",
+ "gpu": "1x NVIDIA A40, Coulson comp1400, partition oc, 12 CPUs",
+ "cause_1": {
+  "op": "pb.spread (trilinear charge spreading; setup1, setup2, post): float .at[].add scatter -> GPU atomics, order varies when several charges hit one grid point (M1 pass-to-pass differences up to 1.5e-5, the d0d5 AB tautomer flipping 0/1.05e-6)",
+  "fix": "spread folds the 8*QM contributions in the v1/v2 loop order (corner-major, atom-minor) on a [K] vector (fixed 192-step fori_loop, unroll 16) and writes with a scatter-SET (duplicates write identical bits). Bitwise equal to the sequential CPU scatter-add (spread_scatter kept as reference). Other scatters/sorts/nonzero in geometry/maps/sor are integer/boolean, stable or unique-index -> deterministic (stage probe: all bitwise).",
+  "cost": "spread 0.88 ms vs 0.67 ms per call (A40, 128 charge sets); 5 pilot states 371.0 s vs M1 370.1 s (+0.2%)"
+ },
+ "global_flag_reference": {
+  "run": "M1 code (a40-2026-11-19c) with XLA_FLAGS=--xla_gpu_deterministic_ops=true, 5 pilot states, 2 passes",
+  "pass2_vs_pass1_max_abs": 0.0,
+  "parity": "4 tautomers > 1e-6 vs v2 (max 1.59e-6): deterministic but not v2's order",
+  "time_pass2_s": {
+   "d0d5c619bd23b13d_B": 50.5,
+   "d0d5c619bd23b13d_A": 188.9,
+   "24d02660df3ac695_A": 215.8,
+   "d0d5c619bd23b13d_AB": 229.9,
+   "d6004cf2ee4008d2_AB": 561.6
+  },
+  "cost": "1246.7 s vs 370.1 s = 3.4x -> rejected; code fix used"
+ },
+ "closing_test_run1": {
+  "job": 804120,
+  "code": "a40-2026-11-19-m5c",
+  "states": "5 pilot (logged rho) + 10 M0 (relfac estimator), 6,218 tautomers",
+  "passes_1_2_3_bitwise": true,
+  "fresh_process_from_tarball_bitwise": true,
+  "fresh_tar_compiles": 0,
+  "fresh_tar_cache_hits": 43,
+  "fresh_process_recompiled_bitwise": false,
+  "fresh_recompiled_diff": "esolvS only (all 15 states), max abs 2.86e-6 kT; esolvM, esolvM0, sitpotM, sweeps, maxchange, rho bitwise",
+  "parity_vs_v2_2329_taus": {
+   "max_rel_energy": 3.28e-07,
+   "n_energy_gt_1e6": 0,
+   "sitpot_max_abs": 0.0,
+   "sweeps_equal": 1.0,
+   "note": "the d0d5 AB tautomer at 1.05e-6 is gone (it was the atomic order)"
+  },
+  "compiles": {
+   "pass1": 43,
+   "budget": 44,
+   "pass2": 0,
+   "pass3": 0
+  },
+  "time_pass3_s": {
+   "d0d5c619bd23b13d_B": 15.1,
+   "d0d5c619bd23b13d_A": 54.8,
+   "24d02660df3ac695_A": 69.4,
+   "d0d5c619bd23b13d_AB": 69.9,
+   "d6004cf2ee4008d2_AB": 161.8,
+   "sum_pilot": 371.0,
+   "sum_15": 990.7
+  },
+  "outputs": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/m5/detA/"
+ },
+ "cause_2_fresh_compile": {
+  "op": "rf_energy Gauss correction tot = jnp.sum(sv) over the NB boundary points: its value changes between compiles (3.7e-9 abs) and propagates to E_gauss (1.9e-6); E_raw, sum(q), phi stores bitwise. Seen on coarse/focused grids in the probe, on esolvS (model) in the pipeline: XLA picks the reduction tiling per compile",
+  "fix": "pb.tsum (fixed pairwise tree of elementwise adds, zero-padded to 2^k) for every sum in rf_energy",
+  "probe": "job 804318 rfprobe, d0d5c619bd23b13d_A first site batch, 2 fresh-compile processes: jnp.sum sum_sv/E_gauss differ (coarse, focused), all tsum pieces and post eM/eM0/eS bitwise",
+  "parity_with_tsum_pilot_pass1": {
+   "d0d5c619bd23b13d_B": 3.61e-07,
+   "d0d5c619bd23b13d_A": 3.61e-07,
+   "24d02660df3ac695_A": 3.57e-07,
+   "d0d5c619bd23b13d_AB": 4.55e-07,
+   "d6004cf2ee4008d2_AB": 7.21e-07,
+   "n_gt_1e6": 0
+  },
+  "time_pass2_pilot_s": {
+   "d0d5c619bd23b13d_B": 15.07,
+   "d0d5c619bd23b13d_A": 54.83,
+   "24d02660df3ac695_A": 69.5,
+   "d0d5c619bd23b13d_AB": 69.98,
+   "d6004cf2ee4008d2_AB": 161.98,
+   "sum": 371.4
+  },
+  "result": "PASS"
+ },
+ "frozen_copies": "a40-2026-11-19-m5a/-m5b (cancelled runs, unmodified), -m5c (job 804120), -m5d (jobs 804318 detA2, 804319 smoke)",
+ "closing_test_final": {
+  "job": 804318,
+  "code": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40-2026-11-19-m5d (frozen)",
+  "states": "5 pilot (logged rho) + 10 M0 (relfac estimator), 6,218 tautomers",
+  "passes_1_2_3_bitwise": true,
+  "fresh_process_from_tarball": {
+   "bitwise": true,
+   "compiles": 0,
+   "cache_hits": 43
+  },
+  "fresh_compile_process_1": {
+   "bitwise": true,
+   "compiles": 43
+  },
+  "fresh_compile_process_2": {
+   "bitwise": true,
+   "compiles": 43
+  },
+  "compiles": {
+   "pass1": 43,
+   "budget": 44,
+   "pass2": 0,
+   "pass3": 0
+  },
+  "parity_vs_v2_2329_taus": {
+   "max_rel_energy": 1.407e-06,
+   "n_energy_gt_1e6": 1,
+   "sitpot_max_abs": 0.0,
+   "sweeps_equal": 1.0,
+   "fixed_difference": {
+    "state": "d0d5c619bd23b13d_AB",
+    "quantity": "esolvM0 (coarse raw reaction-field energy; diagnostic, not used by assembly)",
+    "tau_index_mc_order": 110,
+    "rel": 1.407e-06,
+    "cause": "like-with-like: v2 sums rf_energy with XLA reduce (order chosen per compile); the pipeline uses the fixed pairwise tree (tsum). Same inputs (phi stores, sweeps bitwise as v2 order), different f32 summation order of E over the boundary points; deterministic across passes and compiles. All esolvM/esolvS <= 7.2e-7."
+   }
+  },
+  "time_s": {
+   "pilot_pass3": 371.22,
+   "m1_pass2_pilot": 370.1,
+   "all15_pass3": 991.1,
+   "cost": "+0.3% vs M1"
+  },
+  "outputs": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/m5/detA2/"
+ },
+ "files": "src/jaxpb/pb.py (spread, spread_scatter, tsum, rf_energy sum_), tests/test_determinism.py, jobs/a40_m5.sh"
+}

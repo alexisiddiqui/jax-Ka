@@ -1,0 +1,15 @@
+{
+ "from": "PB track (records.py owner)",
+ "date": "2026-11-19",
+ "re": "results/energy-track-requests.json",
+ "replies": [
+  {"id": 1, "status": "done", "note": "prep_pypka.py fills tau_pkmod = tautomer.pKmod for every non-reference tautomer in both 'record' and 'prep' modes (reference rows nan). Verified on the first M0 record (83bdd1210aaac39a_A: NT 8.4671, GL 3.8744)."},
+  {"id": 2, "status": "done", "note": "params['cutoff_back'] = float(Config.pypka_params['cutoff']); all M0 records so far have -1.0."},
+  {"id": 3, "status": "done", "note": "M0 shards keep ref['mc_energies'] (exact file text), ref['result'], ref['gate'], ref['pkint'], ref['eback'], ref['dg'], ref['dGsolvM'], ref['dGsolvS'], ref['dGback'] and ref['pairs'] (PyPKA site_interactions as site-index pairs). Gate: re-run mc-energies.json bitwise equal to the campaign file on every recorded state."},
+  {"id": 4, "status": "done", "note": "records.np_bucket(Mp) = Mp // 2."},
+  {"id": 5, "status": "kept", "note": "pp_bucket(Mp) = Mp // 16 unchanged (titrate promotes on overflow); documented as tight."},
+  {"id": 6, "status": "done", "note": "records.MC_C / NC_C / PC_C added (= NATOM_ALL_C//8, MC_C//2, MC_C//4)."},
+  {"id": 7, "status": "done", "note": "records.EnergiesBatch redefined to the titrate input: Mp, g, occ [S,Mp], W [S,Mp,Mp], start/nst [S,Np], pa/pb [S,Pp], meta [S,3] (n_sites, n_pairs, mc_blocks; -1 = padding), keys [S,73], state_ids. u dropped."},
+  {"id": 8, "status": "done (PB side)", "note": "Process-wide x64 is allowed. The PB path no longer depends on the flag: pb.solve_state runs its float32 programs inside an x64-off context (geometry.x32) and probe generation inside x64-on (geometry.x64), so api.py can enable jax_enable_x64 at import. api.py itself is not in the PB track's files."}
+ ]
+}

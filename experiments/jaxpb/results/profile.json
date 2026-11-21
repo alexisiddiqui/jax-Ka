@@ -1,0 +1,76 @@
+{
+ "milestone": "PROFILE (geometry + maps, measurement only; no src changes)",
+ "date": "2026-11-20",
+ "status": "DONE (A40, Coulson comp1400). Geometry 5.77 + maps 5.14 s/state of 15.87 PB wall (20-state mean; heavier than the M6 104-state mix 4.99/4.32). Geometry: GPU idle 31% (per-chunk host syncs), geo_arc kernels dominate, FP32 only 1.5x faster. Maps: GPU 97% busy, spread over query_min/reach_mask/probe tables; focused reach_mask largest single op. Two processes per A40: 0.99x aggregate (no headroom).",
+ "code": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40-2026-11-20-prof (frozen, MANIFEST.sha256; src identical to a40-2026-11-19-m6b, code_sha 248019f6605b3545; added jobs/prof_geomaps.py, jobs/a40_prof.sh)",
+ "jobs": {"smoke_failed_bug_in_wrapper": 805433, "smoke": 806024, "main": 806025, "conc": 806026},
+ "outputs": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/profile/{main/profile_raw.json, main/traces/2db42a83bc0b799f_{AB,B}.xplane.pb.gz, conc/thru_{single,dual_a,dual_b}.json, smoke/}; logs a40/logs/jpa-prof-*-80602[4-6].out",
+ "states": "20: triples 4066edfcdb3ea8e3 (c0), 70c9c3eaa126c736, 2db42a83bc0b799f, 29d8e3cd7c0c56e3 (AB c2), d0d5c619bd23b13d (pilot, AB c2) + c84a01ff31e41ea4_AB, 0dbad2ec4e61686e_AB, 4de4ae106157408f_A, 24d02660df3ac695_A, d6004cf2ee4008d2_AB (only class-3 state; M0 has classes 0-2). Class counts 7/7/5/1.",
+ "method": {
+  "A": "production pb.solve_state (backend auto=pallas, specrad estimate), stage marks via the MemTrack hook, untraced",
+  "B": "jax.profiler trace per state; GPU busy = union of kernel+copy intervals per stage window; 100% of kernel time falls inside the stage windows (clock alignment verified)",
+  "C": "geometry: copy of geometry_state with per-op block_until_ready timers; vertex/arc chunks split into gen/cand/burial/finish copies (parity 752/752 vertex and 3253/3253 arc chunks bitwise equal to geo_vertex/geo_arc); FP32 = the same jitted functions traced with f32/i32 inputs under x32, results discarded",
+  "D": "production maps_batch on every batch + exact block classes; batch-0 stage decomposition (separate vmapped jits) bitwise equal to maps_batch on all 6 outputs x 3 grids x 20 states; decomposition sum 5.18 vs fused 4.88 s/state (maps op seconds below scaled by 0.94)",
+  "E": "triple reuse: exact float32 probe-row match; reusable candidates = those whose generating atom (vertex) / atom pair (arc) is farther than R_a + (Rmax + 1e-3) from every partner atom (burial status provably equal to AB's); far probes found in AB = 100% in every chain (check)",
+  "F": "optimised-HLO element counts by dtype + XLA cost_analysis for geo_vertex/geo_arc; maps source-line attribution FAILED (optimised HLO metadata carries no source_file; kernels run inside CUDA command buffers, hlo_op = command_buffer_N) -> per-op maps split comes from the D decomposition only"
+ },
+ "stage_wall_s_per_state": {"geometry": 5.77, "maps": 5.14, "sor_incl_specrad_setup": 4.84, "post": 0.12, "pb_total": 15.87},
+ "ranked_geometry_plus_maps_s_per_state": [
+  {"op": "geometry geo_arc kernels (burial 54%, candidate gather 37%, gen 10%, finish 4%)", "s": 3.46, "share": 0.30},
+  {"op": "geometry GPU idle (3 host syncs + dispatch per chunk, ~200 chunks/state, ~9 ms each)", "s": 1.85, "share": 0.16},
+  {"op": "maps midpoint query_min coarse 0.46 + focused 0.45", "s": 0.91, "share": 0.08},
+  {"op": "maps coarse probe cell table 0.37 + coarse boundary probe-projection query 0.47", "s": 0.84, "share": 0.07},
+  {"op": "geometry geo_vertex kernels (burial 53%, cand 36%)", "s": 0.77, "share": 0.07},
+  {"op": "maps focused reach_mask", "s": 0.74, "share": 0.065},
+  {"op": "maps focused probe projection 0.37 + focused cells_probes 0.20", "s": 0.57, "share": 0.05},
+  {"op": "maps shell/contact test focused 0.34 + coarse 0.17", "s": 0.51, "share": 0.045},
+  {"op": "maps model grid (all stages, brute_min)", "s": 0.41, "share": 0.036},
+  {"op": "maps ion query_min coarse + focused", "s": 0.30, "share": 0.026},
+  {"op": "geometry pack / D2D copies", "s": 0.29, "share": 0.025},
+  {"op": "maps region_probes, combine, boundary, proj_atoms (c+f)", "s": 0.29, "share": 0.025},
+  {"op": "maps coarse reach_mask", "s": 0.27, "share": 0.024},
+  {"op": "site probes geometry_sites (f64)", "s": 0.17, "share": 0.015},
+  {"op": "host cKDTree pair list + padding + H2D", "s": 0.03, "share": 0.003},
+  {"note": "shares of the summed components (11.4 s; components come from trace + decomposition and overlap ~5% with the 10.91 s measured geometry+maps wall)"}
+ ],
+ "gpu_idle_share": {"geometry": 0.31, "maps": 0.03, "sor": 0.09, "post": 0.43, "note": "1 - busy/wall from traces (traced walls 6.11/5.26/4.71/0.12 s); geometry idle is sync/dispatch gaps, not host compute (cKDTree + padding only 0.03 s/state)"},
+ "fp32_vs_fp64_geometry_A40": {
+  "measured_s_per_state_f64_f32": {"geo_vertex": [0.985, 0.660], "geo_arc": [4.494, 2.992], "geometry_sites": [0.212, 0.061]},
+  "speedup": {"vertex_arc": 1.50, "geometry_sites": 3.5},
+  "saving_bound_s_per_state": 1.97,
+  "fp64_element_share": "21-23% of all HLO arithmetic elements (99.9% of float elements are f64; the rest is s64/s32/pred index and compare work)",
+  "achieved_fp64": "geo_vertex 5.38 GFLOP/chunk in ~26 ms = ~205 GFLOP/s, geo_arc ~180 GFLOP/s = ~35% of the A40 FP64 peak (~0.58 TFLOP/s): mixed FP64 + gather/memory bound, hence only 1.5x",
+  "parity_note": "f32 probe counts differ by +-1 in 2 of the first 4 states -> an FP32 path changes probes and needs a label parity check",
+  "gh200": "A40-specific. On GH200 (FP64 = 1/2 FP32) the FP64 term is ~32x cheaper relative to the A40, so the FP32 gain should shrink to the ~0-15% left over the index/memory work (estimate)"
+ },
+ "block_culling_exact_1625_sites": {
+  "focused": {"4^3": {"inside": 0.291, "outside": 0.446, "mixed": 0.263}, "8^3": {"inside": 0.197, "outside": 0.316, "mixed": 0.487}},
+  "coarse": {"4^3": {"inside": 0.016, "outside": 0.819, "mixed": 0.165}, "8^3": {"inside": 0.001, "outside": 0.781, "mixed": 0.218}},
+  "model": {"4^3": {"inside": 0.002, "outside": 0.952, "mixed": 0.046}, "8^3": {"inside": 0.0, "outside": 0.918, "mixed": 0.082}},
+  "probe_test_points_per_axis": {"focused": {"shell": 0.272, "need_probe_test": 0.174, "need_max": 0.407}, "coarse": {"shell": 0.051, "need": 0.031}, "model": {"shell": 0.025, "need": 0.003}},
+  "region_probe_fill": {"focused": "53.8k used of 131,072 slots (41%)", "coarse": "435k of 0.5-1.7M slots", "model": "5.0k of 8,192"},
+  "note": "outside = all midpoints eps_out and ion map constant in the block; edge blocks edge-padded; fractions over blocks (point-weighted within 0.02)"
+ },
+ "triple_reuse": {
+  "class2_triples_4": {"A_B_probes_found_in_AB": "0.87-0.97", "candidates_far_from_partner": "0.81-0.97", "reusable_share_of_triple_vertex_arc_kernel_time": "0.44-0.47"},
+  "small_c0_triple_4066edfcdb3ea8e3": {"probes_in_AB": 0.63, "reusable_share": 0.02, "note": "tiny chains, >90% of atoms near the interface"},
+  "check": "probes of far candidates are 100% present in AB (exact) for all 10 chains"
+ },
+ "concurrency": {
+  "kernel_busy": {"maps": 0.97, "sor": 0.91},
+  "theoretical_occupancy_time_weighted": {"maps": 0.98, "sor_pallas": 0.38, "geometry": 0.92},
+  "kernels_with_grid_below_84_SMs": "<1% of kernel time in every stage",
+  "two_process_test": {"single_s": 161.0, "dual_s": [325.5, 325.4], "aggregate_throughput_ratio": 0.99, "stage_stretch": {"geometry": 1.84, "maps": 2.20, "sor": 2.06}, "set": "6 states x 2 repeats, barrier-synchronised"},
+  "reading": "no headroom: maps and SOR already saturate the GPU; geometry's 31% idle is the only gap and is better recovered by removing the syncs"
+ },
+ "levers_estimates": [
+  {"lever": "geometry: drop the 3 host syncs per chunk (device-side offsets/counts, one sync per state)", "gain_s_per_state": "1.5-1.9 (~10-12% of PB)", "parity": "bitwise expected; probe order must be kept (nearest-probe ties); check"},
+  {"lever": "geometry: candidate slots K 32 -> 16 (measured max cell occupancy 10; 27x32 = 864 slots/point, ~70% padding); XL retry already exists", "gain_s_per_state": "1.0-2.0 (cand + burial ~90% of vertex/arc kernels)", "parity": "bitwise expected (padding inert); check + overflow counter"},
+  {"lever": "triple reuse: build A/B probes from AB's candidates, recompute only the interface", "gain": "~44% of the triple's geometry kernel time for class-2 triples (~1.5-2 s/state averaged over the triple)", "parity": "needs check: probe ORDER changes -> nearest-probe tie breaks"},
+  {"lever": "maps: block culling (skip 4^3 blocks predicted inside/outside: 74% focused, 84% coarse, 95% model)", "gain_s_per_state": "1.0-2.0 (query_min/contact/reach ~70% of maps)", "parity": "needs a conservative predictor + bitwise map check"},
+  {"lever": "FP32 geometry (A40 only)", "gain_s_per_state": "<= 2.0 (1.5x vertex/arc, 3.5x site probes); small on GH200", "parity": "changes probe sets (+-1 probe) -> label parity check required"},
+  {"lever": "maps: coarse probe cell table only for the ~7.5k boundary projections", "gain_s_per_state": "0.3-0.6", "parity": "bitwise expected; check"},
+  {"lever": "maps: reach_mask only over valid region probes (41% fill) / only 'need' points (17% focused)", "gain_s_per_state": "0.3-0.6", "parity": "bitwise expected (scatter-set of True is order-free); check"},
+  {"lever": "2 states per GPU", "gain": "none (0.99x measured)", "parity": "n/a"}
+ ]
+}

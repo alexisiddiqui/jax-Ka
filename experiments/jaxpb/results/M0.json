@@ -1,0 +1,87 @@
+{
+ "milestone": "M0",
+ "date": "2026-11-19",
+ "status": "partial: goldens (a)+(b), compile counter and CPU cache-tarball check done; GPU closing test (v2 reproduction, Pallas cache) staged -- Isambard sbatch rejects every job (AssocGrpCPUMinutesLimit: project CPU-minute allocation used up); GPU runs staged, not run",
+ "goldens_pilot5": {
+  "what": "5 pilot states: StateRecords from jaxpb-pilot-v1 rec.npz + saved mc-energies/result/gate + v2 outputs (v2_*), MC order",
+  "sha256": "ec537e59aa762cd0457b9b1015925882cccde53f6af5d9e3ba20bd4c6808e53e",
+  "paths": [
+   "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/m0/pilot/goldens_pilot5.npz",
+   "Isambard:$R/audits/jaxpb-pipeline/m0/goldens_pilot5.npz"
+  ]
+ },
+ "goldens_m0": {
+  "what": "99 val states (33 complete AB+A+B triples, 11 Ab/Ag + 22 general complexes, pilot complexes excluded) recorded with prep_pypka.py record on Coulson amd96 (DelPhi inputs/outputs, logged rho/sweeps/est. iterations, mc-energies, result, pKmod, site type, chargediff, occ, MC order, pairs)",
+  "summary": {
+   "n_states": 99,
+   "n_triples": 33,
+   "n_abag": 33,
+   "all_bitwise": true,
+   "max_pka_diff": 0,
+   "taus": 28568,
+   "classes": {
+    "0": 43,
+    "1": 34,
+    "2": 22,
+    "3": 0,
+    "4": 0
+   },
+   "max_taus_site": 5,
+   "max_charged": 11,
+   "max_model_atoms": 14,
+   "pb_wall_h": 3.019612503909286
+  },
+  "shards": [
+   {
+    "path": "m0_goldens_00.npz",
+    "sha256": "0fec0f34dbd7dd86a78926d5595abcf6123db4c3c8322a166168ce18dcd69863",
+    "n_states": 48,
+    "bytes": 226192242
+   },
+   {
+    "path": "m0_goldens_01.npz",
+    "sha256": "07f76365859e219554f4047c37725da1ac35518b561056bc9db499906efe1119",
+    "n_states": 48,
+    "bytes": 210020299
+   },
+   {
+    "path": "m0_goldens_02.npz",
+    "sha256": "39de6d81e37f9f7ff11b4802ce5c6dbf0cd12e5ab0e6ae1e3cd0a15cbf97da84",
+    "n_states": 3,
+    "bytes": 41982299
+   }
+  ],
+  "sha256_checked": "Coulson, Mac, Isambard (sha256sum -c OK on all three)",
+  "paths": [
+   "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/m0/shards/",
+   "Isambard:$R/audits/jaxpb-pipeline/m0/shards/",
+   "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/m0/rec/<sid>.npz (per state, with 2 full DelPhi log texts)"
+  ],
+  "gate": "re-run mc-energies.json bitwise equal to the campaign file on 99/99 states; pKa max diff 0.0",
+  "records_unit_test": "tests/test_records.py on the 3 shards: pass (99 states, 28568 tautomers; site order == mc-energies all_sites)"
+ },
+ "compile_counter": {
+  "module": "src/jaxpb/compile_budget.py (CompileCounter: jax.monitoring backend_compile events minus persistent-cache hits, names from jax_log_compiles)"
+ },
+ "cache_tarball_check_cpu": {
+  "jax": "0.11.1",
+  "device": "cpu:0",
+  "second_process_compiles": 0,
+  "cache_hits": 2,
+  "pass": true,
+  "note": "CPU stand-in (Coulson, JAX 0.11.1); Pallas in interpret mode lowers to plain XLA, so Pallas executable caching is NOT established here"
+ },
+ "closing_test_gpu": {
+  "status": "staged, not run (Isambard sbatch rejects every job (AssocGrpCPUMinutesLimit: project CPU-minute allocation used up); GPU runs staged, not run)",
+  "command": "cd $S/_submission/jaxpb-pipeline-m0 && sbatch -J jpp-m0gpu -t 01:00:00 jobs/isambard.sbatch $S/_submission/jaxpb-pipeline-m0 bash jobs/m0_gpu.sh",
+  "does": "Pallas Triton cache write/read (2 processes); v2 runner re-run on 5 pilot states under CompileCounter vs saved v2 outputs (fresh cache), then 2 states from the tarball in a new process",
+  "outputs": "Isambard:$R/audits/jaxpb-pipeline/m0/{cachecheck.*.json, v2repro/v2repro.run1.json, v2repro/v2repro.run2cache.json}"
+ },
+ "energy_track_requests": "all 8 handled, see results/pb-track-replies.json",
+ "isambard_ssh": "certificate expired 2026-11-19T02:39:20 (clifton cert); stopped per brief. The staged frozen copies $S/_submission/jaxpb-pipeline-{m0,m1,m2} hold code from before the jnp.asarray->device_put fix (JAX 0.11 compiles a jit(stage) per host-array shape for jnp.asarray); re-sync src/ from the local tree before running.",
+ "coulson_running": {
+  "M1 CPU stand-in (4 more pilot states, pass1+pass2)": "jobs 803800-803803 -> ~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/m1cpu/<sid>/m1_main.json",
+  "M1 compile recheck with device_put fix (d0d5 B)": "job 803844 -> m1cpu2/d0d5c619bd23b13d_B/m1_main.json",
+  "M2 CPU stand-in array (99 states)": "job 803810 (array 0-98%30) -> m2cpu/m2_state_<sid>.npz; pool with: sbatch -J jpp-m2agg -t 00:20:00 -c 2 code-m2cpu/jobs/coulson_cpu.sbatch <T>/code-m2cpu tests/test_pb_m2.py <T>/m2cpu <T>/m0/shards/m0_goldens_0{0,1,2}.npz --aggregate --tag m2"
+ }
+}

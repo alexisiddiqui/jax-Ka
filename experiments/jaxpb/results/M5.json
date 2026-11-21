@@ -1,0 +1,216 @@
+{
+ "milestone": "M5 (Pallas Triton SOR kernel)",
+ "date": "2026-11-19",
+ "status": "PASS (A40): sweeps 100.00% equal to the XLA reference (92,691 tautomer calls, 0 differ), energies and site potentials bitwise equal (0.0), L2 vs DelPhi passes with the Pallas backend on 99 M0 states, SOR 10.2x faster, per-state total 3.5x faster than the XLA path, deterministic (bitwise across passes, tarball and fresh compile), SOR = 1 executable, compiles 33 = budget",
+ "design": "sor.sor_solve: one Triton launch = one colour half-sweep for all W lanes on a (lane, 2048-point block) grid (launch boundary = red/black sync); flat zero-padded phi/rhs [W,NF] (OFF = ceil(n^2/BLK)*BLK); operator = uint8 code per point (bit0 ex, bit1 ey, bit2 ez in solute, bit3 ion) + 16-entry 1/diag table per operator (exact-integer diag partial sums -> bitwise the reference dinv); even colour first, fixed omega per lane, max-change < 0.01 checked every 10 sweeps, 500 cap, per-lane early exit (done lanes return at once), whole solve in a device while_loop (no host repacking); max over blocks is order-independent -> deterministic. One-program-per-lane rejected: needs a grid-wide barrier between colours inside one program (CTA barrier + global fence not exposed by Pallas) and gives only 256 CTAs of serial work.",
+ "xla_reference": "kept (sor.run_pool); phase-2 coefficient table padded to E = 2B so sor_block compiles once per width (budget 3, was 6 in M1)",
+ "backend_switch": "PBConfig.backend xla | pallas | auto (pallas when sor.pallas_available())",
+ "cpu_interpret_test": {
+  "test": "tests/test_sor_pallas.py n=17 W=8 E=4",
+  "sweeps_equal": 1.0,
+  "phi_maxabs": 0.0,
+  "bitwise_rerun": true,
+  "lane_blocks_over_needed": 1.0
+ },
+ "compile_budget": "compile_budget.budget(classes, backend): pallas SOR = 1 executable (sor_solve) vs xla 12",
+ "closing_tests": {
+  "job": 804395,
+  "code": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40-2026-11-19-m5d (frozen)",
+  "states": "5 pilot (logged rho) + 99 M0 (relfac estimator), 30,897 tautomers, both backends in one process",
+  "sweeps_equal_vs_xla": {
+   "all": 1.0,
+   "coarse": 1.0,
+   "focused": 1.0,
+   "model": 1.0,
+   "n_calls": 92691,
+   "n_diff": 0,
+   "criterion": ">= 0.999",
+   "pass": true
+  },
+  "energies_vs_xla": {
+   "max_rel": 0.0,
+   "criterion": "<= 1e-5",
+   "pass": true
+  },
+  "sitpot_vs_xla": {
+   "max_rel": 0.0,
+   "max_abs": 0.0,
+   "criterion": "<= 1e-5",
+   "pass": true
+  },
+  "l2_vs_delphi_pallas_99_states": {
+   "solv_median_rel": 7e-05,
+   "solv_p99_rel": 0.00429,
+   "sitpot_other_p99": 0.00143,
+   "sitpot_other_max": 0.338,
+   "sweeps_equal_delphi": [
+    0.9558,
+    0.9052,
+    0.865
+   ],
+   "pass": true,
+   "note": "identical to M2-a40 (outputs bitwise equal to the XLA path)"
+  },
+  "sor_time_warm_101_states_s": {
+   "xla": 3673.8,
+   "pallas": 358.7,
+   "speedup": 10.24,
+   "per_state_speedup_min_med_max": [
+    6.38,
+    10.24,
+    11.85
+   ],
+   "criterion": ">= 2x",
+   "pass": true
+  },
+  "total_time_warm_101_states_s": {
+   "xla": 4656.8,
+   "pallas": 1346.9,
+   "speedup": 3.46,
+   "median_per_state": {
+    "xla": 40.7,
+    "pallas": 11.8
+   }
+  },
+  "sor_waste_median": {
+   "xla_pool": 2.75,
+   "pallas": 1.0
+  },
+  "timing_excludes": "states during which either backend compiled (d0d5c619bd23b13d_B, d6004cf2ee4008d2_AB, bc31cb9685ce09b3_B)",
+  "outputs": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/m5/m5/m5.json"
+ },
+ "smoke_a40": {
+  "job": 804319,
+  "synthetic": {
+   "n17_W8": {
+    "sweeps_equal": 1.0,
+    "xla_s": 0.031,
+    "pallas_s": 0.0061
+   },
+   "n81_W64": {
+    "sweeps_equal": 1.0,
+    "xla_s": 0.505,
+    "pallas_s": 0.109
+   }
+  },
+  "d0d5c619bd23b13d_B_both_backends": {
+   "sweeps_equal": 1.0,
+   "energy_max_rel": 0.0,
+   "sitpot_max_abs": 0.0,
+   "compiles": {
+    "xla": 20,
+    "pallas": 1
+   },
+   "t_sor_s": {
+    "xla": 14.0,
+    "pallas": 2.3
+   },
+   "t_total_s": {
+    "xla": 44.9,
+    "pallas": 6.18
+   },
+   "sor_waste": {
+    "xla": 2.76,
+    "pallas": 1.0
+   },
+   "note": "both include their first-call compiles: not a warm speed-up; warm timings come from the m5 job (states without compiles)"
+  }
+ },
+ "determinism_pallas": {
+  "job": 804395,
+  "code": "a40-2026-11-19-m5d",
+  "states": "5 pilot + 10 M0 (6,218 tautomers)",
+  "passes_1_2_3_bitwise": true,
+  "fresh_from_tarball": {
+   "bitwise": true,
+   "compiles": 0,
+   "cache_hits": 33
+  },
+  "fresh_compile": {
+   "bitwise": true,
+   "compiles": 33
+  },
+  "parity_vs_v2": {
+   "max_rel_energy": 1.407e-06,
+   "n_gt_1e6": 1,
+   "which": "d0d5c619bd23b13d_AB esolvM0 tau 110 (same fixed tree-sum difference as the XLA path)",
+   "sweeps_equal": 1.0,
+   "sitpot_max_abs": 0.0
+  },
+  "compiles": {
+   "pass1": 33,
+   "budget_pallas": 33,
+   "pass2": 0,
+   "sor_solve": 1,
+   "budget_xla_path": 44,
+   "xla_path_pass1": 43
+  }
+ },
+ "timing_a40_warm_pallas_pass3_s": {
+  "d0d5c619bd23b13d_B": 5.0,
+  "d0d5c619bd23b13d_A": 18.3,
+  "24d02660df3ac695_A": 17.9,
+  "d0d5c619bd23b13d_AB": 22.8,
+  "d6004cf2ee4008d2_AB": 47.4,
+  "pilot_sum": 111.3,
+  "pilot_breakdown": {
+   "t_solves": 30.1,
+   "t_maps": 36.6,
+   "t_geometry": 43.6,
+   "t_post": 0.8
+  },
+  "m1_xla_pilot_sum": 370.1,
+  "v2_a40": {
+   "d0d5c619bd23b13d_B": 12.8,
+   "d0d5c619bd23b13d_A": 31.7
+  },
+  "v2_gh200_pilot_sum": 25.66
+ },
+ "per_state_time_vs_v2_and_m1_a40_s": {
+  "pallas_warm": {
+   "d0d5c619bd23b13d_B": 5.0,
+   "d0d5c619bd23b13d_A": 18.3,
+   "24d02660df3ac695_A": 17.9,
+   "d0d5c619bd23b13d_AB": 22.8,
+   "d6004cf2ee4008d2_AB": 47.4,
+   "sum": 111.3
+  },
+  "m1_xla": {
+   "d0d5c619bd23b13d_B": 15.1,
+   "d0d5c619bd23b13d_A": 54.6,
+   "24d02660df3ac695_A": 69.3,
+   "d0d5c619bd23b13d_AB": 69.7,
+   "d6004cf2ee4008d2_AB": 161.4,
+   "sum": 370.1
+  },
+  "v2_a40": {
+   "d0d5c619bd23b13d_B": 12.8,
+   "d0d5c619bd23b13d_A": 31.7
+  },
+  "summary": "3.3x faster than M1; 2.6x (d0d5 B) and 1.7x (d0d5 A) faster than v2 on the same A40. Pallas pilot breakdown: geometry 43.6 s, maps 36.6 s, SOR+setup 30.1 s, post 0.8 s -> geometry+maps now 72% of the time."
+ },
+ "compiles": {
+  "pallas_path_pass1": 33,
+  "budget_pallas": 33,
+  "pass2": 0,
+  "sor_solve": 1,
+  "xla_path_pass1": 43,
+  "budget_xla": 44,
+  "note": "XLA reference sor_block now 3 compiles (phase-2 table padded to E = 2B); budget table split by backend in compile_budget.py"
+ },
+ "files_changed": [
+  "src/jaxpb/sor.py (Pallas kernel, sor_solve, run_pool_pallas, op_code/op_lut, pallas_available)",
+  "src/jaxpb/pb.py (spread, tsum, setup1/2 codes + padded tables, backend switch, t_sor timing)",
+  "src/jaxpb/compile_budget.py",
+  "tests/test_sor_pallas.py",
+  "tests/test_pb_m5.py",
+  "tests/test_determinism.py",
+  "jobs/a40_m5.sh"
+ ],
+ "open_risks": [
+  "GH200 not run (Isambard out of credits): Pallas/Triton on Hopper and its speed unverified",
+  "geometry + maps are now the bottleneck (72% of per-state time)",
+  "bitwise equality to XLA holds on the A40; another GPU or Triton version may contract FP differently (criterion is >= 99.9% sweeps, <= 1e-5)",
+  "grid-wide empty programs for done lanes cost launches (included in timings)"
+ ]
+}

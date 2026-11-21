@@ -1,0 +1,23 @@
+{
+ "from": "energy track (assemble.py, titrate.py)",
+ "date": "2026-11-19",
+ "status": "assemble.energies() and titrate.titrate() consume records.StateRecord + PBOut and records.Energies as defined in records.py (md5 5a3e4cfb...); no field is blocking. Requests below are for consistency and margins.",
+ "requests": [
+  {"id": 1, "kind": "content", "field": "StateRecord.tau_pkmod",
+   "ask": "Fill tau_pkmod for every non-reference tautomer in producer 'record' and 'prep' modes (tautomer.pKmod = first line of <sts_path>/<RES>tau<k+1>.st). assemble.inputs_from_record raises on nan. from_pilot_rec leaves it nan; the M3 test fills it from the G54A7 table (all 32 values checked against the .st files on Coulson)."},
+  {"id": 2, "kind": "content", "field": "StateRecord.params['cutoff_back']",
+   "ask": "Record PyPKA's pypka_params['cutoff'] (-1 for linear PB). assemble only implements cutoff -1 (all-atom e_back) and raises otherwise; from_pilot_rec sets nan (accepted)."},
+  {"id": 3, "kind": "content", "field": "StateRecord.ref['mc_energies'] (+ ref['pkint'], ref['eback'])",
+   "ask": "Keep the saved mc-energies.json text and PyPKA's per-tautomer pkint/eback in the M0 golden shards: the M3 test (tests/test_assemble.py m0 <out> <shards...>) compares g, W, occ, start/nst and pairs against it and e_back/pKint against ref."},
+  {"id": 4, "kind": "table", "field": "records.np_bucket (titration Np)",
+   "ask": "Np = Mp//4 overflows in the 64 bucket on the 426 v2 states (12 states with n up to 18 > 16 are promoted to Mp 128). Since n <= M/2 <= Mp/2 always, Np = Mp//2 would make site overflow impossible; titrate promotes automatically either way. Decision for the controller; see M4.json for whether promotion changes MC counts bitwise."},
+  {"id": 5, "kind": "table", "field": "records.pp_bucket (titration Pp)",
+   "ask": "Pp = Mp//16 holds on the 426 states but is tight (Mp 256: max 14 of 16 pairs; 512: 28 of 32). titrate promotes on overflow."},
+  {"id": 6, "kind": "table", "field": "assembly microstate class",
+   "ask": "assemble uses Mc = NATOM_ALL_C[c]//8 microstates, Nc = Mc//2 sites, Pc = Mc//4 pairs, site atoms <= QM (pilot max 14). Tightest pilot state: 24d02660df3ac695_A, M 429 of Mc 512 at class 1. If you prefer these in records.py, add MC_C / NC_C / PC_C tables and assemble will import them."},
+  {"id": 7, "kind": "dataclass", "field": "records.EnergiesBatch",
+   "ask": "titrate builds its own padded batch: g/occ [S,Mp] (u is formed in-jit from a 73-value pH table, bitwise equal to v2's host u and 73x smaller), W [S,Mp,Mp], start/nst [S,Np], pa/pb [S,Pp], meta [S,3] = (n_sites, n_pairs, mc_blocks; -1 marks a padding state), keys [S,73]. If EnergiesBatch is meant to be the titrate input, it needs n_sites/n_pairs per state and could drop u in favour of g/occ."},
+  {"id": 8, "kind": "config", "field": "jax_enable_x64",
+   "ask": "assemble accumulates e_back / pKint / g in float64 (an f32 e_back sum is off by 1.7e-5 kT on d6004cf2ee4008d2_AB, over the 1e-5 criterion) and raises if x64 is off. Design section 6.9 already sets process-wide x64; api.py should set it at import."}
+ ]
+}

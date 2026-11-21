@@ -1,0 +1,136 @@
+{
+ "milestone": "M1",
+ "date": "2026-11-19",
+ "status": "code complete; CPU stand-in tests on Coulson; GPU closing test staged -- Isambard sbatch rejects every job (AssocGrpCPUMinutesLimit: project CPU-minute allocation used up); GPU runs staged, not run",
+ "files": [
+  "src/jaxpb/records.py",
+  "src/jaxpb/geometry.py",
+  "src/jaxpb/maps.py",
+  "src/jaxpb/sor.py",
+  "src/jaxpb/pb.py",
+  "src/jaxpb/compile_budget.py",
+  "tests/test_pb_m1.py",
+  "tests/test_records.py",
+  "jobs/m1_gpu.sh"
+ ],
+ "criteria": {
+  "energies_rel": "<= 1e-6 vs v2",
+  "sitpot": "<= 1e-6 (relative to the tautomer's potential scale; abs reported)",
+  "sweeps": "100% equal to v2",
+  "compiles": "<= compile_budget.budget(classes), 0 on a second pass",
+  "overflow": "Ka 24 / Kp 768, forced overflow -> automatic XL retry, identical outputs"
+ },
+ "cpu_standin_per_state": {
+  "d0d5c619bd23b13d_B": {
+   "summary": {
+    "max_rel_energy": 1.3276438106146451e-06,
+    "n_energy_gt_1e6": 5,
+    "sitpot_max_abs": 3.814697265625e-05,
+    "sitpot_max_rel": 2.8731355505128835e-07,
+    "sweeps_equal_min": 1.0,
+    "compiles_pass1": 30,
+    "budget": 23,
+    "compiles_pass2": 0
+   },
+   "classes": [
+    0
+   ],
+   "budget": 23,
+   "overflow_test": {
+    "state": "d0d5c619bd23b13d_B",
+    "forced_Ka": 4,
+    "xl_retries": 6,
+    "reasons": [
+     {
+      "cell_atoms": true,
+      "cell_probes": false,
+      "compaction": false,
+      "model_probes": false
+     },
+     {
+      "cell_atoms": true,
+      "cell_probes": false,
+      "compaction": false,
+      "model_probes": false
+     },
+     {
+      "cell_atoms": true,
+      "cell_probes": false,
+      "compaction": false,
+      "model_probes": false
+     },
+     {
+      "cell_atoms": true,
+      "cell_probes": false,
+      "compaction": false,
+      "model_probes": false
+     },
+     {
+      "cell_atoms": true,
+      "cell_probes": false,
+      "compaction": false,
+      "model_probes": false
+     },
+     {
+      "cell_atoms": true,
+      "cell_probes": false,
+      "compaction": false,
+      "model_probes": false
+     }
+    ],
+    "compiles": 1,
+    "max_abs_vs_normal": 0.0,
+    "sweeps_equal": true
+   },
+   "pass2_identical_sweeps": true,
+   "pass2_max_abs": {
+    "d0d5c619bd23b13d_B": 0.0
+   },
+   "compile_pass1_names": [
+    "jit(stage)",
+    "jit(_cell_hash)",
+    "jit(stage)",
+    "jit(stage)",
+    "jit(geo_pairs)",
+    "jit(stage)",
+    "jit(geo_vertex)",
+    "jit(geo_pack)",
+    "jit(geo_arc)",
+    "jit(stage)",
+    "jit(stage)",
+    "jit(stage)",
+    "jit(stage)",
+    "jit(geometry_sites)",
+    "jit(maps_batch)",
+    "jit(setup1)",
+    "jit(stage)",
+    "jit(stage)",
+    "jit(lanes_init)",
+    "jit(sor_block)",
+    "jit(lanes_store)",
+    "jit(stage)",
+    "jit(lanes_take)",
+    "jit(sor_block)",
+    "jit(lanes_store)",
+    "jit(setup2)",
+    "jit(sor_block)",
+    "jit(post)",
+    "jit(sor_block)",
+    "jit(lanes_init)"
+   ]
+  }
+ },
+ "probe_centres": "geometry_state bitwise equal (same order) to v2 probe_centres_gpu on d0d5 B (222,581 probes), Mac CPU",
+ "closing_test_gpu": {
+  "status": "staged, not run",
+  "command": "cd $S/_submission/jaxpb-pipeline-m1 && sbatch -J jpp-m1 -t 02:00:00 jobs/isambard.sbatch $S/_submission/jaxpb-pipeline-m1 bash jobs/m1_gpu.sh",
+  "outputs": "Isambard:$R/audits/jaxpb-pipeline/m1/{m1_main.json, m1_cache.json, cc_m1.tar}"
+ },
+ "isambard_ssh": "certificate expired 2026-11-19T02:39:20 (clifton cert); stopped per brief. The staged frozen copies $S/_submission/jaxpb-pipeline-{m0,m1,m2} hold code from before the jnp.asarray->device_put fix (JAX 0.11 compiles a jit(stage) per host-array shape for jnp.asarray); re-sync src/ from the local tree before running.",
+ "coulson_running": {
+  "M1 CPU stand-in (4 more pilot states, pass1+pass2)": "jobs 803800-803803 -> ~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/m1cpu/<sid>/m1_main.json",
+  "M1 compile recheck with device_put fix (d0d5 B)": "job 803844 -> m1cpu2/d0d5c619bd23b13d_B/m1_main.json",
+  "M2 CPU stand-in array (99 states)": "job 803810 (array 0-98%30) -> m2cpu/m2_state_<sid>.npz; pool with: sbatch -J jpp-m2agg -t 00:20:00 -c 2 code-m2cpu/jobs/coulson_cpu.sbatch <T>/code-m2cpu tests/test_pb_m2.py <T>/m2cpu <T>/m0/shards/m0_goldens_0{0,1,2}.npz --aggregate --tag m2"
+ },
+ "compile_note": "CPU stand-in pass 1 on d0d5 B compiled 30 programs vs budget 23: 11 were jit(stage) from host-level jnp.asarray on JAX 0.11 (19 PB programs, within budget). Fixed (device_put); recheck job 803844 pending. Pass 2: 0 compiles."
+}

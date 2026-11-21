@@ -32,6 +32,7 @@ mps = [
 ogqt = "pkanet.cli:main"
 jaxpropka = "jaxpropka.cli:main"
 pkabench = "pkabench.cli:main"
+jaxpb = "jaxpb.api:main"
 
 [tool.uv]
 conflicts = [[{ extra = "pkai" }, { extra = "triton" }], [{ extra = "torch" }, { extra = "triton" }]]

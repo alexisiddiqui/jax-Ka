@@ -1,0 +1,151 @@
+{
+ "milestone": "M3 assembly (energy track)",
+ "date": "2026-11-19",
+ "status": "PASS on Coulson CPU (JAX 0.6.2, solver env). Authoritative Isambard run NOT done: every Isambard sbatch (even a 1-CPU 1-min --test-only) is rejected with AssocGrpCPUMinutesLimit (project CPU-minute allocation exhausted). Frozen copy and inputs staged; one sbatch away.",
+ "files": {
+  "module": "work/jaxpb-pipeline/src/jaxpb/assemble.py",
+  "tests": "work/jaxpb-pipeline/tests/test_assemble.py (modes: local, m3, m0, packmce)",
+  "jobs": [
+   "work/jaxpb-pipeline/jobs/energy_isambard.sbatch",
+   "work/jaxpb-pipeline/jobs/energy_coulson.sbatch"
+  ]
+ },
+ "closing_test": {
+  "criterion": "g and W vs saved mc-energies.json <= 1e-5 kT (abs) on DelPhi's own recorded outputs",
+  "states": "5 pilot states (jaxpb-pilot-v1 rec.npz + mc-energies.json); the ~100 M0 states are not published yet (3 records on Coulson m0/rec at the time) -> run 'test_assemble.py m0 <out> <shards>' when the shards exist",
+  "worst_g_or_W_kT": 1.8308935665345416e-06,
+  "per_state_f64": {
+   "d0d5c619bd23b13d_B": {
+    "g_maxabs": 8.134658244784987e-07,
+    "W_maxabs": 1.902154362909414e-07,
+    "W_p99abs": 3.8626084799339836e-08,
+    "eback_maxabs": 4.440892098500626e-15,
+    "pkint_maxabs": 3.3306690738754696e-15,
+    "occ_equal": true,
+    "start_nst_equal": true,
+    "pairs_equal": true,
+    "npairs": 1,
+    "size_class": 0,
+    "promoted": false
+   },
+   "d0d5c619bd23b13d_A": {
+    "g_maxabs": 9.460242083036974e-07,
+    "W_maxabs": 5.052218003953612e-07,
+    "W_p99abs": 2.201718944251457e-08,
+    "eback_maxabs": 1.7763568394002505e-14,
+    "pkint_maxabs": 8.881784197001252e-15,
+    "occ_equal": true,
+    "start_nst_equal": true,
+    "pairs_equal": true,
+    "npairs": 4,
+    "size_class": 1,
+    "promoted": false
+   },
+   "24d02660df3ac695_A": {
+    "g_maxabs": 1.777132581537444e-06,
+    "W_maxabs": 8.578567189942987e-07,
+    "W_p99abs": 2.6087825955034067e-08,
+    "eback_maxabs": 3.019806626980426e-14,
+    "pkint_maxabs": 1.4210854715202004e-14,
+    "occ_equal": true,
+    "start_nst_equal": true,
+    "pairs_equal": true,
+    "npairs": 8,
+    "size_class": 0,
+    "promoted": false
+   },
+   "d0d5c619bd23b13d_AB": {
+    "g_maxabs": 1.0536189094523252e-06,
+    "W_maxabs": 7.592307014192556e-07,
+    "W_p99abs": 1.9232642589628313e-08,
+    "eback_maxabs": 3.108624468950438e-14,
+    "pkint_maxabs": 1.4654943925052066e-14,
+    "occ_equal": true,
+    "start_nst_equal": true,
+    "pairs_equal": true,
+    "npairs": 5,
+    "size_class": 1,
+    "promoted": false
+   },
+   "d6004cf2ee4008d2_AB": {
+    "g_maxabs": 1.8308935665345416e-06,
+    "W_maxabs": 1.0216486181491291e-06,
+    "W_p99abs": 2.0699905817211928e-08,
+    "eback_maxabs": 7.105427357601002e-14,
+    "pkint_maxabs": 3.1530333899354446e-14,
+    "occ_equal": true,
+    "start_nst_equal": true,
+    "pairs_equal": true,
+    "npairs": 39,
+    "size_class": 2,
+    "promoted": false
+   }
+  },
+  "records_interface": {
+   "worst_g_or_W_kT": 1.8308935665345416e-06,
+   "all_exact_fields": true,
+   "classes_touched": [
+    0,
+    1,
+    2,
+    3
+   ],
+   "compiles_first_pass": 1,
+   "compiles_second_pass": 0,
+   "note": "StateRecord (records.from_pilot_rec) + PBOut -> assemble.energies -> records.Energies; site order equals mc-energies all_sites for all 5; occ equals record tau_occ"
+  },
+  "pairs_on_426_v2_states": {
+   "states": 426,
+   "equal": 426,
+   "compiles": 2,
+   "classes": [
+    0,
+    1
+   ]
+  },
+  "e_back_vs_pypka_tau_eback_max": 7.105427357601002e-14,
+  "pkint_vs_pypka_tau_pkint_max": 3.1530333899354446e-14,
+  "pkmod_table_vs_G54A7_sts_files_mismatches": [],
+  "passed": true
+ },
+ "f32_accumulation_diagnostic": {
+  "worst_g_or_W_kT": 1.82937638797398e-05,
+  "per_state_g_maxabs": {
+   "d0d5c619bd23b13d_B": 2.7208144572909987e-06,
+   "d0d5c619bd23b13d_A": 7.2503270160950706e-06,
+   "24d02660df3ac695_A": 7.228704578920997e-06,
+   "d0d5c619bd23b13d_AB": 1.0876708976148564e-05,
+   "d6004cf2ee4008d2_AB": 1.82937638797398e-05
+  },
+  "note": "f32 e_back over ~9k atoms misses 1e-5 on d0d5 AB (1.09e-5) and d6004 AB (1.83e-5) -> default acc='f64' (needs jax_enable_x64)"
+ },
+ "compile_counts": {
+  "first_pass": 3,
+  "classes_touched": [
+   0,
+   1,
+   2
+  ],
+  "second_pass": 0,
+  "second_pass_bitwise_identical": true
+ },
+ "pre_records_run": {
+  "path": "Coulson energy/M3/test_m3.json",
+  "worst_g_or_W_kT": 1.8308935665345416e-06,
+  "passed": true,
+  "note": "local class table before records.py landed; same numbers"
+ },
+ "paths": {
+  "coulson_result": "~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/energy/M3-records/test_m3.json (frozen code energy/code-M3-records)",
+  "coulson_result_pre_records": "~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/energy/M3/test_m3.json (frozen code energy/code-M3)",
+  "isambard_frozen_code": "$S/_submission/jaxpb-pipeline-M3/ (staged, not yet used)",
+  "isambard_inputs": "$R/audits/jaxpb-pilot-v1/ref/<state>.rec.npz + $R/audits/jaxpb-pipeline/M3/inputs/pilot5-mce.npz (sha256 2f4a0fdf329ead74a7e93ea32b04be12bbceab1b113b23009cd51b4350eceee9, Coulson=Mac=Isambard)",
+  "isambard_submit": "cd $S/_submission/jaxpb-pipeline-M3 && JAXPB_MCE=$R/audits/jaxpb-pipeline/M3/inputs/pilot5-mce.npz sbatch -J jpe-m3 -t 00:20:00 jobs/energy_isambard.sbatch $S/_submission/jaxpb-pipeline-M3 test_assemble.py m3 $R/audits/jaxpb-pipeline/M3 $R/audits/jaxpb-pilot-v1/ref $R/audits/mf-surrogate-v2/states-v2.npz"
+ },
+ "deviations": [
+  "e_back / pKint / g accumulate in float64 (design: f32 throughout); f32 fails the 1e-5 criterion. W stays one f32 GEMM at precision HIGHEST.",
+  "Microstate class dims Mc = NATOM_ALL_C[c]/8, Nc = Mc/2, Pc = Mc/4, site atoms <= records.QM are defined in assemble.py (records.py has no assembly microstate table); overflow -> next class, never silent.",
+  "Tautomer charges are records' f32 tau_q; PyPKA uses the f64 .st charges in calcInteractionWith -> W differs by <= 1e-11 (ref rows) to 1e-6 kT, inside tolerance.",
+  "Only linear PB (cutoff -1, all-atom e_back) is implemented; inputs_from_record raises otherwise."
+ ]
+}

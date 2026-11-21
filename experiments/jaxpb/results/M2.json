@@ -1,0 +1,60 @@
+{
+ "milestone": "M2",
+ "date": "2026-11-19",
+ "status": "estimator found and ported; CPU stand-in on the 99 M0 states; GPU closing test staged -- Isambard sbatch rejects every job (AssocGrpCPUMinutesLimit: project CPU-minute allocation used up); GPU runs staged, not run",
+ "method": "DelPhi 5.1 relfac (disassembled from delphi4py rundelphi .so): v = product of normalised sines sinf(i pi/80) sqrt2/sqrt80 (float32), w = J(J(v)) with the point-Jacobi PB operator, rho = 2 * float32 SEQUENTIAL sum over odd points (Fortran order) of v*w; rho > 1 -> 0.995. The float32 sequential sum lowers rho by ~1.2e-4 vs the exact dot product and is required.",
+ "estimator_vs_logged_on_identical_maps": "Mac CPU, d0d5 B sites 0-3: |rho - logged| <= 9.5e-7 (4 of 8 exact to float32 ulps)",
+ "criteria": {
+  "sweeps_focused": ">= 0.87",
+  "sweeps_model": ">= 0.83",
+  "solv_median_rel": "<= 1e-3",
+  "solv_p99_rel": "<= 1e-2",
+  "sitpot_other_p99": "<= 0.02 kT/e"
+ },
+ "cpu_standin": {
+  "n_states": 9,
+  "n_taus": 1203,
+  "solv_all_median_rel": 6.65096364076937e-05,
+  "solv_all_p99_rel": 0.004637454718919964,
+  "esolvM_median_rel": 0.00011736316184251046,
+  "esolvM_p99_rel": 0.00645656151516946,
+  "esolvS_median_rel": 4.5772476457178387e-05,
+  "esolvS_p99_rel": 0.0004975394077790159,
+  "sitpot_other_p99": 0.004427133593708277,
+  "sitpot_other_max": 0.046243816614151,
+  "sweeps_equal_coarse": 0.9559434746467166,
+  "sweeps_equal_focused": 0.8977556109725686,
+  "sweeps_equal_model": 0.8719866999168745,
+  "per_state_focused_min": 0.8707482993197279,
+  "per_state_model_min": 0.8378378378378378,
+  "xl_retries": 0,
+  "class_bumps": 0,
+  "compiles": 31,
+  "budget": 32,
+  "classes": [
+   0,
+   1
+  ],
+  "wall_s": 0.040173939894884825,
+  "rho_focused_maxabs_err": 1.3708933960243641e-06,
+  "rho_model_maxabs_err": 2.3840928953244855e-07,
+  "rho_focused_exact_frac": 0.8029925187032418,
+  "rho_model_exact_frac": 1.0,
+  "pass": {
+   "sweeps": true,
+   "l2": true
+  }
+ },
+ "cpu_standin_path": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/m2cpu/",
+ "closing_test_gpu": {
+  "status": "staged, not run",
+  "command": "cd $S/_submission/jaxpb-pipeline-m2 && sbatch -J jpp-m2 -t 04:00:00 jobs/isambard.sbatch $S/_submission/jaxpb-pipeline-m2 bash jobs/m2_gpu.sh",
+  "outputs": "Isambard:$R/audits/jaxpb-pipeline/m2/m2.json"
+ },
+ "isambard_ssh": "certificate expired 2026-11-19T02:39:20 (clifton cert); stopped per brief. The staged frozen copies $S/_submission/jaxpb-pipeline-{m0,m1,m2} hold code from before the jnp.asarray->device_put fix (JAX 0.11 compiles a jit(stage) per host-array shape for jnp.asarray); re-sync src/ from the local tree before running.",
+ "coulson_running": {
+  "M1 CPU stand-in (4 more pilot states, pass1+pass2)": "jobs 803800-803803 -> ~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/m1cpu/<sid>/m1_main.json",
+  "M1 compile recheck with device_put fix (d0d5 B)": "job 803844 -> m1cpu2/d0d5c619bd23b13d_B/m1_main.json",
+  "M2 CPU stand-in array (99 states)": "job 803810 (array 0-98%30) -> m2cpu/m2_state_<sid>.npz; pool with: sbatch -J jpp-m2agg -t 00:20:00 -c 2 code-m2cpu/jobs/coulson_cpu.sbatch <T>/code-m2cpu tests/test_pb_m2.py <T>/m2cpu <T>/m0/shards/m0_goldens_0{0,1,2}.npz --aggregate --tag m2"
+ }
+}

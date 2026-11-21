@@ -1,0 +1,131 @@
+{
+ "milestone": "M2",
+ "date": "2026-11-19",
+ "gpu": "1x NVIDIA A40 (sm_86, 46 GB), Coulson comp1400, partition oc, 12 CPUs, 2G/CPU",
+ "env": "~/_runtime/jax-Ka/pkabench/envs/ogqt-main-7c3e3e9 (JAX 0.11.1 + jax_cuda12_plugin 0.11.1; Isambard has 0.11.2)",
+ "code": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40-2026-11-19b (frozen, read-only, MANIFEST.sha256 = local src/tests/jobs + v2pilot (jaxrun2/maps2/jaxpb, sha256 == Isambard $S/_submission/jaxpb-pilot-v2) + v2mc/gmc.py (== mf-surrogate-v2 MANIFEST))",
+ "a40_shim": "jobs/a40site/sitecustomize.py (on PYTHONPATH via jobs/a40.sbatch only): JAX 0.11.1 pallas/triton/gpu_info has no 'NVIDIA A40' entry, so every Triton pallas_call fails ('No supported GPU devices found'); registers it as arch 8.6/cc 86 (= the A10 entry) via gpu_info.registry. Not needed on GH200 (listed).",
+ "status": "PASS on the A40 (all 99 M0 states, one process, relfac estimator, no logged rho): pooled sweeps focused 0.905 >= 0.87, model 0.865 >= 0.83; L2 solvation median 7.0e-5 <= 1e-3, p99 4.3e-3 <= 1e-2, site potentials at other sites p99 0.0014 <= 0.02 kT/e. Reference is DelPhi on CPU, so no cross-architecture question; GPU sweep-equality rates equal the Coulson CPU stand-in on the same 98 states to 3e-4.",
+ "criteria": {
+  "sweeps_focused": ">= 0.87",
+  "sweeps_model": ">= 0.83",
+  "solv_median_rel": "<= 1e-3",
+  "solv_p99_rel": "<= 1e-2",
+  "sitpot_other_p99": "<= 0.02 kT/e"
+ },
+ "summary": {
+  "n_states": 99,
+  "n_taus": 28568,
+  "solv_all_median_rel": 6.99914044219333e-05,
+  "solv_all_p99_rel": 0.00429252215381212,
+  "esolvM_median_rel": 0.00011201842633774757,
+  "esolvM_p99_rel": 0.006897592158835527,
+  "esolvS_median_rel": 4.563510447275951e-05,
+  "esolvS_p99_rel": 0.0005972492849591074,
+  "sitpot_other_p99": 0.0014317938126623651,
+  "sitpot_other_max": 0.3377861976623535,
+  "sweeps_equal_coarse": 0.9557896947633716,
+  "sweeps_equal_focused": 0.9051736208345001,
+  "sweeps_equal_model": 0.8649887986558387,
+  "per_state_focused_min": 0.8164556962025317,
+  "per_state_model_min": 0.8266666666666667,
+  "xl_retries": 0,
+  "class_bumps": 1,
+  "compiles": 2,
+  "budget": 39,
+  "classes": [
+   0,
+   1,
+   2
+  ],
+  "wall_s": 5272.727760211565,
+  "rho_focused_maxabs_err": 1.406668743897388e-05,
+  "rho_model_maxabs_err": 4.7679262082933604e-07,
+  "rho_focused_exact_frac": 0.7470246429571549,
+  "rho_model_exact_frac": 1.0,
+  "pass": {
+   "sweeps": true,
+   "l2": true
+  }
+ },
+ "per_state_notes": {
+  "focused_below_087": [
+   "0bd6665815002616_A",
+   "0bd6665815002616_AB",
+   "132d9ce08da3f26e_A",
+   "2db42a83bc0b799f_A",
+   "3c2b891c18a4889f_A",
+   "3c2b891c18a4889f_AB",
+   "4de4ae106157408f_B",
+   "81dc77e92ecba804_A",
+   "8c88df6305b13d00_B",
+   "ba3940ecab26bba9_AB",
+   "bc31cb9685ce09b3_AB",
+   "c399f4725fafb8cd_AB",
+   "c84a01ff31e41ea4_A",
+   "c84a01ff31e41ea4_B",
+   "fe0046c293f3a675_B"
+  ],
+  "model_below_083": [
+   "81dc77e92ecba804_B",
+   "ba3940ecab26bba9_A"
+  ],
+  "sitpot_other_max_gt_0p1": {
+   "bc31cb9685ce09b3_AB": 0.338,
+   "70c9c3eaa126c736_AB": 0.125,
+   "4464f45c71f16002_AB": 0.158,
+   "4464f45c71f16002_B": 0.16,
+   "713f496d4bca8cdb_AB": 0.126,
+   "4b7712687b4fa527_A": 0.115,
+   "ce8c3f0075ffb9fe_AB": 0.129,
+   "3e61836a26c12ef3_AB": 0.102,
+   "997613bd0fd7a5ee_AB": 0.137,
+   "997613bd0fd7a5ee_B": 0.134
+  },
+  "class_bump": [
+   "0bd6665815002616_AB"
+  ],
+  "note": "criteria are pooled rates; 15 states have a focused rate < 0.87 (min 0.816) and per-state model min is 0.827; max site-potential error 0.338 kT/e on bc31cb9685ce09b3_AB (p99 unaffected)."
+ },
+ "gpu_vs_cpu_standin_same_states": {
+  "states": 98,
+  "sweeps_equal_gpu": [
+   0.9569,
+   0.9012,
+   0.8671
+  ],
+  "sweeps_equal_cpu": [
+   0.9569,
+   0.9012,
+   0.8673
+  ],
+  "max_abs_diff_esolvM_p99": 0.00044,
+  "source": "Coulson m2cpu/m2_state_<sid>.npz (CPU JAX 0.11.1, job 803810)"
+ },
+ "rho_estimator": "focused max |rho - logged| 1.4e-5 on the A40 (CPU stand-in 1.4e-6 on 9 states), exact (< 5e-7) 74.7% focused / 100% model",
+ "compiles": {
+  "n": 2,
+  "budget": 39,
+  "note": "process started from the M1 tarball (1,047 entries): 2 new compiles (class-2 / XL-variant programs not touched in M1); re-tarred 1,049 entries"
+ },
+ "timing_a40": {
+  "states": 99,
+  "taus": 28568,
+  "sum_s": 4437,
+  "median_s_per_state": 39.4,
+  "mean_s_per_state": 44.8,
+  "max_s_per_state": 141.6,
+  "s_per_tautomer": 0.155,
+  "job_wall_s": 5273,
+  "sor_waste_median": 2.75
+ },
+ "outputs": {
+  "result": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/m2/m2.json",
+  "cache_tar": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/m2/cc_m2.tar"
+ },
+ "jobs": {
+  "m2_m3": 803876
+ },
+ "still_needs_gh200": "nothing for the closing criteria; GH200 timing only.",
+ "frozen_copy_note": "a40-2026-11-19b used for M0-M3; a40-2026-11-19c (titrate.py fix only) for the final M4; a40-2026-11-19 was used once for the failed first smoke job (803866) and left unmodified"
+}

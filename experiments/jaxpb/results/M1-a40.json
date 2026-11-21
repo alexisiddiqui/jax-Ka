@@ -1,0 +1,361 @@
+{
+ "milestone": "M1",
+ "date": "2026-11-19",
+ "gpu": "1x NVIDIA A40 (sm_86, 46 GB), Coulson comp1400, partition oc, 12 CPUs, 2G/CPU",
+ "env": "~/_runtime/jax-Ka/pkabench/envs/ogqt-main-7c3e3e9 (JAX 0.11.1 + jax_cuda12_plugin 0.11.1; Isambard has 0.11.2)",
+ "code": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40-2026-11-19b (frozen, read-only, MANIFEST.sha256 = local src/tests/jobs + v2pilot (jaxrun2/maps2/jaxpb, sha256 == Isambard $S/_submission/jaxpb-pilot-v2) + v2mc/gmc.py (== mf-surrogate-v2 MANIFEST))",
+ "a40_shim": "jobs/a40site/sitecustomize.py (on PYTHONPATH via jobs/a40.sbatch only): JAX 0.11.1 pallas/triton/gpu_info has no 'NVIDIA A40' entry, so every Triton pallas_call fails ('No supported GPU devices found'); registers it as arch 8.6/cc 86 (= the A10 entry) via gpu_info.registry. Not needed on GH200 (listed).",
+ "status": "GPU closing test run on A40. Sweeps 100% equal PASS; pass-2 compiles 0 PASS; fresh process from tarball 0 compiles (45 hits) PASS; overflow XL retry identical PASS. Energies <= 1e-6: FAIL by 1 tautomer of 2,329 (d0d5 AB esolvM 1.05e-6) in pass 1/2 but 0 in the fresh-process run -- NOT cross-architecture (same value vs the A40 v2 run): it is the GPU run-to-run f32 nondeterminism of this pipeline (see nondeterminism). Compile count 45 vs budget 44: FAIL by 1 (sor_block compiled 6x vs 3 in the budget table).",
+ "criteria": {
+  "energies_rel": "<= 1e-6 vs v2",
+  "sitpot": "<= 1e-6 (relative to the tautomer's potential scale; abs reported)",
+  "sweeps": "100% equal to v2",
+  "compiles": "<= compile_budget.budget(classes), 0 on a second pass",
+  "overflow": "Ka 24 / Kp 768, forced overflow -> automatic XL retry, identical outputs"
+ },
+ "vs_gh200_v2": {
+  "pass1_summary": {
+   "max_rel_energy": 1.0535117015403828e-06,
+   "n_energy_gt_1e6": 1,
+   "sitpot_max_abs": 4.57763671875e-05,
+   "sitpot_max_rel": 3.241855728991235e-07,
+   "sweeps_equal_min": 1.0,
+   "compiles_pass1": 45,
+   "budget": 44,
+   "compiles_pass2": 0
+  },
+  "per_state_pass1": {
+   "d0d5c619bd23b13d_B": {
+    "max_rel_energy": 3.259728305992e-07,
+    "n_energy_gt_1e6": 0,
+    "sitpot_max_abs": 0.0,
+    "sitpot_max_rel": 0.0,
+    "sweeps_equal": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "n_taus": 94
+   },
+   "d0d5c619bd23b13d_A": {
+    "max_rel_energy": 3.2775122021779286e-07,
+    "n_energy_gt_1e6": 0,
+    "sitpot_max_abs": 0.0,
+    "sitpot_max_rel": 0.0,
+    "sweeps_equal": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "n_taus": 359
+   },
+   "24d02660df3ac695_A": {
+    "max_rel_energy": 2.878066123761064e-07,
+    "n_energy_gt_1e6": 0,
+    "sitpot_max_abs": 0.0,
+    "sitpot_max_rel": 0.0,
+    "sweeps_equal": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "n_taus": 429
+   },
+   "d0d5c619bd23b13d_AB": {
+    "max_rel_energy": 1.0535117015403828e-06,
+    "n_energy_gt_1e6": 1,
+    "sitpot_max_abs": 1.52587890625e-05,
+    "sitpot_max_rel": 1.2150104332945907e-07,
+    "sweeps_equal": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "n_taus": 453
+   },
+   "d6004cf2ee4008d2_AB": {
+    "max_rel_energy": 4.355715613585303e-07,
+    "n_energy_gt_1e6": 0,
+    "sitpot_max_abs": 4.57763671875e-05,
+    "sitpot_max_rel": 3.241855728991235e-07,
+    "sweeps_equal": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "n_taus": 994
+   }
+  },
+  "per_state_pass2": {
+   "d0d5c619bd23b13d_B": {
+    "max_rel_energy": 3.259728305992e-07,
+    "n_energy_gt_1e6": 0,
+    "sitpot_max_abs": 0.0,
+    "sitpot_max_rel": 0.0,
+    "sweeps_equal": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "n_taus": 94
+   },
+   "d0d5c619bd23b13d_A": {
+    "max_rel_energy": 8.056214030553626e-07,
+    "n_energy_gt_1e6": 0,
+    "sitpot_max_abs": 7.62939453125e-06,
+    "sitpot_max_rel": 6.075052535535564e-08,
+    "sweeps_equal": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "n_taus": 359
+   },
+   "24d02660df3ac695_A": {
+    "max_rel_energy": 2.878066123761064e-07,
+    "n_energy_gt_1e6": 0,
+    "sitpot_max_abs": 0.0,
+    "sitpot_max_rel": 0.0,
+    "sweeps_equal": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "n_taus": 429
+   },
+   "d0d5c619bd23b13d_AB": {
+    "max_rel_energy": 1.0535117015403828e-06,
+    "n_energy_gt_1e6": 1,
+    "sitpot_max_abs": 1.52587890625e-05,
+    "sitpot_max_rel": 1.2150104332945907e-07,
+    "sweeps_equal": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "n_taus": 453
+   },
+   "d6004cf2ee4008d2_AB": {
+    "max_rel_energy": 4.355715613585303e-07,
+    "n_energy_gt_1e6": 0,
+    "sitpot_max_abs": 4.57763671875e-05,
+    "sitpot_max_rel": 3.241855728991235e-07,
+    "sweeps_equal": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "n_taus": 994
+   }
+  }
+ },
+ "vs_gh200_v2_fresh_process": {
+  "summary": {
+   "max_rel_energy": 3.2775122021779286e-07,
+   "n_energy_gt_1e6": 0,
+   "sitpot_max_abs": 1.52587890625e-05,
+   "sitpot_max_rel": 1.0492856830319908e-07,
+   "sweeps_equal_min": 1.0,
+   "compiles_pass1": 0,
+   "budget": 44,
+   "compiles_pass2": null
+  },
+  "compiles": 0,
+  "cache_hits": 45,
+  "untar_entries": 1047
+ },
+ "vs_a40_v2_like_with_like": {
+  "summary": {
+   "max_rel_energy": 1.053510591654647e-06,
+   "n_energy_gt_1e6": 1,
+   "sitpot_max_abs": 1.52587890625e-05,
+   "sitpot_max_rel": 1.215010580919644e-07,
+   "sweeps_equal_min": 1.0,
+   "compiles_pass1": 0,
+   "budget": 44,
+   "compiles_pass2": null
+  },
+  "per_state": {
+   "d0d5c619bd23b13d_B": {
+    "max_rel_energy": 3.259728305992e-07,
+    "n_energy_gt_1e6": 0,
+    "sitpot_max_abs": 0.0,
+    "sitpot_max_rel": 0.0,
+    "sweeps_equal": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "n_taus": 94
+   },
+   "d0d5c619bd23b13d_A": {
+    "max_rel_energy": 2.678607003820698e-07,
+    "n_energy_gt_1e6": 0,
+    "sitpot_max_abs": 0.0,
+    "sitpot_max_rel": 0.0,
+    "sweeps_equal": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "n_taus": 359
+   },
+   "24d02660df3ac695_A": {
+    "max_rel_energy": 2.2686843740506975e-07,
+    "n_energy_gt_1e6": 0,
+    "sitpot_max_abs": 0.0,
+    "sitpot_max_rel": 0.0,
+    "sweeps_equal": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "n_taus": 429
+   },
+   "d0d5c619bd23b13d_AB": {
+    "max_rel_energy": 1.053510591654647e-06,
+    "n_energy_gt_1e6": 1,
+    "sitpot_max_abs": 1.52587890625e-05,
+    "sitpot_max_rel": 1.215010580919644e-07,
+    "sweeps_equal": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "n_taus": 453
+   },
+   "d6004cf2ee4008d2_AB": {
+    "max_rel_energy": 3.839058969865307e-07,
+    "n_energy_gt_1e6": 0,
+    "sitpot_max_abs": 1.52587890625e-05,
+    "sitpot_max_rel": 1.0492856830319908e-07,
+    "sweeps_equal": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "n_taus": 994
+   }
+  },
+  "note": "goldens rebuilt with jobs/m0_goldens.py from the A40 v2 outputs (goldens_pilot5_v2a40.npz, dc56e495...); same test, fresh process from the tarball. Still 1 tautomer at 1.05e-6 (same d0d5 AB esolvM) -> the residual is f32 summation order, not GH200 vs A40."
+ },
+ "compiles": {
+  "pass1": 45,
+  "budget": 44,
+  "classes": [
+   0,
+   1,
+   2,
+   3
+  ],
+  "pass2": 0,
+  "fresh_process_from_tarball": 0,
+  "pass1_names": {
+   "jit(_cell_hash)": 4,
+   "jit(geo_pairs)": 4,
+   "jit(geo_vertex)": 4,
+   "jit(geo_pack)": 4,
+   "jit(geo_arc)": 4,
+   "jit(geometry_sites)": 1,
+   "jit(maps_batch)": 4,
+   "jit(setup1)": 1,
+   "jit(lanes_init)": 2,
+   "jit(sor_block)": 6,
+   "jit(lanes_store)": 3,
+   "jit(lanes_take)": 3,
+   "jit(setup2)": 1,
+   "jit(post)": 4
+  },
+  "pass1_compile_s": 125.401,
+  "over_budget_cause": "sor_block compiles once per (lane width, coefficient-table size E): 3 widths x 2 distinct E (the two run_pool calls) = 6; BUDGET_TABLE has sor_block 3. relfac_terms 0 (logged rho) and lanes_init 2 of 3 offset it to +1. Bounded and independent of state count; budget table (compile_budget.py) or a fixed E is the fix -- not changed (src rule).",
+  "overflow_retry_compiles": 1
+ },
+ "overflow_test": {
+  "state": "d0d5c619bd23b13d_B",
+  "forced_Ka": 4,
+  "xl_retries": 2,
+  "compiles": 1,
+  "max_abs_vs_normal": 0.0,
+  "sweeps_equal": true
+ },
+ "nondeterminism": {
+  "pass2_vs_pass1_max_abs": {
+   "d0d5c619bd23b13d_B": 0.0,
+   "d0d5c619bd23b13d_A": 7.62939453125e-06,
+   "24d02660df3ac695_A": 0.0,
+   "d0d5c619bd23b13d_AB": 0.0,
+   "d6004cf2ee4008d2_AB": 1.52587890625e-05
+  },
+  "pass2_sweeps_identical": true,
+  "note": "same process, same inputs: d0d5 A and d6004 AB differ between passes by up to 1.5e-5 (f32 ulp scale), sweeps identical; the d0d5 AB tautomer flips between 0 and 1.05e-6 vs GH200 across runs. The v2 prototype's two A40 runs (d0d5 B, A) gave the same per-state max errors vs GH200 (full arrays not compared). Likely an atomic scatter-add / unordered reduction in the new maps or post path."
+ },
+ "timing_a40_s_per_state": {
+  "d0d5c619bd23b13d_B": {
+   "pass1_s": 102.7,
+   "pass2_s": 15.1,
+   "pass2_breakdown": {
+    "t_geometry": 2.1,
+    "t_maps": 1.64,
+    "t_solves": 11.29,
+    "t_post": 0.03
+   },
+   "sor_waste": 2.76
+  },
+  "d0d5c619bd23b13d_A": {
+   "pass1_s": 68.3,
+   "pass2_s": 54.6,
+   "pass2_breakdown": {
+    "t_geometry": 7.91,
+    "t_maps": 5.64,
+    "t_solves": 40.96,
+    "t_post": 0.09
+   },
+   "sor_waste": 2.54
+  },
+  "24d02660df3ac695_A": {
+   "pass1_s": 85.7,
+   "pass2_s": 69.3,
+   "pass2_breakdown": {
+    "t_geometry": 6.17,
+    "t_maps": 6.06,
+    "t_solves": 56.96,
+    "t_post": 0.09
+   },
+   "sor_waste": 2.95
+  },
+  "d0d5c619bd23b13d_AB": {
+   "pass1_s": 69.8,
+   "pass2_s": 69.7,
+   "pass2_breakdown": {
+    "t_geometry": 10.14,
+    "t_maps": 6.59,
+    "t_solves": 52.84,
+    "t_post": 0.1
+   },
+   "sor_waste": 2.58
+  },
+  "d6004cf2ee4008d2_AB": {
+   "pass1_s": 178.5,
+   "pass2_s": 161.4,
+   "pass2_breakdown": {
+    "t_geometry": 17.2,
+    "t_maps": 16.61,
+    "t_solves": 127.24,
+    "t_post": 0.29
+   },
+   "sor_waste": 2.78
+  }
+ },
+ "timing_note": "pass 2 (no compiles) on the A40: 15 / 55 / 69 / 70 / 161 s (sum 370 s) vs v2 prototype on the A40 12.8 s (d0d5 B) / 31.7 s (d0d5 A) and v2 on the GH200 0.99 / 4.04 / 4.75 / 4.99 / 10.89 s. SOR dominates (t_solves 75-80%); lane waste 2.5-2.95x (lane_blocks/needed, padded widths) vs v2 1.2-1.26x.",
+ "outputs": {
+  "main": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/m1/m1_main.json",
+  "fresh_process": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/m1/m1_cache.json",
+  "like_with_like": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/m1/vs_v2a40/m1_cache.json",
+  "cache_tar": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/m1/cc_m1.tar (7943c7f8..., 1,047 entries)"
+ },
+ "jobs": {
+  "m0_m1": 803874
+ },
+ "still_needs_gh200": "a GH200 run for the Hopper timing and to see whether the pass-to-pass nondeterminism also appears there; numerically nothing else (the residual is not architecture-specific).",
+ "frozen_copy_note": "a40-2026-11-19b used for M0-M3; a40-2026-11-19c (titrate.py fix only) for the final M4; a40-2026-11-19 was used once for the failed first smoke job (803866) and left unmodified"
+}

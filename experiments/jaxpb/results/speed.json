@@ -1,0 +1,138 @@
+{
+ "milestone": "SPEED (geometry + maps levers 1, 2, 4, 6, 7, 3)",
+ "date": "2026-11-20",
+ "status": "DONE: levers 1,2,4,7,3 PASS (bitwise, faster); lever 6 PASS bitwise, hashed probe table rejected on speed (PROBE_HASH=False flag), dynamic boundary projection kept. Final config L12347F (= local src) parity, determinism and driver labels all bitwise.",
+ "code": "frozen snapshots Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40-2026-11-20-speed-{ref,L1,L12,L124,L1246,L12467,L123467} (MANIFEST.sha256 each; ref = M6 src)",
+ "local_cpu_checks": {
+  "lever1_geometry_bitwise": true,
+  "lever2_geometry_bitwise_and_K_retry": true,
+  "levers_4_6_7_maps_bitwise_2_sites": true,
+  "lever4_only_maps_bitwise": true,
+  "lever3_reuse_probes_bitwise_synthetic_split": true,
+  "tests_test_api": true
+ },
+ "gpu_results": {
+  "lever1_parity_104": {
+   "job": 806860,
+   "probes_equal": 104,
+   "maps_equal": 104,
+   "pb_equal": 104,
+   "all_equal": true
+  },
+  "lever2_parity_104": {
+   "job": 806860,
+   "probes_equal": 104,
+   "maps_equal": 104,
+   "pb_equal": 104,
+   "all_equal": true,
+   "max_cell_occupancy_104": 11,
+   "K": 16,
+   "note": "1,040-cycle set = 10 permuted copies of the same 104 records -> same occupancy"
+  },
+  "timing_note": "parity-pass stage timings are NOT usable for maps (hash sync absorbs async device time); per-lever timings come from job 806874 (timing_<L>.json)"
+ },
+ "outputs": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/speed/{parity,smoke,timing,det,driver}/; logs a40/logs/jpa-speed-*.out",
+ "levers": {
+  "1_device_chunk_loop": {
+   "result": "PASS",
+   "parity": "104/104 probes, maps, PB bitwise (806860)",
+   "geo_s_saved": 1.2,
+   "gpu_idle_geometry": "0.21 -> 0.05 (final)"
+  },
+  "2_K_16": {
+   "result": "PASS",
+   "parity": "104/104 (806860)",
+   "geo_s_saved": 1.49,
+   "max_occupancy_104": 11,
+   "overflow": "CellOverflow -> same class with XL_GEO_K 64 (CPU-tested)"
+  },
+  "4_block_culling": {
+   "result": "PASS",
+   "parity": "104/104 (806867, L124)",
+   "maps_s_saved": 0.65
+  },
+  "6_probe_table": {
+   "result": "PASS bitwise, hashed table rejected on speed",
+   "parity": "104/104 (L1246, L12467, L123467b)",
+   "maps_s": "hashed table +1.35 s/state (2x27 binary searches over the sorted probe ids per row cost more than the dense table build); dynamic boundary-projection rows -0.68",
+   "decision": "PROBE_HASH=False (flag), DYN_BPROJ=True"
+  },
+  "7_reach_mask_dynamic": {
+   "result": "PASS",
+   "parity": "104/104 (L12467)",
+   "maps_s_saved": 0.25
+  },
+  "3_triple_reuse": {
+   "result": "PASS",
+   "parity": "104/104 incl. all 68 chain states of the 34 triples reusing AB (806963, L123467b); first version fell back on 59/68 states (a few re-placed H atoms, r 0.001, moved ~1 A; atom order) -> fixed: inexact atoms treated as perturbers",
+   "chain_state_geometry_s": "2.06 -> 0.36",
+   "geo_s_saved_avg": 0.64,
+   "near_atom_fraction": 0.23
+  }
+ },
+ "timing_20_profile_states_common16_warm": {
+  "ref": {
+   "geometry": 5.83,
+   "maps": 5.56,
+   "sor_setup": 4.76,
+   "pb": 16.76
+  },
+  "final_L12347d": {
+   "geometry": 2.51,
+   "maps": 4.0,
+   "sor_setup": 4.8,
+   "pb": 11.92
+  },
+  "per_level_pb": {
+   "ref": 16.76,
+   "L1": 15.5,
+   "L12": 14.03,
+   "L124": 13.39,
+   "L1246": 14.06,
+   "L12467": 13.8,
+   "L123467b": 13.28,
+   "L12347": 12.62,
+   "L12347d": 11.92
+  },
+  "states_per_A40_hour_end_to_end": {
+   "ref": 196,
+   "final": 267,
+   "note": "PB + assembly 0.036 + titration 1.53 s/state (M6 scale)"
+  }
+ },
+ "timing_104_mix": {
+  "M6": {
+   "pb": 13.52,
+   "geometry": 4.99,
+   "maps": 4.32,
+   "states_per_A40_hour": 239
+  },
+  "driver_L123467_hash_on_806877": {
+   "pb": 10.43,
+   "geometry": 2.46,
+   "maps": 3.75,
+   "states_per_A40_hour": 300,
+   "titration_this_run": "3.31 s/state (partial buckets at 104 states; M6 1.53 at scale)"
+  },
+  "final_config": {
+   "job": 806973,
+   "pb": 8.83,
+   "geometry": 1.65,
+   "maps": 2.93,
+   "states_per_A40_hour": 346,
+   "labels_vs_M6_runA_all_equal": true,
+   "compiles": 40
+  }
+ },
+ "compiles": {
+  "warm_programs_20_states": "33 -> 25 (29 with geo_probes_reuse)",
+  "driver_104": "42 (M6) -> 37",
+  "determinism": "L123467: 2 passes + fresh-compile process bitwise, 104/104 (806876)"
+ },
+ "driver_labels_vs_M6_runA": "104/104 bitwise on all label/energy/PB arrays (806877; the first compare flagged pKa only because NaN != NaN for no-midpoint sites, fixed with equal_nan)",
+ "final_config_checks": {
+  "parity_806971": "104/104 bitwise",
+  "determinism_806972": "2 passes + fresh compile 104/104 bitwise",
+  "driver_806973": "labels 104/104 bitwise vs M6 run A"
+ }
+}

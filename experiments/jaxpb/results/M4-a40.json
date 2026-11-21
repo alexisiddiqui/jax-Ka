@@ -1,0 +1,120 @@
+{
+ "milestone": "M4",
+ "date": "2026-11-19",
+ "gpu": "1x NVIDIA A40 (sm_86, 46 GB), Coulson comp1400, partition oc, 12 CPUs, 2G/CPU",
+ "env": "~/_runtime/jax-Ka/pkabench/envs/ogqt-main-7c3e3e9 (JAX 0.11.1 + jax_cuda12_plugin 0.11.1; Isambard has 0.11.2)",
+ "a40_shim": "jobs/a40site/sitecustomize.py (on PYTHONPATH via jobs/a40.sbatch only): JAX 0.11.1 pallas/triton/gpu_info has no 'NVIDIA A40' entry, so every Triton pallas_call fails ('No supported GPU devices found'); registers it as arch 8.6/cc 86 (= the A10 entry) via gpu_info.registry. Not needed on GH200 (listed).",
+ "code": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40-2026-11-19c (frozen; = a40-2026-11-19b + the titrate.py fix below)",
+ "status": "PASS on the A40 (test_titrate.py m4 'passed': true after a one-line fix). MC counts bitwise equal to the GH200 v2 g_results on 426/426 states at 50k and 200k sweeps, so the Triton MC kernel gives identical results on GH200 and A40 (no cross-architecture difference; the v2-on-A40 re-run was not needed and was cancelled). pKa MAE vs teacher 0.0063 / 0.0040 = v2 report rows; Pallas vs XLA ref 2k sweeps 426/426 bitwise; compiles = 5 buckets touched at 50k, 0 at 200k.",
+ "first_run_before_fix": {
+  "job": 803875,
+  "code": "a40-2026-11-19b",
+  "result": "all numerics identical to the final run; 'passed': false only because G50k compiled 6 programs vs 5 buckets touched",
+  "cause": "jit(stage): titrate.py:503 `ph_term = jnp.asarray(PH_TERM)`. JAX 0.11 compiles a staging program for a host->device jnp.asarray (the same issue the PB track fixed with device_put). Found with jaxpb.compile_budget.CompileCounter names (m4/compiles/proc1_min0.json: jit(stage) + 5x jit(_mc_pallas_impl))",
+  "outputs": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/m4/vs_gh200/{test_m4.json,test_m4_cachecheck.json}"
+ },
+ "bug_fixed": {
+  "file": "src/jaxpb/titrate.py",
+  "line": 503,
+  "before": "ph_term = jnp.asarray(PH_TERM)",
+  "after": "ph_term = jax.device_put(PH_TERM)",
+  "effect": "removes 1 compile per process; values identical (PH_TERM is already f32)",
+  "cpu_retest": "tests/test_titrate.py local on the Mac (JAX 0.4.38): passed, toy numbers identical to M4.json local values (ref vs Pallas-interpret 0.0, bucket 256 vs 512 0.0, toys 0.0136/0.0335/0.0097)"
+ },
+ "G50k": {
+  "states_bitwise_equal_v2": 426,
+  "states": 426,
+  "pka_mae_vs_teacher": 0.006271895656873505,
+  "pka_p95": 0.015923931222720025,
+  "pka_max": 0.23728286454681324,
+  "compiles": 5,
+  "buckets_touched": [
+   64,
+   128,
+   256,
+   512,
+   1024
+  ],
+  "wall_s": 112.5,
+  "gpu_s_per_state": 0.2616,
+  "batches": 16,
+  "v2_report_pka_mae": 0.0063,
+  "v2_gh200_s_per_state": 0.12
+ },
+ "G200k": {
+  "states_bitwise_equal_v2": 426,
+  "states": 426,
+  "pka_mae_vs_teacher": 0.004002970365227113,
+  "pka_p95": 0.010349876504035557,
+  "pka_max": 0.09232062014418396,
+  "compiles": 0,
+  "wall_s": 433.9,
+  "gpu_s_per_state": 1.0163,
+  "batches": 16,
+  "v2_report_pka_mae": 0.004,
+  "v2_gh200_s_per_state": 0.47
+ },
+ "ref_vs_pallas_2k": {
+  "states_bitwise_equal": 426,
+  "states": 426,
+  "max_curve_diff": 0.0,
+  "pallas_compiles": 0,
+  "ref_compiles": 5,
+  "pallas_s": 7.5,
+  "ref_s": 344.8
+ },
+ "toys_vs_brute_100k": [
+  0.018172064537603116,
+  0.01774067581459382,
+  0.005326133499946817
+ ],
+ "pkhalf_vs_pypka": {
+  "sites": 27840,
+  "identical_numpy": 27840,
+  "identical_jax_f64": 27840
+ },
+ "x64_on": {
+  "states_bitwise_equal_x64_off": 426,
+  "compiles": 5,
+  "note": "x64 changes the trace -> one recompile per bucket"
+ },
+ "all_padding_batch_seconds_200k": {
+  "64": 0.002,
+  "128": 0.0013,
+  "256": 0.0041,
+  "512": 0.0059,
+  "1024": 0.0201
+ },
+ "promoted": 0,
+ "buckets": {
+  "64": 15,
+  "128": 84,
+  "256": 132,
+  "512": 145,
+  "1024": 50
+ },
+ "compile_cache": {
+  "staged_cachecheck_min1s": {
+   "compiles": 5,
+   "note": "energy_isambard.sbatch sets JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=1. Each MC executable compiles in < 1 s on the A40 (6 programs in 1.8 s), so none is written to the cache and a fresh process recompiles all 5. This is the setting, not a Pallas caching defect."
+  },
+  "min0_fresh_process": {
+   "test_titrate_count": 5,
+   "cache_retrievals": 5,
+   "real_compiles": 0,
+   "note": "test_titrate.py's CompileCounter counts every backend_compile_duration event, and JAX 0.11 also emits that event for persistent-cache hits. With min compile time 0 the second process retrieves all 5 from the cache (compile_budget.CompileCounter: 0 compiled / 6 hits, incl. jit(stage) before the fix). The Pallas MC executables ARE served from the cache. Suggest min compile 0 (as cache_open does) and subtracting cache hits in test_titrate."
+  },
+  "diag": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/m4/compiles/proc{1,2}_min{0,1}.json (script Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/scripts/m4_compiles.py)"
+ },
+ "timing_a40": "G50k 0.26 GPU-s/state, G200k 1.02 GPU-s/state (v2 on GH200: 0.12 / 0.47), so the A40 is about 2.2x slower",
+ "outputs": {
+  "final": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/m4/fix1/test_m4.json",
+  "cachechecks": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/m4/fix1/{test_m4_cachecheck.json, min0_p1/, min0_p2/}"
+ },
+ "jobs": {
+  "first": 803875,
+  "compile_diag": 803978,
+  "final": 804020
+ },
+ "still_needs_gh200": "nothing numerically (counts are bitwise equal to the GH200 v2 run). Optional: confirm the 1-compile fix and the cache on Isambard with min compile 0."
+}

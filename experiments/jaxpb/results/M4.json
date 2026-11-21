@@ -1,0 +1,90 @@
+{
+ "milestone": "M4 titration (energy track)",
+ "date": "2026-11-19",
+ "status": "NOT CLOSED: the GPU closing tests (426 states at 50k/200k vs v2 rows, ref vs Pallas bitwise, compile counts) need Isambard, where every sbatch (even a 1-CPU 1-min --test-only) is rejected with AssocGrpCPUMinutesLimit (project CPU-minute allocation exhausted; rechecked 3 times). Everything that runs without a GPU passed on Coulson CPU; the GPU test is staged in a frozen copy and needs one sbatch.",
+ "files": {
+  "module": "work/jaxpb-pipeline/src/jaxpb/titrate.py",
+  "tests": "work/jaxpb-pipeline/tests/test_titrate.py (modes: local, m4 [GPU closing], cachecheck, cmf, cpu)",
+  "jobs": [
+   "work/jaxpb-pipeline/jobs/energy_isambard.sbatch",
+   "work/jaxpb-pipeline/jobs/energy_coulson.sbatch"
+  ]
+ },
+ "design": {
+  "chain": "gmc.chain verbatim",
+  "buckets": "records.MP_BUCKETS 64..2048, Np = records.np_bucket = Mp/4, Pp = records.pp_bucket = Mp/16, S = records.S_FLUSH = 32",
+  "mc_blocks": "per-state argument (meta[:,2]); -1 = padding state -> zero blocks (free); one executable per Mp for every sweep count",
+  "u": "formed in-jit from a host f32 pH table (product with occ in {0,1} exact)",
+  "overflow": "n > Np or P > Pp -> next Mp; no bucket -> flagged and solved by cluster MF (or flagged only)",
+  "backends": "pallas (Triton kernel) | ref (pure XLA vmap) | auto | cmf",
+  "pkhalf": "curves_to_pka (numpy f64) + curves_to_pka_jax, PyPKA calcpKhalfs incl. the 1.5 branch"
+ },
+ "tests_passed_without_gpu": {
+  "pkhalf_vs_pypka": {
+   "sites": 27840,
+   "identical": 27840,
+   "note": "curves_to_pka(PyPKA teacher curves) == PyPKA's saved pKa (getpK) bitwise on all 426 states"
+  },
+  "cmf_port_vs_v2_armC": {
+   "states": 426,
+   "curve_maxdiff_max": 1.84e-06,
+   "curve_maxdiff_median": 2.07e-07,
+   "pka_maxdiff_max": 9.8e-06,
+   "same_cluster_structure": 426,
+   "note": "pack W is f32, v2 C used f64 W; 45 s wall on 48 Coulson cores"
+  },
+  "local_mac": {
+   "ref_vs_pallas_interpret_maxdiff": 0.0,
+   "bucket256_vs_512_maxdiff": 0.0,
+   "padding_state_counts": 0.0,
+   "toys_mc_vs_brute_max_30k": [
+    0.0136,
+    0.0335,
+    0.0097
+   ],
+   "toys_cmf_vs_brute": [
+    6.7e-16,
+    9.4e-11
+   ]
+  },
+  "cpu_xla_ref_vs_v2_gpu_pallas_counts": {
+   "G5k_bucket64": "12/12 bitwise",
+   "G5k_bucket128": "85/87 bitwise (max curve diff 4e-4 = 2 counts)",
+   "G5k_bucket256": "128/132 bitwise (max 4e-4)",
+   "G50k_buckets64_128": "91/99 bitwise (max curve diff 2.6e-4)",
+   "G5k_bucket512_1024": "running on Coulson (jobs 803730, 803731) -> energy/M4-coulson/test_m4_cpu_G5k_{512,1024}.json",
+   "diagnosis": "the mismatching states are not promoted; rerun alone with v2's exact Mp/Np/Pp they give our counts, not v2's -> CPU-XLA vs GPU-Triton float differences flip rare accepts, not bucketing. The 3 promoted states (64 -> 128) matched v2 bitwise.",
+   "compiles": "1 per bucket touched"
+  }
+ },
+ "gpu_closing_tests_pending": {
+  "criteria": [
+   "G50k and G200k: 426/426 states with prot counts bitwise equal to v2 g_results.npz (=> v2 report rows pKa 0.0063 / 0.0040 etc. reproduced) + pKa MAE vs teacher",
+   "ref vs Pallas 2k sweeps: 426/426 bitwise on GPU",
+   "compiles: G50k = buckets touched (5: 64..1024), G200k = 0 (sweeps are an argument)",
+   "fresh process with the persistent cache: 0 compiles (cachecheck)",
+   "toys vs brute force at 100k < 0.02",
+   "x64 on: MC counts unchanged",
+   "all-padding batch time per bucket"
+  ],
+  "isambard_frozen_code": "$S/_submission/jaxpb-pipeline-M4/ (staged, read-only, not yet used)",
+  "isambard_submit": "cd $S/_submission/jaxpb-pipeline-M4 && sbatch -J jpe-m4 -t 01:00:00 jobs/energy_isambard.sbatch $S/_submission/jaxpb-pipeline-M4 test_titrate.py m4 $R/audits/jaxpb-pipeline/M4 -- test_titrate.py cachecheck $R/audits/jaxpb-pipeline/M4",
+  "expected_runtime": "v2: 0.12 GPU-s/state at 50k, 0.47 at 200k -> ~4 min MC + ref 2k pass + diagnosis; 1 h limit"
+ },
+ "paths": {
+  "coulson": "~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/energy/M4-coulson/ (cmf, cpu probes), M4-coulson-diag/ (mismatch diagnosis)",
+  "coulson_code": "~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/energy/code/",
+  "v2_inputs_isambard": "$R/audits/mf-surrogate-v2/{states-v2.npz, g_results.npz}"
+ },
+ "deviations": [
+  "Np = Mp/4 overflows at Mp 64 (12 of 426 states have n up to 18 > 16); those states are promoted to Mp 128 (counts unchanged in the CPU check). Requested Np = Mp/2 as an option (energy-track-requests.json #4).",
+  "Mp bucket batches are S = 32 states (v2 launched whole buckets); padding states run 0 MC blocks.",
+  "Cluster MF fallback is host numpy (v2 cmf.py port), not XLA: cluster enumeration has data-dependent shapes.",
+  "np_hash32 rewritten with explicit uint64 constants (same values; numpy 1.x on the Mac raised on the original)."
+ ],
+ "risks": [
+  "GPU bitwise reproduction of v2 not yet shown (the dynamic block-count loop is the only change inside the kernel's call path)",
+  "CPU XLA counts differ from GPU in a few % of states at the 1e-4 curve level: CPU runs are statistically, not bitwise, equivalent",
+  "mc_sweeps must be < 2^24 (exact f32 counts); asserted"
+ ]
+}

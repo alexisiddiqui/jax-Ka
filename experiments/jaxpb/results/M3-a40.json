@@ -1,0 +1,39 @@
+{
+ "milestone": "M3",
+ "date": "2026-11-19",
+ "gpu": "1x NVIDIA A40 (sm_86, 46 GB), Coulson comp1400, partition oc, 12 CPUs, 2G/CPU",
+ "env": "~/_runtime/jax-Ka/pkabench/envs/ogqt-main-7c3e3e9 (JAX 0.11.1 + jax_cuda12_plugin 0.11.1; Isambard has 0.11.2)",
+ "code": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40-2026-11-19b (frozen, read-only, MANIFEST.sha256 = local src/tests/jobs + v2pilot (jaxrun2/maps2/jaxpb, sha256 == Isambard $S/_submission/jaxpb-pilot-v2) + v2mc/gmc.py (== mf-surrogate-v2 MANIFEST))",
+ "a40_shim": "jobs/a40site/sitecustomize.py (on PYTHONPATH via jobs/a40.sbatch only): JAX 0.11.1 pallas/triton/gpu_info has no 'NVIDIA A40' entry, so every Triton pallas_call fails ('No supported GPU devices found'); registers it as arch 8.6/cc 86 (= the A10 entry) via gpu_info.registry. Not needed on GH200 (listed).",
+ "status": "PASS on the A40: g and W vs the saved mc-energies.json on all 99 M0 states, worst 1.88e-6 kT <= 1e-5; occ/start/nst/pairs exact; compiles 3 = classes touched (0,1,2), second pass 0 and bitwise identical. Reference is PyPKA (CPU), no cross-architecture issue.",
+ "result": {
+  "jax": "0.11.1",
+  "backend": "gpu",
+  "shards": [
+   "/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/m0/shards/m0_goldens_00.npz",
+   "/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/m0/shards/m0_goldens_01.npz",
+   "/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/m0/shards/m0_goldens_02.npz"
+  ],
+  "n_states": 99,
+  "compiles_first_pass": 3,
+  "seconds_first_pass": 14.426628589630127,
+  "compiles_second_pass": 0,
+  "second_pass_identical": true,
+  "classes_touched": [
+   0,
+   1,
+   2
+  ],
+  "worst_g_or_W": 1.8785013011779483e-06,
+  "all_exact_fields": true,
+  "passed": true
+ },
+ "outputs": {
+  "result": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/m3/test_m3_m0shards.json"
+ },
+ "jobs": {
+  "m2_m3": 803876
+ },
+ "still_needs_gh200": "nothing (Isambard M3 run on the 5 pilot states would only repeat the CPU PASS).",
+ "frozen_copy_note": "a40-2026-11-19b used for M0-M3; a40-2026-11-19c (titrate.py fix only) for the final M4; a40-2026-11-19 was used once for the failed first smoke job (803866) and left unmodified"
+}

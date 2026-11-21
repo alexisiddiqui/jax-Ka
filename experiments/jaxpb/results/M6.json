@@ -1,0 +1,403 @@
+{
+ "milestone": "M6 (driver + end-to-end validation)",
+ "date": "2026-11-19",
+ "status": "PASS (A40): L3 on 104 states (pKint MAE 0.0042, W p99 0.0049 kT, pKa MAE 0.0084 @200k / 0.0102 @50k vs floor 0.0041/0.0064, interface shift MAE 0.0144, 0 midpoint mismatches); throughput 239 states/A40-h warm (PB 266, titration 2,354, assembly ~1e5); compiles 42 after 104 and after 1,040 states (flat), 0 from the tarball; resume and determinism bitwise; x64 leaves PB bitwise unchanged",
+ "code": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40-2026-11-19-m6b (frozen, MANIFEST.sha256; code_sha 248019f6605b3545); smoke used -m6a (= m6b minus memory tracking and the R1 f32 alignment fix)",
+ "outputs_pending": {
+  "m6": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/m6/m6/{runA,runB,runC,compare.json,l3.json,runC_after_kill.txt}",
+  "scale": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/m6/scale/{run,scale.json}",
+  "logs": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/logs/jpa-m6-804491.out, jpa-m6scale-804492.out"
+ },
+ "design": {
+  "api": "src/jaxpb/api.py: Config (frozen: pb_mode delphi, backend auto, mc_sweeps 200000, ph_grid = PyPKA 73 points, seed, specrad estimate, B 16, s_flush 32, shard_size 256, acc f64), cfg_hash + code_sha in every shard; energies(state_batch, cfg), titrate(energies_batch, cfg, chain_ids), label(records, cfg) -> Labels, run(items, out_dir, cfg, cache) driver, CLI python -m jaxpb.api",
+  "rng": "MC chain id = 28-bit sha256 of the state alias -> labels independent of batch composition, order, shard boundaries and restarts",
+  "driver": "plan.json (items cut into shards; a restart must reproduce plan+cfg), per shard: records loaded once (with_ref=False), PB+assembly in size-class order, Energies queued per Mp bucket, flush at 32 and at shard end, atomic write (tmp + fsync + os.replace); resume skips shards whose output carries the same cfg_hash/code_sha/state list, removes stale temp files, refuses a changed cfg or code",
+  "overflow": "PB: maps -> XL sizes and geometry -> next class inside pb.solve_state; an escaping OverflowError -> one driver retry at the next class; else status failed_pb (written, logged). Assembly class promotion and titration bucket promotion / cmf fallback logged per state. run.log.jsonl + per-state diag_json",
+  "shard": "np.savez: g, occ, W_ut (upper triangle of the exactly symmetric W), start/nst, pairs, pkint, e_back, curves, pka, esolvM/S/M0, sweeps, maxchange, rho, sitpot_sha, diag_json, provenance_json (no timestamps), timing_json (excluded from bitwise compares)",
+  "x64": "api sets jax_enable_x64 at import; PB runs inside geometry.x32; check vs M5 det_ref.npz (x64 off) runs in l3"
+ },
+ "local_cpu_checks": {
+  "test": "tests/test_api.py (synthetic records, PB stand-in, real JAX assembly + XLA MC)",
+  "pass": true,
+  "resume_bitwise": true,
+  "order_and_shard_size_independent": true,
+  "overflow_retry_and_failed_pb_logged": true,
+  "cfg_change_refused": true
+ },
+ "smoke_a40": {
+  "job": 804489,
+  "code": "a40-2026-11-19-m6a",
+  "states": "3 smallest (class 0), shard size 1, warm M5 PB cache",
+  "resume_after_1_shard_bitwise": true,
+  "compiles": {
+   "run_a": 3,
+   "stop_after_1": 0,
+   "restart": 0
+  },
+  "pkint_mae": 0.0008,
+  "W_p99_kT": 0.0028,
+  "W_max_kT": 0.0041,
+  "pairs_equal_states": "3/3",
+  "pka_mae": {
+   "pipeline_200k": 0.0038,
+   "pipeline_50k": 0.0069,
+   "saved_energies_200k_floor": 0.0034,
+   "saved_50k": 0.0066
+  },
+  "crn_vs_saved_200k_mae": {
+   "pipeline": 0.0009,
+   "our_g_saved_W": 0.0008,
+   "saved_g_our_W": 0.0001
+  },
+  "warm_s_per_state_class0": {
+   "pb": 1.63,
+   "assembly": 0.018,
+   "titration_200k": 0.53
+  },
+  "slurm_maxrss_kB": 3883508,
+  "note": "R1 flagged unavailable in smoke only because curves.pkl stores float32 curves (fixed: 1e-6 alignment check)"
+ },
+ "memory_measurement": "added at the controller's request in the same runs (pb.py stage marks; api.MemTrack): GPU peak_bytes_in_use per stage (geometry, maps, sor = setup+SOR, post, assembly per class; titration per Mp bucket), bytes_limit, preallocation env (a40.sbatch: XLA_PYTHON_CLIENT_PREALLOCATE=false, so peaks are true allocator peaks); JAX has no peak reset, so a stage's value is exact when it raised the high-water mark and an upper bound otherwise; clean per-bucket titration peaks from the PB-free l3 process; host ru_maxrss per shard + Slurm MaxRSS; shard bytes per state (l3 'disk'); headroom estimate to be derived from the per-class peaks",
+ "files_changed": [
+  "src/jaxpb/api.py (new)",
+  "src/jaxpb/pb.py (wiring only: optional timing['memtrack'] popped in _solve_state, mark() after geometry, maps, SOR, post; numerics untouched)",
+  "tests/test_api.py (new, local CPU driver checks)",
+  "tests/test_m6.py (new: prep pilot shard, items, compare, l3, scale)",
+  "jobs/a40_m6.sh (new: smoke, m6, scale, l3 stages)"
+ ],
+ "jobs": {
+  "smoke": 804489,
+  "m6": 804491,
+  "scale": 804492
+ },
+ "m6_job": {
+  "job": 804491,
+  "elapsed": "01:46:18",
+  "code": "a40-2026-11-19-m6b",
+  "states": "104 = 99 M0 + 5 pilot (estimator rho for all, as production), 7,284 sites, 30,897 tautomers; 34 complete AB/A/B triples (33 M0 + pilot d0d5)",
+  "shard_size": 16,
+  "outputs": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/m6/m6/{runA,runB,runC,compare.json,l3.json}",
+  "status_counts": {
+   "ok": 104
+  },
+  "overflow_events": "1 geometry class bump (0bd6665815002616_AB, class 1 -> 2, logged as pb_retry in every run); no XL retries, no failed states, no assembly/titration promotions"
+ },
+ "closing_tests": {
+  "1_L3": {
+   "pkint_vs_teacher": {
+    "n": 23613,
+    "mae": 0.00418,
+    "p95": 0.0188,
+    "p99": 0.0561,
+    "max": 0.222,
+    "criterion": "MAE <= 0.05",
+    "pass": true,
+    "worst_states": [
+     "d27b7f1e3507d2e9_AB 0.222",
+     "3e61836a26c12ef3_AB 0.212",
+     "f431518d7d12a6bf_A 0.207"
+    ]
+   },
+   "g_vs_saved_kT": {
+    "mae": 0.0074,
+    "p99": 0.114,
+    "max": 0.51
+   },
+   "W_vs_saved_kT": {
+    "n_inter_site_entries": 6510736,
+    "mae": 0.00016,
+    "p99": 0.00494,
+    "max": 0.277,
+    "n_gt_0p05": 51,
+    "criterion": "p99 <= 0.05 kT",
+    "pass": true,
+    "worst_states": [
+     "bc31cb9685ce09b3_AB 0.277",
+     "4464f45c71f16002_AB 0.115"
+    ]
+   },
+   "coupled_pairs_equal_states": "103/104",
+   "pka_vs_teacher_7229_sites": {
+    "pipeline_200k": {
+     "mae": 0.00844,
+     "p95": 0.0271,
+     "p99": 0.0794,
+     "max": 0.615,
+     "midpoint_mismatches": 0,
+     "pass": true
+    },
+    "pipeline_50k": {
+     "mae": 0.01021,
+     "p95": 0.0296,
+     "p99": 0.0775,
+     "max": 0.635,
+     "midpoint_mismatches": 0,
+     "pass": true
+    },
+    "floor_G_saved_energies_200k": {
+     "mae": 0.00406,
+     "p99": 0.016,
+     "max": 0.202,
+     "midpoint_mismatches": 0
+    },
+    "floor_G_saved_energies_50k": {
+     "mae": 0.0064,
+     "p99": 0.0248,
+     "max": 0.131,
+     "midpoint_mismatches": 0
+    },
+    "floor_R1_pypka_seed7654321": {
+     "mae": 0.00408,
+     "p99": 0.0165,
+     "max": 0.216,
+     "midpoint_mismatches": 1,
+     "source": "mf-surrogate-v1 work/curves.pkl, all 104 states overlap"
+    },
+    "criterion": "MAE <= 0.05"
+   },
+   "binding_shift_paired_interface": {
+    "n_sites": 295,
+    "n_both_defined": 292,
+    "teacher_mean_abs_shift": 0.945,
+    "pipeline_200k": {
+     "mae": 0.0144,
+     "p95": 0.0456,
+     "p99": 0.134,
+     "max": 0.252,
+     "midpoint_mismatches": 0,
+     "pass": true
+    },
+    "pipeline_50k": {
+     "mae": 0.0164,
+     "p95": 0.0495,
+     "max": 0.254,
+     "midpoint_mismatches": 0,
+     "pass": true
+    },
+    "floor_G_saved_200k": {
+     "mae": 0.0061,
+     "max": 0.029
+    },
+    "floor_G_saved_50k": {
+     "mae": 0.0096
+    },
+    "floor_R1": {
+     "mae": 0.0057,
+     "max": 0.029
+    },
+    "criterion": "MAE <= 0.05",
+    "definition": "hybrid-mc-v1 flags via mf-surrogate-v1 common.load_state: interface in AB, supervision_eligible in AB and free state, paired by site key"
+   },
+   "localisation_common_random_numbers_vs_saved_200k": {
+    "note": "same chain keys as the pipeline, so MC noise largely cancels; error attributable to energies",
+    "pipeline": {
+     "mae": 0.00643,
+     "p99": 0.08,
+     "max": 0.606
+    },
+    "our_g_saved_W": {
+     "mae": 0.00575,
+     "p99": 0.077,
+     "max": 0.522,
+     "midpoint_mismatches": 1
+    },
+    "saved_g_our_W": {
+     "mae": 0.0038,
+     "p99": 0.049,
+     "max": 0.301
+    },
+    "reading": "pipeline pKa error above the MC floor (0.0084 vs 0.0041) comes mostly from g (PB solvation/background -> pKint); W adds less; both are PB-vs-DelPhi residuals (M2 L2 level), not MC"
+   },
+   "pass": true
+  },
+  "4_resume": {
+   "pass": true,
+   "how": "run C under timeout -s KILL 600 (rc 137) with 1 of 7 shards written (no temp left), restart from the tarball skipped shard 0, wrote 1-6",
+   "bitwise_vs_run_A": "287/287 arrays in 7 shards (timing_json excluded)",
+   "restart_compiles": 0
+  },
+  "5_determinism": {
+   "pass": true,
+   "run_B": "fresh process, compile cache served from run A's tarball (42 entries): 0 compiles, 42 cache hits",
+   "bitwise_vs_run_A": "287/287 arrays (labels, energies, PB outputs, sitpot sha, diag, provenance)"
+  },
+  "x64_check": {
+   "pass": true,
+   "M0_states_bitwise_vs_M5_det_ref": 10,
+   "detail": "process-wide x64 ON (driver) vs M5 det_ref.npz (x64 off): esolvM/S/M0, sweeps, maxchange, rho, sitpotM sha bitwise on all 10 M0 states. The 5 pilot states differ by design: det_ref used the LOGGED spectral radius for pilot states, the driver uses the estimator (production); not an x64 effect"
+  },
+  "3_compile_flatness": {
+   "pass": true,
+   "after_shard_states_compiles": [
+    [
+     104,
+     42
+    ],
+    [
+     208,
+     42
+    ],
+    [
+     312,
+     42
+    ],
+    [
+     416,
+     42
+    ],
+    [
+     520,
+     42
+    ],
+    [
+     624,
+     42
+    ],
+    [
+     728,
+     42
+    ],
+    [
+     832,
+     42
+    ],
+    [
+     936,
+     42
+    ],
+    [
+     1040,
+     42
+    ]
+   ],
+   "count_at_104": 42,
+   "count_at_1040": 42,
+   "fresh_process_from_tarball": 0,
+   "composition": "PB Pallas budget for classes 0-3 + assembly per class + titration per Mp bucket touched (5); depends on classes/buckets seen, not on state count"
+  },
+  "2_throughput": {
+   "scale_warm_1035_states": {
+    "pb_s_per_state": 13.52,
+    "breakdown_s": {
+     "geometry": 4.99,
+     "maps": 4.32,
+     "setup+SOR": 3.77,
+     "SOR": 3.6,
+     "post": 0.1
+    },
+    "assembly_s_per_state": 0.036,
+    "titration_200k_s_per_state_full_S32": 1.53,
+    "titration_states_in_warm_batches": 944,
+    "states_per_A40_hour": {
+     "pb": 266,
+     "assembly": 99966,
+     "titration": 2354,
+     "total": 239
+    }
+   },
+   "gh200_estimate_only": "~2x the A40 (MC measured 2.2x in M4; PB not measured on GH200) -> ~450-500 states/GH200-hour; 30k states ~60-70 GH200-hours"
+  }
+ },
+ "memory": {
+  "settings": "XLA_PYTHON_CLIENT_PREALLOCATE=false (a40.sbatch), MEM_FRACTION unset -> bytes_limit 35.8 GB (JAX default 0.75 x 46 GB); peaks = true BFC allocator peaks, not a preallocated pool",
+  "gpu_peak_run_A_bytes": 15852330496,
+  "pb_stage_peaks_GB": {
+   "geometry_c0": 1.63,
+   "maps_c0": 15.4,
+   "maps_c1": 15.67,
+   "maps_c2": 15.85,
+   "maps_c3": "<= 15.85 (did not raise the high-water mark)",
+   "setup+SOR, post (all classes)": "<= 15.85 (never raised it)",
+   "persistent_in_use_after_stage_GB": "4.2-4.4 (class-independent: site-batch buffers / cached device constants)",
+   "reading": "the B = 16 site batch in maps_batch (fine grids + 131,072 gathered probes per site) sets the peak; the class-dependent part grows only ~0.2-0.3 GB per class step (c0 -> c2)"
+  },
+  "assembly": "never raised the high-water mark (upper bound 15.85 GB); analytic per state: ~5 x Mc x Na x 4 B (phi, mask, f64 product, dQ, dPhi): c3 (Mc 4096, Na 32768) ~3.3 GB, c4 ~13 GB",
+  "titration_per_bucket_clean_GB": {
+   "Mp64": 0.002,
+   "Mp128": 0.006,
+   "Mp256": 0.015,
+   "Mp512": 0.047,
+   "Mp1024": 0.161,
+   "Mp2048_estimate": 0.6,
+   "source": "l3 process (no PB), peak after each S=32 launch, buckets ascending; = W [32,Mp,Mp] f32 + small"
+  },
+  "host": {
+   "driver_peak_rss_GB": {
+    "run_A": 4.57,
+    "run_B": 3.51,
+    "run_C_restart": 3.51,
+    "l3": 5.0
+   },
+   "slurm_maxrss_job_804491_GB": 4.55,
+   "smoke_slurm_maxrss_GB": 3.88,
+   "note": "within the 24 GB job allocation (12 CPUs x 2 GB)"
+  },
+  "disk": {
+   "format": "np.savez uncompressed",
+   "bytes_per_state_mean": 322013,
+   "bytes_per_state_median": 184880,
+   "bytes_per_state_max": 2177006,
+   "M_median": 257.5,
+   "M_max": 994,
+   "W_ut_fraction": 0.786,
+   "W_ut_bytes_per_state_mean": 252430,
+   "curves_bytes_per_state_mean": 40902,
+   "projected_30k_states_GB": 9.7,
+   "note": "includes g, W (upper triangle), pKint, e_back, curves, pKa, per-tautomer PB diagnostics; sitpotM not stored (sha only)"
+  },
+  "headroom_estimate": {
+   "label": "ESTIMATE from per-class peaks (B = 16), not measured beyond class 3",
+   "model": "peak(c) ~ 15.4 GB + 0.28 GB x (2^c - 1) (class-dependent part doubling per class, pessimistic vs the measured c0->c2 growth); assembly ~0.8 GB x 4^c runs after PB buffers are freed",
+   "class_4_32768_surface_atoms": "PB ~19.6 GB, assembly ~13 GB -> fits A40 (35.8 GB default limit, ~43 GB with MEM_FRACTION 0.95) and GH200 96 GB",
+   "beyond_class_4_not_defined_in_records": "a class 5 (65k atoms) would need ~24 GB PB but ~53 GB assembly (4x per class) -> exceeds the A40, fits GH200; assembly (dense phi [Mc,Na]) becomes the limit before PB",
+   "largest_state": "A40: class 4 = 32,768 surface atoms / 65,536 atoms / 8,192 microstates; GH200: class 4 with margin, class 5 by estimate"
+  },
+  "scale_1040_states": {
+   "gpu_peak_bytes": 15852330496,
+   "same_as_104_state_run": true,
+   "pb_stage_peaks_GB": {
+    "geometry_c0": 1.63,
+    "maps_c0": 15.58,
+    "maps_c1": 15.67,
+    "maps_c2": 15.85,
+    "others": "<= 15.85"
+   },
+   "host_driver_peak_rss_GB": 5.21,
+   "slurm_maxrss_GB": 4.77,
+   "host_note": "+0.6 GB vs the 104-state run: the in-memory run summary (per-state timing list) grows with states; harmless at 1k, worth trimming for 30k-state runs",
+   "disk_bytes_per_shard_of_104": 33401917,
+   "disk_bytes_per_state": 321172
+  }
+ },
+ "scale_job": {
+  "job": 804492,
+  "elapsed": "04:24:25",
+  "code": "a40-2026-11-19-m6b",
+  "states": "1,040 = 10 cycles of the 104 records (cycles 1-9 permuted, alias <sid>@k -> new MC chain ids), shard size 104, cold start (no tarball)",
+  "outputs": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40/m6/scale/{run,scale.json}",
+  "status_counts": {
+   "ok": 1040
+  },
+  "failed_pb": 0,
+  "xl_retries": 0,
+  "driver_retries": 0,
+  "asm_or_titration_promotions": 0,
+  "class_bumps": "10 = 0bd6665815002616_AB in every cycle (geometry overflow class 1 -> 2, automatic, logged, identical results)",
+  "energies_bitwise_across_cycles": {
+   "repeats_compared": 936,
+   "pass": true,
+   "arrays": "g, occ, W, start/nst, pairs, pkint, e_back, esolvM/S/M0, sweeps, maxchange, rho, sitpotM sha"
+  },
+  "cycle0_bitwise_vs_m6_run_A": {
+   "pass": true,
+   "arrays": "the above + curves + pKa"
+  }
+ },
+ "open_risks": [
+  "per-stage GPU peaks are exact only where a stage raised the process high-water mark (JAX has no peak reset); assembly/titration in the driver are upper bounds (clean titration peaks from the PB-free l3 process)",
+  "headroom beyond class 3 is an estimate; assembly's dense phi [Mc,Na] grows 4x per class and limits before PB",
+  "nothing run on the GH200 (Pallas/Triton on Hopper, speed, memory)",
+  "driver host RSS grows slowly with the in-memory per-state summary",
+  "pilot states use the estimator rho in production; the M5 reference used logged rho for them, so the x64 check covers the 10 M0 states only"
+ ]
+}
