@@ -1,5 +1,12 @@
 # ATLAS preparation on Isambard
 
+The next combined **ATLAS + PINDER + pKPDB** training release follows the
+[PDBbind validation-first amendment](../../docs/pdbbind-validation-first-protocol.md)
+recorded on 2026-10-12: curate paired assay-pH/Kd measurements, reserve a jointly
+stratified experimental validation portion first, then build all three sources'
+new splits against its protected components. The release and scripts described
+below remain frozen for initial testing; the amendment does not change them.
+
 These scripts record the full ATLAS preparation, sequence audits, frozen split,
 nested portions, compressed graph build, and GPU smoke checks completed on
 2026-10-12. The Python and Slurm files retain their executed contents; they are

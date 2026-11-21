@@ -500,6 +500,19 @@ downstream selection; frozen teacher campaigns remain unchanged.
 | 2026-10-10 | Production GQT loader spreads padded gather indices off row 0 (`production_loading.spread_padding`, default on); training jobs use 15 loader workers per source and prefetch depth 4 | Profile: the Triton attention backward (76.5%) and XLA scatter-adds (16%) accumulated 60-91% of gather indices into row 0. Spreading them is exact (bit-identical losses) and makes training steps 1.85x faster end to end (gradient steps 1.6-2.8x). Batch-size sweep on the 10% pool: 8-32 equivalent, 16 marginally best, worse from 64. Details: [07_gqt_production_stores.md](4_backbone/07_gqt_production_stores.md) |
 | 2026-10-10 | pool-v4 (`pkabench.training_pools v4`) replaces pool-v3 for production GQT (`gqt-production-v2`): the 400-complex PINDER validation set is retired; new validation sets of 800 pKPDB groups and 800 PINDER clusters (400 drawn to share proteins with pKPDB validation), one structure per group, stratified by stratum and size to 1,536 residues; both training pools drop any structure with a chain >= 70% / 80% to either validation set; selection stays PINDER state MAE + interface paired MAE, now on the new set | User decisions (option B after comparing 1,600 / 800 / overlap variants). PINDER training -20% (27,933), pKPDB -11% (56,191). Details: [05_pinder_dataset.md](4_backbone/05_pinder_dataset.md) |
 
+## Future combined training split amendment — 2026-10-12
+
+For the next combined **ATLAS + PINDER + pKPDB** release, first curate a
+high-quality PDBbind protein–protein subset with paired numerical assay pH and
+experimental Kd, and reserve a portion for validation stratified jointly by pH
+and pKd at the leakage-group level. Freeze it before selecting the subsequent
+splits from all three datasets, using one shared protection set plus the
+existing independent test/reference exclusions. The current datasets and splits
+remain frozen for initial testing. The fraction, binning, evidence curation,
+affinity readout and activation remain future release work; this records the
+selection order, not a new active dataset or loss. See the
+[protocol amendment](../docs/pdbbind-validation-first-protocol.md).
+
 # Status update — 2026-10-05, full structural benchmark
 
 The initial non-JAX structural benchmark is complete and verified: 1,452 frozen
