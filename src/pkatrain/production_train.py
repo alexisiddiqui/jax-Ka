@@ -342,7 +342,8 @@ class AuxEngine:
                  ph_weight=0.0, ph_probe=False, bind_weight=0.0, bind_operand="product", shift_weights=None, gate_weight=0.0, gate_cys_weight=10.0,
                  residue_burial=False, residue_edge_weight=0.0, residue_burial_siamese=False, decoy_retype_weight=0.0, decoy_batch_weight=0.0,
                  within_weight=0.0, swap_weight=0.0, swap_mode="class", hotspot_mask=None, alt_rank_weight=0.0, alt_rank_margin=0.0,
-                 alt_cons_edge_weight=0.0, alt_cons_pka_weight=0.0, alt_cons_stopgrad=False, alt_edge_only=False, quartet_weight=0.0):
+                 alt_cons_edge_weight=0.0, alt_cons_pka_weight=0.0, alt_cons_stopgrad=False, alt_edge_only=False, quartet_weight=0.0,
+                 chain_quartet_weight=0.0, chain_quartet_tau=1.0, chain_quartet_k=32):
         import jax
         import jax.numpy as jnp
         import optax
@@ -427,6 +428,15 @@ class AuxEngine:
         if quartet_weight:
             if not residue_edge_weight or not within_weight: raise ValueError("--quartet-weight needs --residue-edge-weight and --within-weight")
             if alt_rank_weight or consistency or alt_edge_only: raise ValueError("--quartet-weight is defined without the alt-geometry terms")
+        # quartet-rank-v2 (2026-11-19): + chain_quartet_weight x mean softplus(1 - (S(A1,B1) + S(A2,B2) - S(A1,B2) - S(A2,B1))), S = soft top-k
+        # pooled free-branch aux_redge logits over surface pairs (production_residue.chain_quartet_terms); batch fields chain_role /
+        # chain_quartet (host side, chain_quartet_batch) are removed from graphs before anything else; aux slots 13-22 (CHAIN_SLOT)
+        self.chain_quartet_weight = chain_weight = float(chain_quartet_weight); chain_tau = float(chain_quartet_tau); chain_k = int(chain_quartet_k)
+        if chain_weight < 0: raise ValueError("--chain-quartet-weight must be >= 0")
+        if chain_weight:
+            if not residue_edge_weight or not within_weight: raise ValueError("--chain-quartet-weight needs --residue-edge-weight and --within-weight")
+            if alt_rank_weight or consistency or alt_edge_only: raise ValueError("--chain-quartet-weight is defined without the alt-geometry terms")
+            if chain_tau <= 0 or chain_k < 1: raise ValueError(("--chain-quartet-tau must be > 0 and --chain-quartet-k >= 1", chain_tau, chain_k))
 
         def predict_all(p, graph, key=None):
             tokens, query_site = site_embeddings_indexed(p, graph, key=key, dropout_rate=rate if key is not None else 0.0)
@@ -581,6 +591,10 @@ class AuxEngine:
             return retyped, batched, within, swapped
 
         def paired_objective(p, graphs, targets, mask, rsa, contacts, valid, key, ph=None):
+            chain_batch = None
+            if chain_weight:  # quartet-rank-v2: batch-level fields leave graphs first (flatten / vmap read per-complex leaves only)
+                chain_batch = tuple(graphs[name] for name in production_residue.CHAIN_FIELDS)
+                graphs = {name: value for name, value in graphs.items() if name not in production_residue.CHAIN_FIELDS}
             crystal = None
             if alt_rank_weight or consistency or alt_edge_only: graphs, crystal = production_alt.split_crystal(graphs)
             alt_graphs = graphs; x_free_edge = None
@@ -670,6 +684,11 @@ class AuxEngine:
             if quartet_weight and "edge" in residue:  # quartet-rank-v1: unmasked free-branch embeddings, gradient into the encoder
                 quartet = production_residue.quartet_terms(p, residue["z"][:, 1], graphs["quartet_idx"][:, 1], graphs["quartet_mask"][:, 1], valid)
                 total = total + quartet_weight * quartet[0]
+            chained = None
+            if chain_weight and "edge" in residue:  # quartet-rank-v2: unmasked free-branch embeddings, gradient into the encoder
+                side_a, side_b = production_residue.chain_sides(graphs["nodes"][:, 1], graphs["node_mask"][:, 1], graphs["rsa_residue"][:, 1], chain_batch[0])
+                chained = production_residue.chain_quartet_terms(p, residue["z"][:, 1], side_a, side_b, chain_batch[1], valid, chain_tau, chain_k)
+                total = total + chain_weight * chained[0]
             if decoys and "edge" in residue:  # decoy-rank-v1; the aux tuple gains (re-typed, in-batch) margin losses
                 terms = decoy_losses(p, edge_graphs, residue, valid, key) if not hotspot else decoy_losses(p, edge_graphs, residue, valid, key, z_masked)
                 retyped, batched = terms[:2]
@@ -685,6 +704,8 @@ class AuxEngine:
                 if consistent is not None: terms = (*terms, *consistent)  # anm-aug-v1: slots 6, 7 = cons edge, cons pKa
                 if alt_edge_only: terms = (*terms, *([0.0] * (8 - len(terms))), burial, gated)  # anm-edge-v1: slots 8, 9 = burial, gate (crystal pass)
                 if quartet is not None: terms = (*terms, *([0.0] * (QUARTET_SLOT - len(terms))), *quartet)  # quartet-rank-v1: slots 10-12
+                if chained is not None:  # quartet-rank-v2: slots 13-22 = loss, accuracy, quartets, softplus sum, correct x 3, count x 3 (hetero, homo, abag)
+                    terms = (*terms, *([0.0] * (CHAIN_SLOT - len(terms))), *chained[:4], *(chained[4][c] for c in range(3)), *(chained[5][c] for c in range(3)))
                 return total, (state_loss, pair_loss, ph_loss, bind_loss, terms)
             if alt_edge_only:
                 return total, (state_loss, pair_loss, ph_loss, bind_loss, (0.0, 0.0, 0.0, 0.0, 0.0, 0.0 if ranked is None else ranked,
@@ -1097,20 +1118,39 @@ def validate(engine, predict, params, sources, manifests, config, out=None, epoc
 
 
 QUARTET_SLOT = 10  # quartet-rank-v1: aux slots 10, 11, 12 = quartet softplus loss, accuracy, covered fraction (unweighted)
+CHAIN_SLOT = 13  # quartet-rank-v2: aux slots 13-22 = chain loss, accuracy, quartets, softplus sum, correct (hetero, homo, abag), counts (same)
+CHAIN_NAMES = ("pinder_chain_softplus_batch_mean", "pinder_chain_accuracy_batch_mean", "pinder_chain_quartets", "pinder_chain_softplus_sum",
+               "pinder_chain_correct_hetero", "pinder_chain_correct_homo", "pinder_chain_correct_abag", "pinder_chain_n_hetero", "pinder_chain_n_homo", "pinder_chain_n_abag")
 WITHIN_SLOT = 2
 
 
+def chain_history(means):
+    """quartet-rank-v2 history fields from the epoch means of the aux slots (CHAIN_SLOT on): pooled loss / accuracy over the
+    epoch's quartets (sums / counts), quartets per batch, per class (hetero, homo, abag) accuracy and quartets per batch."""
+    v = dict(zip(CHAIN_NAMES, map(float, means[CHAIN_SLOT:CHAIN_SLOT + len(CHAIN_NAMES)])))
+    n = v["pinder_chain_quartets"]; cls = ("hetero", "homo", "abag"); ratio = lambda a, b: (a / b) if b > 0 else None
+    correct = sum(v[f"pinder_chain_correct_{c}"] for c in cls)
+    return {"pinder_chain_softplus": ratio(v["pinder_chain_softplus_sum"], n), "pinder_chain_accuracy": ratio(correct, n), "pinder_chain_quartets_per_batch": n,
+            **{f"pinder_chain_accuracy_{c}": ratio(v[f"pinder_chain_correct_{c}"], v[f"pinder_chain_n_{c}"]) for c in cls},
+            **{f"pinder_chain_quartets_{c}_per_batch": v[f"pinder_chain_n_{c}"] for c in cls},
+            "pinder_chain_softplus_batch_mean": v["pinder_chain_softplus_batch_mean"]}
+
+
 def quartet_grad_norms(engine, params, graphs, targets, mask, wb, wi, valid, key, epoch=None, number=None, updates=None):
-    """quartet-rank-v1 diagnostic: L2 norms of the gradients of the UNWEIGHTED quartet term (aux slot 10) and the UNWEIGHTED
-    within listwise term (slot 2) per top-level parameter key, on one batch with the training objective and dropout key;
-    encoder = every key not starting with "aux_". Ratios: quartet / within (unweighted) and (L x quartet) / (W_within x within)."""
+    """quartet-rank-v1/v2 diagnostic: L2 norms of the gradients of the UNWEIGHTED within listwise term (aux slot 2), the
+    UNWEIGHTED residue quartet term (slot 10, when --quartet-weight > 0) and the UNWEIGHTED chain quartet term (slot 13, when
+    --chain-quartet-weight > 0) per top-level parameter key, on one batch with the training objective and dropout key;
+    encoder = every key not starting with "aux_", trunk = encoder minus head / groups. Ratios term / within, unweighted and
+    weighted (L x term) / (W_within x within)."""
     import jax
     import jax.numpy as jnp
+    lq, lw, lc = float(engine.quartet_weight), float(engine.within_weight), float(getattr(engine, "chain_quartet_weight", 0.0))
+    slots = [("within", WITHIN_SLOT)] + ([("quartet", QUARTET_SLOT)] if lq else []) + ([("chain", CHAIN_SLOT)] if lc else [])
     t0 = time.time(); fn = getattr(engine, "_quartet_norm_fn", None)
     if fn is None:
         def norms(p, *args):
             out = {}
-            for name, slot in (("within", WITHIN_SLOT), ("quartet", QUARTET_SLOT)):
+            for name, slot in slots:
                 g = jax.grad(lambda q, s=slot: engine._paired_objective(q, *args)[1][4][s])(p)
                 out[name] = {k: jnp.sqrt(sum(jnp.sum(jnp.square(x)) for x in jax.tree.leaves(v))) for k, v in g.items()}
             return out
@@ -1118,20 +1158,22 @@ def quartet_grad_norms(engine, params, graphs, targets, mask, wb, wi, valid, key
     raw = jax.device_get(fn(params, graphs, targets, mask, wb, wi, valid, key))
     keys = sorted(raw["within"]); encoder = [k for k in keys if not k.startswith("aux_")]; trunk = [k for k in encoder if k not in ("head", "groups")]
     total = lambda d, ks: float(np.sqrt(sum(float(d[k]) ** 2 for k in ks)))
-    nq, nw = raw["quartet"], raw["within"]; lq, lw = float(engine.quartet_weight), float(engine.within_weight)
     ratio = lambda a, b: (a / b) if b > 0 else None
-    record = {"epoch": epoch, "batch": number, "updates_before": updates, "encoder_subtree": encoder,
-              "norms": {"quartet_encoder": total(nq, encoder), "within_encoder": total(nw, encoder), "quartet_trunk": total(nq, trunk), "within_trunk": total(nw, trunk),
-                        "quartet_aux_redge": total(nq, ["aux_redge"]), "within_aux_redge": total(nw, ["aux_redge"])},
-              "per_key": {"quartet": {k: float(nq[k]) for k in keys}, "within": {k: float(nw[k]) for k in keys}}, "weights": {"quartet": lq, "within": lw}}
+    weights = {"within": lw, "quartet": lq, "chain": lc}
+    record = {"epoch": epoch, "batch": number, "updates_before": updates, "encoder_subtree": encoder, "norms": {}, "per_key": {},
+              "weights": {name: weights[name] for name, _ in slots}}
+    for name, _ in slots:
+        record["norms"].update({f"{name}_encoder": total(raw[name], encoder), f"{name}_trunk": total(raw[name], trunk), f"{name}_aux_redge": total(raw[name], ["aux_redge"])})
+        record["per_key"][name] = {k: float(raw[name][k]) for k in keys}
     n = record["norms"]
-    record.update({"ratio_quartet_over_within_encoder": ratio(n["quartet_encoder"], n["within_encoder"]),
-                   "ratio_weighted_quartet_over_within_encoder": ratio(lq * n["quartet_encoder"], lw * n["within_encoder"]),
-                   "ratio_quartet_over_within_trunk": ratio(n["quartet_trunk"], n["within_trunk"]),
-                   "ratio_quartet_over_within_aux_redge": ratio(n["quartet_aux_redge"], n["within_aux_redge"]), "seconds": round(time.time() - t0, 1)})
-    if not all(np.isfinite(v) for v in n.values()): raise FloatingPointError(f"non-finite quartet / within gradient norms: {n}")
-    print("[quartet-grad-norms] " + json.dumps({k: record[k] for k in ("epoch", "batch", "updates_before", "norms", "ratio_quartet_over_within_encoder",
-                                                                       "ratio_weighted_quartet_over_within_encoder", "seconds")}), flush=True)
+    for name, _ in slots[1:]:
+        record.update({f"ratio_{name}_over_within_encoder": ratio(n[f"{name}_encoder"], n["within_encoder"]),
+                       f"ratio_weighted_{name}_over_within_encoder": ratio(weights[name] * n[f"{name}_encoder"], lw * n["within_encoder"]),
+                       f"ratio_{name}_over_within_trunk": ratio(n[f"{name}_trunk"], n["within_trunk"]),
+                       f"ratio_{name}_over_within_aux_redge": ratio(n[f"{name}_aux_redge"], n["within_aux_redge"])})
+    record["seconds"] = round(time.time() - t0, 1)
+    if not all(np.isfinite(v) for v in n.values()): raise FloatingPointError(f"non-finite term gradient norms: {n}")
+    print("[quartet-grad-norms] " + json.dumps({k: v for k, v in record.items() if k not in ("encoder_subtree", "per_key")}), flush=True)
     return record
 
 
@@ -1168,7 +1210,8 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
           alt_source=None, alt_prob=0.0, val_alt=False, alt_rank_weight=0.0, alt_rank_margin=0.0,
           alt_weights=None, alt_cons_edge_weight=0.0, alt_cons_pka_weight=0.0, alt_cons_stopgrad=False, alt_edge_only=False, within_target="distance",
           quartet_weight=0.0, quartet_count=None, smoke_batches=5, quartet_grad_norms_every_epoch=False,
-          pinder_manifest=None, pinder_extra=None, mask_store_extra=None):
+          pinder_manifest=None, pinder_extra=None, mask_store_extra=None,
+          chain_quartet_weight=0.0, chain_quartet_count=None, chain_quartet_tau=None, chain_quartet_k=None, chain_quartet_abag_min=None):
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
@@ -1186,7 +1229,19 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     if quartet_weight < 0 or quartet_count < 1: raise ValueError((quartet_weight, quartet_count))
     if quartet_weight and (not within_weight or not residue_edge_weight or aux_weight is None or alt_source):
         raise ValueError("--quartet-weight needs --within-weight, --residue-edge-weight and --aux-weight, and no --alt-source")
-    if quartet_grad_norms_every_epoch and not quartet_weight: raise ValueError("--quartet-grad-norms needs --quartet-weight > 0")
+    # quartet-rank-v2 (2026-11-19): cross-complex chain quartets, validated before the run directory is touched
+    chain_weight = float(chain_quartet_weight)
+    chain_count = production_residue.CHAIN_COUNT if chain_quartet_count is None else int(chain_quartet_count)
+    chain_tau = production_residue.CHAIN_TAU if chain_quartet_tau is None else float(chain_quartet_tau)
+    chain_k = production_residue.CHAIN_K if chain_quartet_k is None else int(chain_quartet_k)
+    chain_abag_min = production_residue.CHAIN_ABAG_MIN if chain_quartet_abag_min is None else int(chain_quartet_abag_min)
+    if chain_weight < 0 or chain_count < 1 or chain_tau <= 0 or chain_k < 1 or chain_abag_min < 2:
+        raise ValueError(("chain quartet: weight >= 0, count >= 1, tau > 0, k >= 1, abag-min >= 2", chain_weight, chain_count, chain_tau, chain_k, chain_abag_min))
+    if chain_weight and (not within_weight or not residue_edge_weight or aux_weight is None or alt_source):
+        raise ValueError("--chain-quartet-weight needs --within-weight, --residue-edge-weight and --aux-weight, and no --alt-source")
+    if not chain_weight and any(v is not None for v in (chain_quartet_count, chain_quartet_tau, chain_quartet_k, chain_quartet_abag_min)):
+        raise ValueError("--chain-quartet-count / -tau / -k / -abag-min need --chain-quartet-weight > 0")
+    if quartet_grad_norms_every_epoch and not (quartet_weight or chain_weight): raise ValueError("--quartet-grad-norms needs --quartet-weight or --chain-quartet-weight > 0")
     if int(smoke_batches) < 1 or (int(smoke_batches) != 5 and not smoke): raise ValueError("--smoke-batches needs --smoke (and >= 1)")
     smoke_batches = int(smoke_batches)
     # quartet-rank-v1b (2026-11-16): extra PINDER training records (production_extra; pool-v5), validated before the run directory is touched
@@ -1204,6 +1259,12 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     if pinder_manifest is not None:  # quartet-rank-v1b: the pool's PINDER manifest (store-v2 + extra records)
         pool_manifest = read(pinder_manifest); production_extra.check_manifest(pool_manifest, manifests["pinder"], pinder_extra); manifests["pinder"] = pool_manifest
     norms = normalization(manifests["pinder"], fraction); scale = lr_scale(batch)
+    chain_meta = chain_bucket = chain_pool_tsv = None
+    if chain_weight:  # quartet-rank-v2: classes / roles / groups / UniProt of every training complex, and its size bucket
+        chain_pool_tsv = production_residue.chain_pool_path(root, manifests["pinder"]); chain_meta = production_residue.chain_metadata(chain_pool_tsv)
+        chain_train = select(manifests["pinder"], "train", fraction); missing = [r["id"] for r in chain_train if r["id"] not in chain_meta]
+        if missing: raise ValueError((f"{len(missing)} training complexes missing from {chain_pool_tsv}", missing[:5]))
+        chain_policy = _policy(manifests["pinder"], batch); chain_bucket = {r["id"]: chain_policy.bucket(r["n"]) for r in chain_train}
     if variant != "none" and (not orientation or not dihedrals or loops != 1 or aux_weight is None):
         raise ValueError("positional ablations require base A orientation/dihedrals/burial settings")
     # hotspot-mask-v1 (2026-10-30): masked third pass on the free branch (production_residue.hotspot_keep), default off
@@ -1343,6 +1404,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
         **production_alt.alt_provenance(alt_prob, alt_store, val_alt, alt_rank_weight, alt_rank_margin, alt_entries, alt_weights,
                                         alt_cons_edge_weight, alt_cons_pka_weight, alt_cons_stopgrad, *((True,) if alt_edge_only else ())),
         **production_residue.quartet_provenance(quartet_weight, quartet_count),
+        **production_residue.chain_provenance(chain_weight, chain_count, chain_tau, chain_k, chain_abag_min, chain_pool_tsv),
         **({"smoke_batches": smoke_batches} if smoke and smoke_batches != 5 else {}),
         **({"pinder_pool": {"manifest": str(pinder_manifest), "manifest_sha256": digest(pinder_manifest), "pool": manifests["pinder"].get("pool"),
                             "pool_sha256": manifests["pinder"].get("pool_sha256"), "extra": str(pinder_extra),
@@ -1460,7 +1522,8 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
                            **({"alt_cons_edge_weight": alt_cons_edge_weight, "alt_cons_pka_weight": alt_cons_pka_weight, "alt_cons_stopgrad": alt_cons_stopgrad}
                               if consistency else {}),
                            **({"alt_edge_only": True} if alt_edge_only else {}),
-                           **({"quartet_weight": quartet_weight} if quartet_weight else {}))
+                           **({"quartet_weight": quartet_weight} if quartet_weight else {}),
+                           **({"chain_quartet_weight": chain_weight, "chain_quartet_tau": chain_tau, "chain_quartet_k": chain_k} if chain_weight else {}))
         engine.ph_table = ph_table
         state = engine.optimizer.init(params)
         step_key = jax.random.PRNGKey(seed + 200003)
@@ -1485,6 +1548,8 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     for epoch in range(len(history) + 1, epochs + 1):
         if stale >= PATIENCE: break
         pair, pk = epoch_plans(manifests, fraction, epoch, batch, seed)
+        chain_regroup = None; chain_counts = production_residue.chain_stats() if chain_weight else None
+        if chain_weight: pair, chain_regroup = production_residue.chain_regroup(pair, chain_meta, chain_bucket, chain_abag_min)  # quartet-rank-v2
         if smoke: pair, pk = pair[:smoke_batches], pk[:smoke_batches]
         specs = list(zip(pair, pk)); deferred = DeferredScalars(every=50); began = time.time()
         prefetcher = Prefetcher(sources["train"], specs, config, to_device if not chunked(batch) else host_chunks)
@@ -1496,6 +1561,10 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
             if step_key is not None:
                 graphs, targets, mask, wb, wi, _, valid = pair_batch
                 k_pair, k_pk = jax.random.split(jax.random.fold_in(jax.random.fold_in(step_key, epoch), number))
+                if chain_weight:  # quartet-rank-v2: batch-level chain quartets, stream [CHAIN_SALT, seed, epoch, batch number]
+                    role, cq = production_residue.chain_quartet_batch(pair_ids, len(valid), chain_meta, chain_count,
+                                                                      np.random.default_rng([production_residue.CHAIN_SALT, seed, epoch, number]), chain_counts)
+                    graphs = {**graphs, "chain_role": jax.device_put(role), "chain_quartet": jax.device_put(cq)}
                 if ph_table is not None:
                     ph_pair = jax.device_put(ph_table.arrays("pinder", pair_ids, len(valid)))
                     ph_pk = jax.device_put(ph_table.arrays("pkpdb", pk_ids, len(pk_batch[-1])))
@@ -1507,7 +1576,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
                     state_loss, pair_loss, _, bind_loss = pair_aux[:4]
                     pk_loss, pk_gradient = engine.pkpdb_value_grad(params, *pk_batch, k_pk)
                 if len(pair_aux) > 4: decoy_values.append(jnp.stack([jnp.asarray(v, jnp.float32) for v in pair_aux[4]]))
-                if quartet_weight and (smoke or quartet_grad_norms_every_epoch) and number == len(specs):
+                if (quartet_weight or chain_weight) and (smoke or quartet_grad_norms_every_epoch) and number == len(specs):
                     try: quartet_norms.append(quartet_grad_norms(engine, params, graphs, targets, mask, wb, wi, valid, k_pair, epoch, number, (epoch - 1) * len(specs) + number - 1))
                     except Exception as error:  # noqa: BLE001  (diagnostic only; the smoke must fail loudly)
                         if smoke: raise
@@ -1545,6 +1614,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
                                            "pinder_quartet_softplus", "pinder_quartet_accuracy", "pinder_quartet_covered"),
                                           map(float, np.mean(np.asarray(jnp.stack(decoy_values)), axis=0))))
                                  if decoy_values else {}),
+                              **(chain_history(np.mean(np.asarray(jnp.stack(decoy_values)), axis=0)) if chain_weight and decoy_values else {}),
                               **({"pinder_mask_kept_fraction": float(mask_totals[0] / max(mask_totals[1], 1.0)), "pinder_mask_kept": int(mask_totals[0]),
                                   "pinder_mask_surface": int(mask_totals[1]), "pinder_mask_fallbacks": int(mask_totals[2]), "pinder_mask_complexes": int(mask_totals[3])}
                                  if mask_oracle is not None else {}),
@@ -1564,8 +1634,11 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
                **({"quartet_counts": {**production_residue.QUARTET_STATS, "pool_cache": len(production_residue.QUARTET_POOLS),
                                       "note": "cumulative over training visits (production_residue.quartet_fields)"}} if quartet_weight else {}),
                **({"debug_quartet_grad_norms": quartet_norms} if quartet_norms else {}),
+               **({"chain_quartet_counts": chain_counts, "chain_regroup": chain_regroup} if chain_weight else {}),
                "validation": validation, "train_seconds": round(train_seconds, 1), "validation_seconds": round(val_seconds, 1),
                "loader_wait_fraction": telemetry.get("wait_fraction")}
+        if chain_weight and not quartet_weight:  # quartet-rank-v2 chain-only: slots 10-12 are padding, not a residue quartet term
+            for name in ("pinder_quartet_softplus", "pinder_quartet_accuracy", "pinder_quartet_covered"): row["train_loss"].pop(name, None)
         history.append(row)
         with open(out / "history.jsonl", "a") as handle: handle.write(json.dumps(row) + "\n")
         improved = best is None or validation["selection"] < best["validation"]["selection"] - MIN_DELTA
@@ -1827,6 +1900,12 @@ def main(argv=None):
     p.add_argument("--pinder-manifest", default=None, help="quartet-rank-v1b: PINDER pool manifest replacing manifest-v1.json (e.g. training/pool-v5; production_extra)")
     p.add_argument("--pinder-extra", default=None, help="quartet-rank-v1b: runtime-shaped root of the extra records' store-v2 + side tables (production_extra)")
     p.add_argument("--mask-store-extra", default=None, help="quartet-rank-v1b: hotspot oracle store for the extra records (with --mask-store)")
+    p.add_argument("--chain-quartet-weight", type=float, default=0.0,
+                   help="quartet-rank-v2: cross-complex chain quartet loss weight, soft top-k pooled free-branch edge logits (production_residue.chain_quartet_terms; 0 = off)")
+    p.add_argument("--chain-quartet-count", type=int, default=None, help="chain quartets per batch (default production_residue.CHAIN_COUNT = 16)")
+    p.add_argument("--chain-quartet-tau", type=float, default=None, help="pooling temperature tau (default 1)")
+    p.add_argument("--chain-quartet-k", type=int, default=None, help="pooling k: S = tau logsumexp(s / tau) - tau log k (default 32)")
+    p.add_argument("--chain-quartet-abag-min", type=int, default=None, help="Ab/Ag complexes regrouped per Ab/Ag batch inside each size bucket (default 2)")
     p = sub.add_parser("count"); p.add_argument("widths", type=int, nargs="+"); p.add_argument("--sidechains", action="store_true")
     p.add_argument("--depth", type=int, default=2); p.add_argument("--loops", type=int, default=1)
     p = sub.add_parser("export"); p.add_argument("run"); p.add_argument("destination")
@@ -1880,7 +1959,8 @@ def main(argv=None):
                        args.alt_source, args.alt_prob, args.val_alt, args.alt_rank_weight, args.alt_rank_margin,
                        args.alt_weights, args.alt_cons_edge_weight, args.alt_cons_pka_weight, args.alt_cons_stopgrad, args.alt_edge_only, args.within_target,
                        args.quartet_weight, args.quartet_count, args.smoke_batches, args.quartet_grad_norms,
-                       args.pinder_manifest, args.pinder_extra, args.mask_store_extra)
+                       args.pinder_manifest, args.pinder_extra, args.mask_store_extra, args.chain_quartet_weight, args.chain_quartet_count,
+                       args.chain_quartet_tau, args.chain_quartet_k, args.chain_quartet_abag_min)
         print(json.dumps({"selected_epoch": result["selected_epoch"], "selection": result["validation"]["selection"]}))
 
 

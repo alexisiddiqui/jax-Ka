@@ -895,6 +895,204 @@ def quartet_provenance(weight, count):
         "history": ["pinder_quartet_softplus", "pinder_quartet_accuracy", "pinder_quartet_covered"]}}
 
 
+# ---------------------------------------------------------------- quartet-rank-v2 (2026-11-19): cross-complex CHAIN quartets
+# --chain-quartet-weight Lc (default 0 = off: no metadata, no regrouping, no batch fields, objective unchanged). For two
+# same-class complexes x1 = A1-B1 and x2 = A2-B2 of one training batch, with S(A, B) the soft top-k pooled free-branch
+# edge-head logit over every surface pair a in A, b in B:
+#   S = tau * logsumexp(s_ab / tau) - tau * log(k)   (tau CHAIN_TAU 1, k CHAIN_K 32; s = aux_redge pair_logits_from on the
+#   UNMASKED free-branch residue embeddings of the existing pass; surface = free RSA >= SURFACE_RSA, real node; other pairs
+#   at CHAIN_MASK_LOGIT before the LSE)
+#   loss = mean over the batch's usable quartets of softplus(CHAIN_MARGIN - (S(A1,B1) + S(A2,B2) - S(A1,B2) - S(A2,B1))).
+# Free-branch tokens of a chain do not depend on its partner (cross-chain edges masked; exact radius graph; verified
+# 0.0 change in test_quartet2), so crossed scores reuse the tokens of the pass; per-chain additive scores cancel exactly.
+# Roles: heteromer / homomer A = chain code 0, B = chain code 1; Ab/Ag A = the antibody = the one UNDEFINED-UniProt chain
+# (score_masked2 ROLE: index in the chain-name-sorted id = graph chain code), B = the antigen; Ab/Ag without exactly one
+# UNDEFINED chain and complexes missing from the pool table: class -1 (never paired). Classes = pool tsv `stratum`.
+# Pairs (host side, per training batch, stream [CHAIN_SALT, seed, epoch, batch number]): unordered slot pairs of the same
+# class, minus false-negative guard skips (same pool `group` cluster, or any shared non-UNDEFINED UniProt between the two
+# complexes, which covers A1/A2 and B1/B2), then min(count, available) drawn without replacement.
+# Batch regrouping (chain_regroup): within each size bucket of the epoch's plans, role-valid Ab/Ag complexes are moved by
+# position swaps into n // abag_min batches (sizes as equal as possible, each >= abag_min), preferring the batches that
+# already hold the most Ab/Ag; every batch keeps its size, bucket and visited set (a permutation of the epoch's slots).
+CHAIN_SALT = 40967
+CHAIN_COUNT = 16
+CHAIN_TAU = 1.0
+CHAIN_K = 32
+CHAIN_ABAG_MIN = 2
+CHAIN_MARGIN = 1.0
+CHAIN_MASK_LOGIT = -1e9
+CHAIN_FIELDS = ("chain_role", "chain_quartet")
+CHAIN_CLASS_NAMES = ("hetero", "homo", "abag")  # codes = STRATA
+CHAIN_SLOTS = 10  # aux values: loss, accuracy, quartets, softplus sum, correct x 3 classes, count x 3 classes
+
+
+def chain_name(label):
+    """score_masked2.chain_name: 'B12' -> 'B-12', 'A1' -> 'A'."""
+    import re
+    base, n = re.match(r"^(.*?)(\d+)$", label).groups(); return base if int(n) == 1 else f"{base}-{n}"
+
+
+def chain_uniprot(cid):
+    """score_masked2.chain_uniprot: UniProt ids in chain-name order (= graph chain codes 0, 1)."""
+    sides = [(chain_name(s.split("__")[1].rsplit("_", 1)[0]), s.rsplit("_", 1)[1]) for s in cid.split("--")]
+    return tuple(u for _, u in sorted(sides))
+
+
+def chain_pool_path(root, manifest):
+    """The pool table of the training manifest (pool-v5: manifest['pool']), else pool-v4 pinder.tsv."""
+    pool = manifest.get("pool") if isinstance(manifest, dict) else None
+    return Path(pool) if pool else Path(root) / "training/pool-v4/pinder.tsv"
+
+
+def chain_metadata(pool_tsv):
+    """{id: (class code (STRATA) or -1, A-side chain code or -1, group, (UniProt chain 0, UniProt chain 1))}."""
+    import csv
+    out = {}
+    with open(pool_tsv) as handle:
+        for row in csv.DictReader(handle, delimiter="\t"):
+            cid = row["id"]; uni = chain_uniprot(cid); code = STRATA.get(row["stratum"], -1); role = 0 if code in (0, 1) else -1
+            if code == STRATA["Ab/Ag"]:
+                if uni.count("UNDEFINED") == 1: role = uni.index("UNDEFINED")
+                else: code = -1
+            out[cid] = (code, role, row["group"], uni)
+    return out
+
+
+def chain_guard(m1, m2):
+    """None if the complexes may be crossed, else the skip reason ('group' or 'uniprot')."""
+    if m1[2] == m2[2]: return "group"
+    shared = (set(m1[3]) & set(m2[3])) - {"UNDEFINED"}
+    return "uniprot" if shared else None
+
+
+def chain_stats():
+    return {"batches": 0, "pairs_same_class": [0, 0, 0], "skipped_group": [0, 0, 0], "skipped_uniprot": [0, 0, 0], "drawn": [0, 0, 0],
+            "batches_abag_ge2": 0, "abag_slots": 0, "unclassed_slots": 0}
+
+
+def chain_quartet_batch(ids, size, meta, count, rng, stats=None):
+    """(chain_role (size,) int32: A-side chain code per slot, -1 = unusable / padding; chain_quartet (count, 4) int32 rows
+    (x1, x2, class, ok)) for one training batch of `ids` in slot order."""
+    role = np.full(size, -1, np.int32); code = np.full(size, -1, np.int32)
+    for slot, cid in enumerate(ids):
+        m = meta.get(cid)
+        if m is not None and m[0] >= 0: code[slot], role[slot] = m[0], m[1]
+    pairs = []
+    if stats is not None:
+        stats["batches"] += 1; stats["abag_slots"] += int(np.sum(code == 2)); stats["unclassed_slots"] += int(np.sum(code[:len(ids)] < 0))
+        stats["batches_abag_ge2"] += int(np.sum(code == 2) >= 2)
+    for i in range(len(ids)):
+        for j in range(i + 1, len(ids)):
+            if code[i] < 0 or code[i] != code[j]: continue
+            c = int(code[i]); why = chain_guard(meta[ids[i]], meta[ids[j]])
+            if stats is not None:
+                stats["pairs_same_class"][c] += 1
+                if why: stats[f"skipped_{why}"][c] += 1
+            if why is None: pairs.append((i, j, c))
+    out = np.zeros((int(count), 4), np.int32)
+    if pairs:
+        pick = np.sort(rng.choice(len(pairs), min(int(count), len(pairs)), replace=False))
+        for r, q in enumerate(pick):
+            out[r] = (*pairs[q], 1)
+            if stats is not None: stats["drawn"][pairs[q][2]] += 1
+    return role, out
+
+
+def chain_regroup(plans, meta, bucket_of, minimum=CHAIN_ABAG_MIN):
+    """(plans', info): plans with each bucket's role-valid Ab/Ag complexes swapped into n // minimum batches (>= minimum
+    each); slot exchanges inside a bucket only, so batch sizes, buckets and the visited multiset are unchanged."""
+    minimum = int(minimum)
+    if minimum < 2: raise ValueError("chain_regroup needs minimum >= 2")
+    new = [list(b) for b in plans]; abag = lambda cid: meta.get(cid, (-1,))[0] == STRATA["Ab/Ag"]
+    buckets = {}
+    for index, ids in enumerate(new):
+        names = {bucket_of[cid] for cid in ids}
+        if len(names) != 1: raise AssertionError(("mixed-bucket plan", index, sorted(names)))
+        buckets.setdefault(names.pop(), []).append(index)
+    info = {"minimum": minimum, "abag": 0, "moved": 0, "abag_batches": 0, "unpaired_abag": 0, "buckets": {}}
+    for name, indices in buckets.items():
+        count = {b: sum(abag(c) for c in new[b]) for b in indices}; n = sum(count.values()); info["abag"] += n
+        if n < minimum:
+            info["unpaired_abag"] += n; info["buckets"][name] = {"abag": n, "groups": 0, "moved": 0}; continue
+        longest = max(len(new[b]) for b in indices)
+        groups = max(min(n // minimum, len(indices)), -(-n // longest), 1)
+        sizes = [n // groups + (1 if g < n % groups else 0) for g in range(groups)]
+        order = sorted(indices, key=lambda b: (-count[b], indices.index(b)))
+        targets = []; free = list(order)
+        for size in sizes:  # largest sizes first (sizes are non-increasing)
+            pick = next((b for b in free if len(new[b]) >= size), None)
+            if pick is None: raise AssertionError(("no batch can hold an Ab/Ag group", name, size))
+            targets.append((pick, size)); free.remove(pick)
+        quota = dict(targets); donors = []; receivers = []
+        for b in indices:
+            slots = [s for s, c in enumerate(new[b]) if abag(c)]
+            keep = quota.get(b, 0)
+            donors += [(b, s) for s in slots[keep:]]
+            if keep > len(slots): receivers += [(b, s) for s, c in enumerate(new[b]) if not abag(c)][:keep - len(slots)]
+        if len(donors) != len(receivers): raise AssertionError(("regroup imbalance", name, len(donors), len(receivers)))
+        for (db, ds), (rb, rs) in zip(donors, receivers): new[db][ds], new[rb][rs] = new[rb][rs], new[db][ds]
+        info["moved"] += len(donors); info["abag_batches"] += len(targets)
+        info["buckets"][name] = {"abag": n, "groups": len(targets), "sizes": sizes, "moved": len(donors)}
+    return new, info
+
+
+def chain_sides(nodes, node_mask, rsa_free, role):
+    """(side A, side B) (B, n) bool masks: real surface residues (free RSA >= SURFACE_RSA) on the A-side chain code role[b]
+    and on the other chain; empty for role -1. nodes (B, n, F) raw graph nodes, backbone table last (chain = column -2)."""
+    import jax.numpy as jnp
+    chain = nodes[..., -2]; base = (node_mask > 0) & (rsa_free >= SURFACE_RSA) & (role >= 0)[:, None]
+    r = role.astype(chain.dtype)[:, None]
+    return base & (chain == r), base & (chain == 1 - r)
+
+
+def chain_pool(p, za, ma, zb, mb, tau=CHAIN_TAU, k=CHAIN_K):
+    """S = tau * logsumexp(s_ab / tau) - tau * log(k) over the pairs ma[a] & mb[b] (s = aux_redge logits)."""
+    import jax
+    import jax.numpy as jnp
+    s = pair_logits_from(p, za[:, None, :], zb[None, :, :]) / tau
+    s = jnp.where(ma[:, None] & mb[None, :], s, CHAIN_MASK_LOGIT)
+    return tau * (jax.nn.logsumexp(s) - jnp.log(float(k)))
+
+
+def chain_quartet_terms(p, z, side_a, side_b, quartets, valid, tau=CHAIN_TAU, k=CHAIN_K, margin=CHAIN_MARGIN):
+    """(loss, accuracy, quartets, softplus sum, correct per class (3,), count per class (3,)) for z (B, n, W) free
+    embeddings, side masks (B, n), quartets (Q, 4) rows (x1, x2, class, ok), valid (B,). Native S for every slot, crossed
+    S(A_x1, B_x2) and S(A_x2, B_x1) per quartet (B + 2Q pooled scores, sequential with rematerialisation). A quartet counts
+    when ok and both complexes are valid with non-empty A and B sides; loss / accuracy are means over counted quartets."""
+    import jax
+    import jax.numpy as jnp
+    b = z.shape[0]; q = quartets.shape[0]; x1, x2, cls, ok = (quartets[:, c] for c in range(4))
+    xa = jnp.concatenate((jnp.arange(b), x1, x2)); xb = jnp.concatenate((jnp.arange(b), x2, x1))
+
+    def one(pair):
+        a, c = pair; return chain_pool(p, z[a], side_a[a], z[c], side_b[c], tau, k)
+    S = jax.lax.map(jax.checkpoint(one), (xa, xb))
+    native, c12, c21 = S[:b], S[b:b + q], S[b + q:]
+    full = jnp.any(side_a, axis=1) & jnp.any(side_b, axis=1) & jnp.asarray(valid, bool)
+    w = ((ok > 0) & full[x1] & full[x2]).astype(z.dtype); n = jnp.sum(w)
+    delta = native[x1] + native[x2] - c12 - c21
+    sp = jax.nn.softplus(margin - delta) * w; correct = (delta > 0).astype(z.dtype) * w
+    per = jnp.stack([(cls == c).astype(z.dtype) for c in range(3)])
+    return jnp.sum(sp) / jnp.maximum(n, 1.0), jnp.sum(correct) / jnp.maximum(n, 1.0), n, jnp.sum(sp), per @ correct, per @ w
+
+
+def chain_provenance(weight, count, tau, k, abag_minimum, pool_tsv):
+    if not weight: return {}
+    return {"chain_quartet": {"weight": float(weight), "count": int(count), "tau": float(tau), "k": int(k), "abag_min": int(abag_minimum), "margin": CHAIN_MARGIN,
+        "salt": CHAIN_SALT, "mask_logit": CHAIN_MASK_LOGIT, "surface_rsa_min": SURFACE_RSA, "pool_tsv": str(pool_tsv), "pool_tsv_sha256": digest(Path(pool_tsv)),
+        "score": "S(A, B) = tau * logsumexp(s_ab / tau) - tau * log(k) over surface pairs (free RSA >= 0.1, real nodes) a in A, b in B; s = aux_redge logits "
+                 "(pair_logits_from) on the UNMASKED free-branch residue embeddings of the existing pass; full gradient into the encoder",
+        "loss": "mean softplus(1 - (S(A1,B1) + S(A2,B2) - S(A1,B2) - S(A2,B1))) over the batch's quartets with ok, valid complexes and non-empty sides",
+        "roles": "hetero / homo: A = chain code 0, B = chain code 1; Ab/Ag: A = antibody (the one UNDEFINED-UniProt chain, score_masked2 ROLE), B = antigen; "
+                 "Ab/Ag without exactly one UNDEFINED chain: unpaired",
+        "pairs": "per batch, stream [CHAIN_SALT, seed, epoch, batch]: unordered same-class slot pairs (pool tsv stratum), guard skips same `group` or any "
+                 "shared non-UNDEFINED UniProt; min(count, available) drawn without replacement",
+        "regroup": "per epoch, inside each size bucket: role-valid Ab/Ag complexes swapped into n // abag_min batches (>= abag_min each; slot exchanges only, "
+                   "same sizes / buckets / visited set)",
+        "history": ["pinder_chain_softplus", "pinder_chain_accuracy", "pinder_chain_quartets_per_batch", "pinder_chain_accuracy_{hetero,homo,abag}",
+                    "pinder_chain_quartets_{hetero,homo,abag}_per_batch", "chain_quartet_counts", "chain_regroup"]}}
+
+
 def provenance(root, residue_burial, edge_weight):
     out = {}
     if residue_burial: out["residue_burial"] = "PINDER burial on every residue token of the free branch vs 1 - clip(rsa_free) (residue-rsa-v1), replacing the query-site term; pKPDB unchanged (production_residue)"
