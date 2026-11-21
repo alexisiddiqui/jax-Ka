@@ -342,7 +342,7 @@ class AuxEngine:
                  ph_weight=0.0, ph_probe=False, bind_weight=0.0, bind_operand="product", shift_weights=None, gate_weight=0.0, gate_cys_weight=10.0,
                  residue_burial=False, residue_edge_weight=0.0, residue_burial_siamese=False, decoy_retype_weight=0.0, decoy_batch_weight=0.0,
                  within_weight=0.0, swap_weight=0.0, swap_mode="class", hotspot_mask=None, alt_rank_weight=0.0, alt_rank_margin=0.0,
-                 alt_cons_edge_weight=0.0, alt_cons_pka_weight=0.0, alt_cons_stopgrad=False, alt_edge_only=False):
+                 alt_cons_edge_weight=0.0, alt_cons_pka_weight=0.0, alt_cons_stopgrad=False, alt_edge_only=False, quartet_weight=0.0):
         import jax
         import jax.numpy as jnp
         import optax
@@ -420,6 +420,13 @@ class AuxEngine:
             if alt_cons_pka_weight: raise ValueError("--alt-cons-pka-weight is refused with --alt-edge-only (the pKa never sees the alt geometry)")
             if not residue_edge_weight: raise ValueError("--alt-edge-only needs --residue-edge-weight")
             if paired_delta: raise ValueError("--alt-edge-only is defined without the paired delta head")
+        # quartet-rank-v1 (2026-11-15): + quartet_weight x mean softplus(1 - (s_ij + s_kl - s_il - s_kj)) on the unmasked free-branch
+        # aux_redge logits (production_residue.quartet_terms); aux slots 10-12 = (softplus loss, accuracy, covered complex fraction)
+        self.quartet_weight = quartet_weight = float(quartet_weight)
+        if quartet_weight < 0: raise ValueError("--quartet-weight must be >= 0")
+        if quartet_weight:
+            if not residue_edge_weight or not within_weight: raise ValueError("--quartet-weight needs --residue-edge-weight and --within-weight")
+            if alt_rank_weight or consistency or alt_edge_only: raise ValueError("--quartet-weight is defined without the alt-geometry terms")
 
         def predict_all(p, graph, key=None):
             tokens, query_site = site_embeddings_indexed(p, graph, key=key, dropout_rate=rate if key is not None else 0.0)
@@ -659,6 +666,10 @@ class AuxEngine:
                 consistent = (production_alt.cons_edge_loss(residue["edge"][:, 1], x_edge, residue["edge_weight"][:, 1], valid, use),
                               production_alt.cons_pka_loss(predicted[:, 1], x_pka, mask, valid, use))
                 total = total + alt_cons_edge_weight * consistent[0] + alt_cons_pka_weight * consistent[1]
+            quartet = None
+            if quartet_weight and "edge" in residue:  # quartet-rank-v1: unmasked free-branch embeddings, gradient into the encoder
+                quartet = production_residue.quartet_terms(p, residue["z"][:, 1], graphs["quartet_idx"][:, 1], graphs["quartet_mask"][:, 1], valid)
+                total = total + quartet_weight * quartet[0]
             if decoys and "edge" in residue:  # decoy-rank-v1; the aux tuple gains (re-typed, in-batch) margin losses
                 terms = decoy_losses(p, edge_graphs, residue, valid, key) if not hotspot else decoy_losses(p, edge_graphs, residue, valid, key, z_masked)
                 retyped, batched = terms[:2]
@@ -673,6 +684,7 @@ class AuxEngine:
                     terms = (*terms, *([0.0] * (5 - len(terms))), 0.0 if ranked is None else ranked)
                 if consistent is not None: terms = (*terms, *consistent)  # anm-aug-v1: slots 6, 7 = cons edge, cons pKa
                 if alt_edge_only: terms = (*terms, *([0.0] * (8 - len(terms))), burial, gated)  # anm-edge-v1: slots 8, 9 = burial, gate (crystal pass)
+                if quartet is not None: terms = (*terms, *([0.0] * (QUARTET_SLOT - len(terms))), *quartet)  # quartet-rank-v1: slots 10-12
                 return total, (state_loss, pair_loss, ph_loss, bind_loss, terms)
             if alt_edge_only:
                 return total, (state_loss, pair_loss, ph_loss, bind_loss, (0.0, 0.0, 0.0, 0.0, 0.0, 0.0 if ranked is None else ranked,
@@ -1084,6 +1096,45 @@ def validate(engine, predict, params, sources, manifests, config, out=None, epoc
             **({"ph": ph} if ph else {}), "selection": pinder["state_mae"] + pinder["interface_paired_mae"]}
 
 
+QUARTET_SLOT = 10  # quartet-rank-v1: aux slots 10, 11, 12 = quartet softplus loss, accuracy, covered fraction (unweighted)
+WITHIN_SLOT = 2
+
+
+def quartet_grad_norms(engine, params, graphs, targets, mask, wb, wi, valid, key, epoch=None, number=None, updates=None):
+    """quartet-rank-v1 diagnostic: L2 norms of the gradients of the UNWEIGHTED quartet term (aux slot 10) and the UNWEIGHTED
+    within listwise term (slot 2) per top-level parameter key, on one batch with the training objective and dropout key;
+    encoder = every key not starting with "aux_". Ratios: quartet / within (unweighted) and (L x quartet) / (W_within x within)."""
+    import jax
+    import jax.numpy as jnp
+    t0 = time.time(); fn = getattr(engine, "_quartet_norm_fn", None)
+    if fn is None:
+        def norms(p, *args):
+            out = {}
+            for name, slot in (("within", WITHIN_SLOT), ("quartet", QUARTET_SLOT)):
+                g = jax.grad(lambda q, s=slot: engine._paired_objective(q, *args)[1][4][s])(p)
+                out[name] = {k: jnp.sqrt(sum(jnp.sum(jnp.square(x)) for x in jax.tree.leaves(v))) for k, v in g.items()}
+            return out
+        fn = engine._quartet_norm_fn = jax.jit(norms)
+    raw = jax.device_get(fn(params, graphs, targets, mask, wb, wi, valid, key))
+    keys = sorted(raw["within"]); encoder = [k for k in keys if not k.startswith("aux_")]; trunk = [k for k in encoder if k not in ("head", "groups")]
+    total = lambda d, ks: float(np.sqrt(sum(float(d[k]) ** 2 for k in ks)))
+    nq, nw = raw["quartet"], raw["within"]; lq, lw = float(engine.quartet_weight), float(engine.within_weight)
+    ratio = lambda a, b: (a / b) if b > 0 else None
+    record = {"epoch": epoch, "batch": number, "updates_before": updates, "encoder_subtree": encoder,
+              "norms": {"quartet_encoder": total(nq, encoder), "within_encoder": total(nw, encoder), "quartet_trunk": total(nq, trunk), "within_trunk": total(nw, trunk),
+                        "quartet_aux_redge": total(nq, ["aux_redge"]), "within_aux_redge": total(nw, ["aux_redge"])},
+              "per_key": {"quartet": {k: float(nq[k]) for k in keys}, "within": {k: float(nw[k]) for k in keys}}, "weights": {"quartet": lq, "within": lw}}
+    n = record["norms"]
+    record.update({"ratio_quartet_over_within_encoder": ratio(n["quartet_encoder"], n["within_encoder"]),
+                   "ratio_weighted_quartet_over_within_encoder": ratio(lq * n["quartet_encoder"], lw * n["within_encoder"]),
+                   "ratio_quartet_over_within_trunk": ratio(n["quartet_trunk"], n["within_trunk"]),
+                   "ratio_quartet_over_within_aux_redge": ratio(n["quartet_aux_redge"], n["within_aux_redge"]), "seconds": round(time.time() - t0, 1)})
+    if not all(np.isfinite(v) for v in n.values()): raise FloatingPointError(f"non-finite quartet / within gradient norms: {n}")
+    print("[quartet-grad-norms] " + json.dumps({k: record[k] for k in ("epoch", "batch", "updates_before", "norms", "ratio_quartet_over_within_encoder",
+                                                                       "ratio_weighted_quartet_over_within_encoder", "seconds")}), flush=True)
+    return record
+
+
 def alt_edge_only_check(engine, params, graphs, targets, mask, wb, wi, valid, key, epoch, number, tolerance=1e-5):
     """anm-edge-v1 smoke assertion: on a training batch with alt visits, the edge-only objective's pKa state / paired, burial
     and gate terms equal those of the same batch made crystal-only (production_alt.crystalise: branch 1 = the crystal free
@@ -1115,7 +1166,8 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
           residue_burial_siamese=False, decoy_retype_weight=0.0, decoy_batch_weight=0.0, within_weight=0.0, swap_weight=0.0, swap_mode="class",
           mask_oracle=None, mask_store=None, mask_keep=0.25, mask_soft=0.0, mask_sides="both", mask_prob=1.0,
           alt_source=None, alt_prob=0.0, val_alt=False, alt_rank_weight=0.0, alt_rank_margin=0.0,
-          alt_weights=None, alt_cons_edge_weight=0.0, alt_cons_pka_weight=0.0, alt_cons_stopgrad=False, alt_edge_only=False, within_target="distance"):
+          alt_weights=None, alt_cons_edge_weight=0.0, alt_cons_pka_weight=0.0, alt_cons_stopgrad=False, alt_edge_only=False, within_target="distance",
+          quartet_weight=0.0, quartet_count=None, smoke_batches=5, quartet_grad_norms_every_epoch=False):
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
@@ -1128,6 +1180,14 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     else: total = EPOCHS
     from .gqt_multitask_replay import JointEngine
     from .trainer import load_checkpoint, save_checkpoint
+    # quartet-rank-v1 (2026-11-15): validated before the run directory is touched
+    quartet_weight = float(quartet_weight); quartet_count = production_residue.QUARTET_COUNT if quartet_count is None else int(quartet_count)
+    if quartet_weight < 0 or quartet_count < 1: raise ValueError((quartet_weight, quartet_count))
+    if quartet_weight and (not within_weight or not residue_edge_weight or aux_weight is None or alt_source):
+        raise ValueError("--quartet-weight needs --within-weight, --residue-edge-weight and --aux-weight, and no --alt-source")
+    if quartet_grad_norms_every_epoch and not quartet_weight: raise ValueError("--quartet-grad-norms needs --quartet-weight > 0")
+    if int(smoke_batches) < 1 or (int(smoke_batches) != 5 and not smoke): raise ValueError("--smoke-batches needs --smoke (and >= 1)")
+    smoke_batches = int(smoke_batches)
     root = Path(root); out = run_dir(root, run); out.mkdir(parents=True, exist_ok=True)
     jax.config.update("jax_compilation_cache_dir", str(out.parent / "compilation-cache"))
     manifests = {d: read(output(root, d) / MANIFEST) for d in ("pinder", "pkpdb", "benchmark-val")}
@@ -1270,6 +1330,8 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
         **production_residue.hotspot_provenance(mask_oracle, mask_keep, mask_soft, hotspot_store, mask_sides, mask_prob),
         **production_alt.alt_provenance(alt_prob, alt_store, val_alt, alt_rank_weight, alt_rank_margin, alt_entries, alt_weights,
                                         alt_cons_edge_weight, alt_cons_pka_weight, alt_cons_stopgrad, *((True,) if alt_edge_only else ())),
+        **production_residue.quartet_provenance(quartet_weight, quartet_count),
+        **({"smoke_batches": smoke_batches} if smoke and smoke_batches != 5 else {}),
         "pinder_weight_normalization": norms, "smoke": smoke, "test_data_included": False,
         "manifests": {d: digest(output(root, d) / MANIFEST) for d in manifests}, "code": code_hashes(alt_store is not None, within_target != "distance")}
     if shift_table is not None:
@@ -1323,6 +1385,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
         if swap_weight: train_pinder.strata = production_residue.load_strata(root)
     if mask_oracle is not None:
         train_pinder.hotspot = (hotspot_store, mask_oracle, float(mask_keep), float(mask_soft)) + ((mask_sides, float(mask_prob)) if mask_v2 else ())
+    if quartet_weight: train_pinder.quartet_count = quartet_count  # quartet-rank-v1
     if alt_prob: train_pinder.alt = production_alt.AltConfig(alt_entries, alt_prob, keep_crystal=bool(alt_rank_weight or consistency or alt_edge_only), weights=alt_weights,
                                                              **({"alt_rsa": False} if alt_edge_only else {}))
     if val_alt:
@@ -1375,7 +1438,8 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
                            **({"alt_rank_weight": alt_rank_weight, "alt_rank_margin": alt_rank_margin} if alt_rank_weight else {}),
                            **({"alt_cons_edge_weight": alt_cons_edge_weight, "alt_cons_pka_weight": alt_cons_pka_weight, "alt_cons_stopgrad": alt_cons_stopgrad}
                               if consistency else {}),
-                           **({"alt_edge_only": True} if alt_edge_only else {}))
+                           **({"alt_edge_only": True} if alt_edge_only else {}),
+                           **({"quartet_weight": quartet_weight} if quartet_weight else {}))
         engine.ph_table = ph_table
         state = engine.optimizer.init(params)
         step_key = jax.random.PRNGKey(seed + 200003)
@@ -1400,11 +1464,12 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     for epoch in range(len(history) + 1, epochs + 1):
         if stale >= PATIENCE: break
         pair, pk = epoch_plans(manifests, fraction, epoch, batch, seed)
-        if smoke: pair, pk = pair[:5], pk[:5]
+        if smoke: pair, pk = pair[:smoke_batches], pk[:smoke_batches]
         specs = list(zip(pair, pk)); deferred = DeferredScalars(every=50); began = time.time()
         prefetcher = Prefetcher(sources["train"], specs, config, to_device if not chunked(batch) else host_chunks)
         source_before = train_pinder.alt.source_snapshot() if alt_prob else None
         ph_losses = []; bind_losses = []; decoy_values = []; alt_values = []; mask_totals = np.zeros(4); side_totals = np.zeros(4)  # v2: unmasked, side 0, side 1, both
+        quartet_norms = []  # quartet-rank-v1: debug_quartet_grad_norms (smoke / --quartet-grad-norms: last batch of the epoch, before its update)
         for number, ((pair_ids, pk_ids), (pair_batch, pk_batch)) in enumerate(prefetcher, 1):
             rate = jnp.asarray(scale * learning_rate(epoch, number, len(specs)), jnp.float32)
             if step_key is not None:
@@ -1421,6 +1486,11 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
                     state_loss, pair_loss, _, bind_loss = pair_aux[:4]
                     pk_loss, pk_gradient = engine.pkpdb_value_grad(params, *pk_batch, k_pk)
                 if len(pair_aux) > 4: decoy_values.append(jnp.stack([jnp.asarray(v, jnp.float32) for v in pair_aux[4]]))
+                if quartet_weight and (smoke or quartet_grad_norms_every_epoch) and number == len(specs):
+                    try: quartet_norms.append(quartet_grad_norms(engine, params, graphs, targets, mask, wb, wi, valid, k_pair, epoch, number, (epoch - 1) * len(specs) + number - 1))
+                    except Exception as error:  # noqa: BLE001  (diagnostic only; the smoke must fail loudly)
+                        if smoke: raise
+                        quartet_norms.append({"epoch": epoch, "batch": number, "error": repr(error)}); print(f"debug_quartet_grad_norms_error {error!r}", flush=True)
                 if alt_edge_only and smoke and edge_check is None and float(jnp.sum(graphs["use_alt"][:, 0] * valid)) > 0:
                     edge_check = alt_edge_only_check(engine, params, graphs, targets, mask, wb, wi, valid, k_pair, epoch, number)
                 if "use_alt" in graphs: alt_values.append(jnp.sum(graphs["use_alt"][:, 0] * valid) / jnp.maximum(jnp.sum(valid), 1))
@@ -1450,7 +1520,8 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
                               **({"pinder_bind_ce": float(np.mean(np.asarray(jnp.stack(bind_losses))))} if bind_losses else {}),
                               **(dict(zip(("pinder_decoy_retype_margin", "pinder_decoy_batch_margin", "pinder_within_listwise", "pinder_swap_margin",
                                            "pinder_mask_free_edge_bce", "pinder_alt_rank_margin_loss", "pinder_alt_cons_edge", "pinder_alt_cons_pka",
-                                           "pinder_alt_edge_only_burial", "pinder_alt_edge_only_gate"),
+                                           "pinder_alt_edge_only_burial", "pinder_alt_edge_only_gate",
+                                           "pinder_quartet_softplus", "pinder_quartet_accuracy", "pinder_quartet_covered"),
                                           map(float, np.mean(np.asarray(jnp.stack(decoy_values)), axis=0))))
                                  if decoy_values else {}),
                               **({"pinder_mask_kept_fraction": float(mask_totals[0] / max(mask_totals[1], 1.0)), "pinder_mask_kept": int(mask_totals[0]),
@@ -1469,6 +1540,9 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
                   if alt_store is not None else {}),
                **({"within_counts": {**production_residue.WITHIN_STATS, "dropped_fraction": production_residue.WITHIN_STATS["dropped_drsa"] / max(production_residue.WITHIN_STATS["anchors"], 1),
                                      "note": "cumulative over training visits (production_residue.within_sample)"}} if within_weight and within_target != "distance" else {}),
+               **({"quartet_counts": {**production_residue.QUARTET_STATS, "pool_cache": len(production_residue.QUARTET_POOLS),
+                                      "note": "cumulative over training visits (production_residue.quartet_fields)"}} if quartet_weight else {}),
+               **({"debug_quartet_grad_norms": quartet_norms} if quartet_norms else {}),
                "validation": validation, "train_seconds": round(train_seconds, 1), "validation_seconds": round(val_seconds, 1),
                "loader_wait_fraction": telemetry.get("wait_fraction")}
         history.append(row)
@@ -1724,6 +1798,11 @@ def main(argv=None):
     p.add_argument("--token-cutoff", default=None,
                    help="S or S,C: all-residue token layers use CA-CA <= S A same-chain, <= C A other-chain (needs --all-residue-tokens; suffix -cutS / -cutSxC)")
     p.add_argument("--ph-probe", action="store_true", help="pH head on stop-gradient site tokens with its own optimizer (trunk unaffected)")
+    p.add_argument("--quartet-weight", type=float, default=0.0,
+                   help="quartet-rank-v1: native-pairing quartet loss weight on the unmasked free-branch edge logits (production_residue.quartet_terms; 0 = off)")
+    p.add_argument("--quartet-count", type=int, default=None, help="quartets per complex visit (default production_residue.QUARTET_COUNT = 128; half chemically matched)")
+    p.add_argument("--quartet-grad-norms", action="store_true", help="quartet-rank-v1: debug_quartet_grad_norms on the last batch of every epoch (always on under --smoke)")
+    p.add_argument("--smoke-batches", type=int, default=5, help="with --smoke: PINDER / pKPDB batches per smoke epoch (default 5)")
     p = sub.add_parser("count"); p.add_argument("widths", type=int, nargs="+"); p.add_argument("--sidechains", action="store_true")
     p.add_argument("--depth", type=int, default=2); p.add_argument("--loops", type=int, default=1)
     p = sub.add_parser("export"); p.add_argument("run"); p.add_argument("destination")
@@ -1775,7 +1854,8 @@ def main(argv=None):
                        args.residue_burial_siamese, args.decoy_retype_weight, args.decoy_batch_weight, args.within_weight, args.swap_weight, args.swap_mode,
                        args.mask_oracle, args.mask_store, args.mask_keep, args.mask_soft, args.mask_sides, args.mask_prob,
                        args.alt_source, args.alt_prob, args.val_alt, args.alt_rank_weight, args.alt_rank_margin,
-                       args.alt_weights, args.alt_cons_edge_weight, args.alt_cons_pka_weight, args.alt_cons_stopgrad, args.alt_edge_only, args.within_target)
+                       args.alt_weights, args.alt_cons_edge_weight, args.alt_cons_pka_weight, args.alt_cons_stopgrad, args.alt_edge_only, args.within_target,
+                       args.quartet_weight, args.quartet_count, args.smoke_batches, args.quartet_grad_norms)
         print(json.dumps({"selected_epoch": result["selected_epoch"], "selection": result["validation"]["selection"]}))
 
 

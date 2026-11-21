@@ -155,7 +155,7 @@ def sample_pairs(r, rng, size=PAIRS):
     return aa.astype(np.int32), bb.astype(np.int32), pair_targets(r, aa, bb), np.ones(size, np.float32)
 
 
-def attach(graph, table, cid, n, sample, visits, decoy=False, within=False, mask=None):
+def attach(graph, table, cid, n, sample, visits, decoy=False, within=False, mask=None, quartets=0):
     """Add rsa_residue (2, n: bound, free; NaN -> -1) and, for training sources, edge_a / edge_b / edge_target / edge_weight
     (2, P, both branches identical) to a PINDER paired graph. decoy (decoy-rank-v1): also the re-typed decoy fields
     decoy_idx / decoy_type / decoy_mask (2, DECOY_SLOTS) and decoy_valid (2,) from retype(), drawn from their own RNG
@@ -164,7 +164,9 @@ def attach(graph, table, cid, n, sample, visits, decoy=False, within=False, mask
     within_sample(), own RNG stream [WITHIN_SALT, crc32(id), visit]. mask (hotspot-mask-v1): (store, oracle, keep, soft)
     adds mask_keep_idx (2, n) int32 / mask_keep_mask (2, n) float32 (the UNMASKED nodes, padded 0 / 0) and mask_stats (2, 3)
     float32 (kept, surface, fallback) from hotspot_keep(), own RNG stream [MASK_SALT, crc32(id), visit]. hotspot-mask-v2:
-    mask = (store, oracle, keep, soft, sides, prob) with (sides, prob) != (both, 1) -> hotspot_fields2() + mask_side (2,) int32."""
+    mask = (store, oracle, keep, soft, sides, prob) with (sides, prob) != (both, 1) -> hotspot_fields2() + mask_side (2,) int32.
+    quartets (quartet-rank-v1): count Q > 0 adds quartet_idx (2, Q, 4) int32 / quartet_mask (2, Q) float32 (quartet_fields on the
+    free branch's node types and node_mask), visit stream [QUARTET_SALT, crc32(id), visit]; 0 (default) attaches nothing."""
     r = table.row(cid)
     if len(r["rsa"]) > n: raise AssertionError((cid, "residue table larger than the padded graph"))
     rsa = np.full((2, n), -1.0, np.float32); rsa[:, :len(r["rsa"])] = np.nan_to_num(r["rsa"].T, nan=-1.0); graph["rsa_residue"] = rsa
@@ -188,6 +190,11 @@ def attach(graph, table, cid, n, sample, visits, decoy=False, within=False, mask
                 values = hotspot_fields2(r, cid, n, store, oracle, keep, soft, rng, sides, prob,
                                          np.random.default_rng([MASK2_SALT, zlib.crc32(cid.encode()), visits[cid]])); names = MASK2_FIELDS
             for name, value in zip(names, values): graph[name] = np.stack((value, value))
+        if quartets:  # quartet-rank-v1: own streams, so every other sampled field is unchanged
+            m = len(r["rsa"]); active = graph["node_mask"][1, :m] > 0 if "node_mask" in graph else np.ones(m, bool)
+            idx, qm = quartet_fields(r, cid, graph["nodes"][1, :m], active, int(quartets),
+                                     np.random.default_rng([QUARTET_SALT, zlib.crc32(cid.encode()), visits[cid]]))
+            graph["quartet_idx"] = np.stack((idx, idx)); graph["quartet_mask"] = np.stack((qm, qm))
     return graph
 
 
@@ -720,6 +727,172 @@ def hotspot_provenance(oracle, keep, soft, store, sides="both", prob=1.0):
                       "round(soft x rest) of the remaining surface residues at random; buried residues always masked (no interface chemistry). Edge BCE free "
                       "part + free -> bound distillation and the within listwise loss on the masked pass; bound BCE, Siamese burial, gate, pKa unchanged "
                       "(production_residue.hotspot_keep / mask_nodes; replaces the re-typed pass)"}}
+
+
+# ---------------------------------------------------------------- quartet-rank-v1 (2026-11-15): native-pairing quartets
+# --quartet-weight L (default 0 = off, no fields attached, objective unchanged): per training complex and visit
+# QUARTET_COUNT quartets (i, j, k, l) from the crystal contact table of the visited complex (residue-rsa-v1 pairs, every
+# cross-chain pair <= 10 A): native contacts i-j and k-l (both in the table, both endpoints surface: free RSA >= 0.1, active
+# nodes), crossed pairs i-l and k-j ABSENT from the complete <= 10 A table, same oriented chain pair (chain[i] = chain[k] <
+# chain[j] = chain[l]; contacts oriented by chain code, not residue index) and distinct endpoints (i != k, j != l).
+# Loss = mean softplus(QUARTET_MARGIN - (s_ij + s_kl - s_il - s_kj)) per complex over its quartets, then over complexes with
+# at least one (complexes without a valid quartet are masked for this term only); s = aux_redge logits on the UNMASKED
+# free-branch residue embeddings (the residue-edge head; full gradient into the encoder). Any additive per-residue score
+# s_ab = u_a + v_b cancels in the difference, so only partner-specific compatibility can lower it.
+# Sampler = pairing-rank-v1 core.quartet_pool / sample: a deterministic pool per complex (stream [QUARTET_POOL_SALT,
+# crc32(id)], rejection sampling, 8 attempts x 4096 draws, unique rows, capped at QUARTET_POOL per mode) of general
+# quartets and chemically matched quartets (charge_class[i] = charge_class[k], charge_class[j] = charge_class[l], at least one
+# charged endpoint class; contacts grouped by (chain_i, chain_j, class_i, class_j) so rare charged comparisons are found);
+# per visit (stream [QUARTET_SALT, crc32(id), visit]) QUARTET_COUNT / 2 general + QUARTET_COUNT / 2 chemical rows with
+# replacement (all general if no chemical pool, all chemical if no general pool). Charge class (deviation from
+# pairing-rank-v1, which used the frozen model's predicted free pKa at pH 7): residue type D/E -1, K/R +1, everything else 0
+# (H neutral at pH 7), plus N-terminus +1 / C-terminus -1 (node columns 20 / 21), summed per residue, class = sign at
+# +-0.5 -- the loader has no model predictions.
+QUARTET_SALT = 40961
+QUARTET_POOL_SALT = 40963
+QUARTET_COUNT = 128
+QUARTET_POOL = 2048
+QUARTET_MARGIN = 1.0
+QUARTET_ATTEMPTS = 8
+QUARTET_DRAWS = 4096
+QUARTET_FIELDS = ("quartet_idx", "quartet_mask")
+QUARTET_TYPE_CHARGE = np.array([{"D": -1.0, "E": -1.0, "K": 1.0, "R": 1.0}.get(x, 0.0) for x in ALPHABET], np.float32)
+# per-process pool cache (threaded loader; pools are deterministic per complex, so a duplicate computation is harmless)
+QUARTET_POOLS = {}
+QUARTET_STATS = {"complexes": 0, "with_general": 0, "with_chemical": 0, "without": 0}
+QUARTET_LOCK = threading.Lock()
+
+
+def quartet_classes(nodes):
+    """(m,) int8 charge class -1 / 0 / +1 from node rows (m, F): residue-type charge (D/E -1, K/R +1, else 0) + N-terminus
+    (column 20) +1 - C-terminus (column 21) 1, thresholded at +-0.5."""
+    nodes = np.asarray(nodes); aa = residue_types(nodes); charge = np.where(aa >= 0, QUARTET_TYPE_CHARGE[np.maximum(aa, 0)], 0.0)
+    if nodes.shape[1] > 21: charge = charge + (nodes[:, 20] > 0.5) - (nodes[:, 21] > 0.5)
+    return np.where(charge >= 0.5, 1, np.where(charge <= -0.5, -1, 0)).astype(np.int8)
+
+
+def quartet_support(r, active, classes):
+    """pairing-rank-v1 core.graph restricted to what the sampler reads: native (m, m) bool = every <= 10 A table pair with
+    both endpoints active; oriented surface contacts (ci, cj) with chain[ci] <= chain[cj]; chain codes; classes."""
+    m = len(r["rsa"]); active = np.asarray(active, bool)[:m]; chain = np.asarray(r["chain"])
+    native = np.zeros((m, m), bool); keep = (r["d"] <= CUTOFF_A) & active[r["i"]] & active[r["j"]]
+    i, j = r["i"][keep], r["j"][keep]; native[i, j] = True; native[j, i] = True
+    surface = active & (np.nan_to_num(r["rsa"][:, 1], nan=0.0) >= SURFACE_RSA); contact = surface[i] & surface[j]
+    ci, cj = i[contact], j[contact]; swap = chain[ci] > chain[cj]; ci, cj = np.where(swap, cj, ci), np.where(swap, ci, cj)
+    return {"native": native, "ci": ci.astype(np.int64), "cj": cj.astype(np.int64), "chain": chain, "qclass": np.asarray(classes)}
+
+
+def quartet_pool(g, rng, limit=QUARTET_POOL):
+    """(general (G, 4), chemical (C, 4)) int32 quartet pools: pairing-rank-v1 core.quartet_pool, unchanged in its draws."""
+    ci, cj = g["ci"], g["cj"]
+    general, chemical = [], []
+    if len(ci) < 2:
+        return np.empty((0, 4), np.int32), np.empty((0, 4), np.int32)
+    qclass, ch, native = g["qclass"], g["chain"], g["native"]
+    groups = {}
+    for p, (i, j) in enumerate(zip(ci, cj)):
+        if qclass[i] or qclass[j]:
+            groups.setdefault((int(ch[i]), int(ch[j]), int(qclass[i]), int(qclass[j])), []).append(p)
+    groups = [np.asarray(v) for v in groups.values() if len(v) >= 2]
+    for mode in ("general", "chemical"):
+        rows = []
+        for attempt in range(QUARTET_ATTEMPTS):
+            if mode == "general":
+                a, b = rng.integers(len(ci), size=(2, QUARTET_DRAWS))
+            elif groups:
+                pairs = []
+                for group in groups:
+                    pairs.append(group[rng.integers(len(group), size=(2, max(64, QUARTET_DRAWS // len(groups))))])
+                a, b = np.concatenate(pairs, 1)
+            else:
+                break
+            i, j, k, l = ci[a], cj[a], ci[b], cj[b]
+            good = (i != k) & (j != l) & (ch[i] == ch[k]) & (ch[j] == ch[l])
+            good &= ~native[i, l] & ~native[k, j]
+            rows.extend(np.stack((i[good], j[good], k[good], l[good]), 1))
+            if len(rows) >= limit * 2:
+                break
+        if rows:
+            rows = np.unique(np.asarray(rows, np.int32), axis=0)
+            if len(rows) > limit:
+                rows = rows[rng.choice(len(rows), limit, replace=False)]
+        else:
+            rows = np.empty((0, 4), np.int32)
+        if mode == "general": general = rows
+        else: chemical = rows
+    return np.asarray(general, np.int32).reshape(-1, 4), np.asarray(chemical, np.int32).reshape(-1, 4)
+
+
+def quartet_check(g, q, chemical=False):
+    """pairing-rank-v1 core.validate_quartets (raises AssertionError)."""
+    if not len(q): return
+    i, j, k, l = q.T
+    assert np.all(g["native"][i, j] & g["native"][k, l])
+    assert not np.any(g["native"][i, l] | g["native"][k, j])
+    assert np.all((i != k) & (j != l))
+    assert np.all((g["chain"][i] == g["chain"][k]) & (g["chain"][j] == g["chain"][l]))
+    if chemical:
+        c = g["qclass"]
+        assert np.all((c[i] == c[k]) & (c[j] == c[l]) & ((c[i] != 0) | (c[j] != 0)))
+
+
+def quartet_pools(r, cid, nodes, active):
+    """Cached deterministic (general, chemical) pools of one complex (stream [QUARTET_POOL_SALT, crc32(id)]), validated once."""
+    pools = QUARTET_POOLS.get(cid)
+    if pools is None:
+        g = quartet_support(r, active, quartet_classes(nodes))
+        general, chemical = quartet_pool(g, np.random.default_rng([QUARTET_POOL_SALT, zlib.crc32(cid.encode())]))
+        quartet_check(g, general); quartet_check(g, chemical, True)
+        pools = QUARTET_POOLS[cid] = (general, chemical)
+    return pools
+
+
+def quartet_draw(general, chemical, rng, count=QUARTET_COUNT):
+    """(idx (count, 4) int32, mask (count,) float32): pairing-rank-v1 core.sample's quartet rows (with replacement)."""
+    quads = np.zeros((count, 4), np.int32); qm = np.zeros(count, np.float32)
+    if len(general):
+        n = count // 2 if len(chemical) else count
+        quads[:n] = general[rng.integers(len(general), size=n)]; qm[:n] = 1
+        if len(chemical):
+            quads[n:] = chemical[rng.integers(len(chemical), size=count - n)]; qm[n:] = 1
+    elif len(chemical):
+        quads[:] = chemical[rng.integers(len(chemical), size=count)]; qm[:] = 1
+    return quads, qm
+
+
+def quartet_fields(r, cid, nodes, active, count, rng):
+    general, chemical = quartet_pools(r, cid, nodes, active); idx, qm = quartet_draw(general, chemical, rng, count)
+    with QUARTET_LOCK:
+        QUARTET_STATS["complexes"] += 1; QUARTET_STATS["with_general"] += int(len(general) > 0)
+        QUARTET_STATS["with_chemical"] += int(len(chemical) > 0); QUARTET_STATS["without"] += int(not len(general) and not len(chemical))
+    return idx, qm
+
+
+def quartet_terms(p, z, idx, mask, valid, margin=QUARTET_MARGIN):
+    """(loss, accuracy, covered) on residue embeddings z (B, n, W), quartets idx (B, Q, 4) int, mask (B, Q), valid (B,):
+    delta = s_ij + s_kl - s_il - s_kj (aux_redge logits); loss = mean softplus(margin - delta), accuracy = mean [delta > 0],
+    per complex over its masked quartets, then over valid complexes with at least one; covered = that complex fraction."""
+    import jax
+    import jax.numpy as jnp
+    rows = jnp.arange(z.shape[0])[:, None, None]; i, j, k, l = (idx[..., c] for c in range(4))
+    za = z[rows, jnp.stack((i, k, i, k), axis=-1)]; zb = z[rows, jnp.stack((j, l, l, j), axis=-1)]  # (B, Q, 4, W)
+    s = pair_logits_from(p, za, zb); delta = s[..., 0] + s[..., 1] - s[..., 2] - s[..., 3]
+    m = mask * jnp.asarray(valid, mask.dtype)[:, None]; n = jnp.sum(m, axis=1); counted = n > 0; c = jnp.maximum(jnp.sum(counted), 1)
+    per = lambda value: jnp.sum(jnp.where(counted, jnp.sum(value * m, axis=1) / jnp.maximum(n, 1), 0.0)) / c
+    return per(jax.nn.softplus(margin - delta)), per((delta > 0).astype(z.dtype)), jnp.sum(counted) / jnp.maximum(jnp.sum(jnp.asarray(valid, mask.dtype)), 1)
+
+
+def quartet_provenance(weight, count):
+    if not weight: return {}
+    return {"quartet_rank": {"weight": float(weight), "count": int(count), "general": int(count) // 2, "chemical": int(count) - int(count) // 2,
+        "pool_cap": QUARTET_POOL, "margin": QUARTET_MARGIN, "contact_A": CUTOFF_A, "surface_rsa_min": SURFACE_RSA, "salt": QUARTET_SALT, "pool_salt": QUARTET_POOL_SALT,
+        "embeddings": "unmasked free-branch residue embeddings (aux_redge norm), full gradient into the encoder",
+        "charge_classes": "residue type D/E -1, K/R +1, else 0 (H neutral at pH 7) + N-terminus +1 / C-terminus -1 (node columns 20 / 21), sign at +-0.5 "
+                          "(pairing-rank-v1 used predicted free pKa at pH 7; not available in the loader)",
+        "definition": "native contacts i-j, k-l (<= 10 A table, surface endpoints), crossed i-l, k-j absent from the complete <= 10 A table, same oriented "
+                      "chain pair, distinct endpoints; loss = mean softplus(1 - (s_ij + s_kl - s_il - s_kj)) per complex, then over complexes with >= 1 "
+                      "quartet (others masked for this term); sampler = pairing-rank-v1 core.quartet_pool / sample (production_residue.quartet_*)",
+        "history": ["pinder_quartet_softplus", "pinder_quartet_accuracy", "pinder_quartet_covered"]}}
 
 
 def provenance(root, residue_burial, edge_weight):

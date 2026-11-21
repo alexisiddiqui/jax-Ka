@@ -143,6 +143,8 @@ class _Source:
         self.within_sample = False; self.strata = None
         # hotspot-mask-v1 (2026-10-30): hotspot = (oracle store, oracle, keep, soft) adds the unmasked-set fields (production_residue.hotspot_fields)
         self.hotspot = None
+        # quartet-rank-v1 (2026-11-15): quartet_count > 0 adds the native-pairing quartet fields (production_residue.quartet_fields)
+        self.quartet_count = 0
         # min-aug-v1 (2026-10-31): alt (production_alt.AltConfig) swaps the free branch for the side-store geometry per visit
         # (minimised / AlphaFold / ANM; apo-negatome-v1's apo hook renamed); keep_crystal adds the crystal free branch as xtal_*
         self.alt = None
@@ -180,8 +182,12 @@ class _Source:
         from .production_residue import attach
         if len(self.residues.row(cid)["rsa"]) != self.by_id[cid]["n"]: raise AssertionError((cid, "residue table does not match the store"))
         hotspot = getattr(self, "hotspot", None)
-        graph = attach(graph, self.residues, cid, n, self.sample_edges, self._visits, self.decoy_retype, self.within_sample) if hotspot is None else \
-            attach(graph, self.residues, cid, n, self.sample_edges, self._visits, self.decoy_retype, self.within_sample, hotspot)
+        quartets = getattr(self, "quartet_count", 0)
+        if quartets:  # quartet-rank-v1
+            graph = attach(graph, self.residues, cid, n, self.sample_edges, self._visits, self.decoy_retype, self.within_sample, hotspot, quartets=quartets)
+        else:
+            graph = attach(graph, self.residues, cid, n, self.sample_edges, self._visits, self.decoy_retype, self.within_sample) if hotspot is None else \
+                attach(graph, self.residues, cid, n, self.sample_edges, self._visits, self.decoy_retype, self.within_sample, hotspot)
         if self.strata is not None: graph["stratum"] = np.full(2, self.strata.get(cid, -1), np.int32)
         return graph
 
