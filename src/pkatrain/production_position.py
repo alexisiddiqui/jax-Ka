@@ -84,7 +84,11 @@ def relation_maps(variant):
 def initialize(params,seed,variant):
     if variant=='none':return params
     width=params['head']['w'].shape[0]
-    if width!=64:raise ValueError('registered positional ablations use width 64')
+    # Explicit opt-in in this private screening snapshot only; the width-64 path is unchanged.
+    import os
+    scaling = (os.environ.get('GQT_PARAMETER_SCALING') == '1'
+               and variant == 'relations-4-1-allres-cut15' and width in (32,128,256))
+    if width!=64 and not scaling:raise ValueError('registered positional ablations use width 64')
     key=jax.random.fold_in(jax.random.PRNGKey(seed),SALT)
     counts=relation_maps(variant)
     if variant=='fourier':

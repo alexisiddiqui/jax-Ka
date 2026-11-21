@@ -60,6 +60,7 @@ BACKBONE_WIDTH = 14  # N, CA, C, O xyz (12), chain index, sequence index within 
 ORIENTATION_EDGE = 13
 ORIENTATION_SALT = 6151
 DROP_SALT = 5381
+MIX_SALT = 7919
 VIEWS = ("all", "titratable", "non-titratable", "dropout")
 GEOMETRY_SALT = 8191
 FUNCTIONAL = {"D": ("OD1", "OD2"), "E": ("OE1", "OE2"), "H": ("ND1", "NE2"), "C": ("SG",), "Y": ("OH",), "K": ("NZ",), "R": ("NE", "NH1", "NH2")}
@@ -195,7 +196,10 @@ class ConcatTable:
     def __init__(self, *tables):
         self.tables = tables; self.verification_sha256 = "+".join(t.verification_sha256 for t in tables)
 
-    def __call__(self, cid): return np.concatenate([t(cid) for t in self.tables], axis=1)
+    def __call__(self, cid):
+        # branch-specific tables (2, nodes, w; production_packed pinder) broadcast the per-node ones over the branches
+        parts = [t(cid) for t in self.tables]; lead = max((p.shape[:-2] for p in parts), key=len)
+        return np.concatenate([np.broadcast_to(p, lead + p.shape[-2:]) for p in parts], axis=-1)
 
 
 # ---- model side --------------------------------------------------------------------------------------------------
@@ -364,10 +368,12 @@ def add_orientation(params, seed):
     return {**params, "blocks": [extend(b, k) for b, k in zip(params["blocks"], keys[:-1])], "query": extend(params["query"], keys[-1])}
 
 
-def input_functions(functions, sidechain_view="all", drop=0.0, orientation=False, table=None, dihedrals=False, hbonds=False):
+def input_functions(functions, sidechain_view="all", drop=0.0, orientation=False, table=None, dihedrals=False, hbonds=False, source="original"):
     """Wrap (site_embeddings, predict_shift) so each graph is transformed first: a loaded backbone table (the last
     BACKBONE_WIDTH node columns; table defaults to orientation or dihedrals) is stripped, with orientation turned into
-    13 extra edge features; the side-chain view masks node columns 24:; dihedrals then hbonds append 6 node features each.
+    13 extra edge features; source "mix" (production_packed: node columns 24:152 original, 152:280 packed side chains)
+    keeps one of the two per structure (packed with probability 1/2 from the structure key; packed without a key); the
+    side-chain view masks node columns 24:; dihedrals then hbonds append 6 node features each.
     The defaults return `functions` unchanged."""
     import jax
     import jax.numpy as jnp
@@ -376,7 +382,8 @@ def input_functions(functions, sidechain_view="all", drop=0.0, orientation=False
     if sidechain_view not in VIEWS: raise ValueError(sidechain_view)
     table = (orientation or dihedrals or hbonds) if table is None else table
     if (orientation or dihedrals or hbonds) and not table: raise ValueError("orientation / dihedrals / hbonds need the backbone table")
-    if sidechain_view == "all" and not table: return functions
+    if source not in ("original", "packed", "mix"): raise ValueError(source)
+    if sidechain_view == "all" and not table and source != "mix": return functions
     embeddings = functions[0]; titratable = jnp.zeros(20, bool).at[jnp.asarray(GROUP_AA)].set(True)
 
     def transform(graph, key):
@@ -385,6 +392,10 @@ def input_functions(functions, sidechain_view="all", drop=0.0, orientation=False
         if orientation:
             graph = {**graph, "edge": jnp.concatenate((graph["edge"], orientation_edges(nodes[:, -BACKBONE_WIDTH:], graph["neighbors"])), axis=-1)}
         if table: nodes = nodes[:, :-BACKBONE_WIDTH]
+        if source == "mix":
+            if nodes.shape[1] != 24 + 2 * 128: raise ValueError(("mix expects 256 side-chain columns", nodes.shape))
+            packed = jnp.ones(()) if key is None else jax.random.bernoulli(jax.random.fold_in(key, MIX_SALT), 0.5).astype(jnp.float32)
+            nodes = jnp.concatenate((nodes[:, :24], packed * nodes[:, 152:] + (1.0 - packed) * nodes[:, 24:152]), axis=-1)
         if sidechain_view != "all":
             if sidechain_view == "dropout":
                 keep = jnp.zeros(()) if key is None else jax.random.bernoulli(jax.random.fold_in(key, DROP_SALT), 1.0 - drop).astype(jnp.float32)
