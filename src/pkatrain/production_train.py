@@ -1167,7 +1167,8 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
           mask_oracle=None, mask_store=None, mask_keep=0.25, mask_soft=0.0, mask_sides="both", mask_prob=1.0,
           alt_source=None, alt_prob=0.0, val_alt=False, alt_rank_weight=0.0, alt_rank_margin=0.0,
           alt_weights=None, alt_cons_edge_weight=0.0, alt_cons_pka_weight=0.0, alt_cons_stopgrad=False, alt_edge_only=False, within_target="distance",
-          quartet_weight=0.0, quartet_count=None, smoke_batches=5, quartet_grad_norms_every_epoch=False):
+          quartet_weight=0.0, quartet_count=None, smoke_batches=5, quartet_grad_norms_every_epoch=False,
+          pinder_manifest=None, pinder_extra=None, mask_store_extra=None):
     import jax
     import jax.numpy as jnp
     from pkanet.ogqt import initialize as initialize_ogqt, predict_shift
@@ -1188,9 +1189,20 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     if quartet_grad_norms_every_epoch and not quartet_weight: raise ValueError("--quartet-grad-norms needs --quartet-weight > 0")
     if int(smoke_batches) < 1 or (int(smoke_batches) != 5 and not smoke): raise ValueError("--smoke-batches needs --smoke (and >= 1)")
     smoke_batches = int(smoke_batches)
+    # quartet-rank-v1b (2026-11-16): extra PINDER training records (production_extra; pool-v5), validated before the run directory is touched
+    if (pinder_manifest is None) != (pinder_extra is None): raise ValueError("--pinder-manifest and --pinder-extra go together")
+    if mask_store_extra is not None and pinder_extra is None: raise ValueError("--mask-store-extra needs --pinder-extra")
+    if pinder_extra is not None:
+        from . import production_extra
+        production_extra.refuse(sidechains=sidechains, sidechain_source=sidechain_source != "original", alt_source=alt_source, val_alt=val_alt, ph_weight=ph_weight,
+                                swap_weight=swap_weight, burial_siamese_aux=aux_heads == "burial-siamese", site_masking=mask_pmin is not None,
+                                geometry_weight=geometry_weight, chi_weight=chi_weight, hbonds=hbonds)
+        if mask_store is not None and mask_store_extra is None: raise ValueError("--mask-store with --pinder-extra needs --mask-store-extra")
     root = Path(root); out = run_dir(root, run); out.mkdir(parents=True, exist_ok=True)
     jax.config.update("jax_compilation_cache_dir", str(out.parent / "compilation-cache"))
     manifests = {d: read(output(root, d) / MANIFEST) for d in ("pinder", "pkpdb", "benchmark-val")}
+    if pinder_manifest is not None:  # quartet-rank-v1b: the pool's PINDER manifest (store-v2 + extra records)
+        pool_manifest = read(pinder_manifest); production_extra.check_manifest(pool_manifest, manifests["pinder"], pinder_extra); manifests["pinder"] = pool_manifest
     norms = normalization(manifests["pinder"], fraction); scale = lr_scale(batch)
     if variant != "none" and (not orientation or not dihedrals or loops != 1 or aux_weight is None):
         raise ValueError("positional ablations require base A orientation/dihedrals/burial settings")
@@ -1332,6 +1344,14 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
                                         alt_cons_edge_weight, alt_cons_pka_weight, alt_cons_stopgrad, *((True,) if alt_edge_only else ())),
         **production_residue.quartet_provenance(quartet_weight, quartet_count),
         **({"smoke_batches": smoke_batches} if smoke and smoke_batches != 5 else {}),
+        **({"pinder_pool": {"manifest": str(pinder_manifest), "manifest_sha256": digest(pinder_manifest), "pool": manifests["pinder"].get("pool"),
+                            "pool_sha256": manifests["pinder"].get("pool_sha256"), "extra": str(pinder_extra),
+                            "extra_verification_sha256": {t: digest(output(Path(pinder_extra), "pinder") / t / "verification.json") for t in production_extra.TABLES},
+                            **({"mask_store_extra": str(mask_store_extra), "mask_store_extra_verification_sha256": digest(Path(mask_store_extra) / "verification.json")}
+                               if mask_store_extra is not None else {}),
+                            "rule": "training PINDER source reads store-v2 + side tables, or the extra copies for ids not in them (production_extra); validation unchanged",
+                            "production_extra_sha256": digest(Path(production_extra.__file__))}}
+           if pinder_extra is not None else {}),
         "pinder_weight_normalization": norms, "smoke": smoke, "test_data_included": False,
         "manifests": {d: digest(output(root, d) / MANIFEST) for d in manifests}, "code": code_hashes(alt_store is not None, within_target != "distance")}
     if shift_table is not None:
@@ -1388,6 +1408,7 @@ def train(root, run, fraction=0.1, smoke=False, batch=BATCH, paired_weight="none
     if quartet_weight: train_pinder.quartet_count = quartet_count  # quartet-rank-v1
     if alt_prob: train_pinder.alt = production_alt.AltConfig(alt_entries, alt_prob, keep_crystal=bool(alt_rank_weight or consistency or alt_edge_only), weights=alt_weights,
                                                              **({"alt_rsa": False} if alt_edge_only else {}))
+    if pinder_extra is not None: production_extra.attach(train_pinder, root, pinder_extra, mask_store_extra)  # quartet-rank-v1b
     if val_alt:
         sources["pinder-val-alt"] = PinderSource(_with_policy(manifests["pinder"]), config=config, norms=norms, sidechains=side["pinder"])
         sources["pinder-val-alt"].alt = production_alt.AltConfig(alt_entries, 1.0, weights=alt_weights)
@@ -1803,6 +1824,9 @@ def main(argv=None):
     p.add_argument("--quartet-count", type=int, default=None, help="quartets per complex visit (default production_residue.QUARTET_COUNT = 128; half chemically matched)")
     p.add_argument("--quartet-grad-norms", action="store_true", help="quartet-rank-v1: debug_quartet_grad_norms on the last batch of every epoch (always on under --smoke)")
     p.add_argument("--smoke-batches", type=int, default=5, help="with --smoke: PINDER / pKPDB batches per smoke epoch (default 5)")
+    p.add_argument("--pinder-manifest", default=None, help="quartet-rank-v1b: PINDER pool manifest replacing manifest-v1.json (e.g. training/pool-v5; production_extra)")
+    p.add_argument("--pinder-extra", default=None, help="quartet-rank-v1b: runtime-shaped root of the extra records' store-v2 + side tables (production_extra)")
+    p.add_argument("--mask-store-extra", default=None, help="quartet-rank-v1b: hotspot oracle store for the extra records (with --mask-store)")
     p = sub.add_parser("count"); p.add_argument("widths", type=int, nargs="+"); p.add_argument("--sidechains", action="store_true")
     p.add_argument("--depth", type=int, default=2); p.add_argument("--loops", type=int, default=1)
     p = sub.add_parser("export"); p.add_argument("run"); p.add_argument("destination")
@@ -1855,7 +1879,8 @@ def main(argv=None):
                        args.mask_oracle, args.mask_store, args.mask_keep, args.mask_soft, args.mask_sides, args.mask_prob,
                        args.alt_source, args.alt_prob, args.val_alt, args.alt_rank_weight, args.alt_rank_margin,
                        args.alt_weights, args.alt_cons_edge_weight, args.alt_cons_pka_weight, args.alt_cons_stopgrad, args.alt_edge_only, args.within_target,
-                       args.quartet_weight, args.quartet_count, args.smoke_batches, args.quartet_grad_norms)
+                       args.quartet_weight, args.quartet_count, args.smoke_batches, args.quartet_grad_norms,
+                       args.pinder_manifest, args.pinder_extra, args.mask_store_extra)
         print(json.dumps({"selected_epoch": result["selected_epoch"], "selection": result["validation"]["selection"]}))
 
 
