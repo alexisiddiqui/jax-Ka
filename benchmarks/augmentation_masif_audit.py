@@ -158,11 +158,15 @@ def load_views(sample, parent):
 
 
 def container_command(runtime, work, job):
+    checkpoint=Path(os.environ.get('MASIF_CHECKPOINT_PREFIX',
+        str(runtime.parent/'masif-checkpoints/active/model'))).resolve()
     return [str(runtime/"setup-env/bin/udocker"), "--quiet", "run",
             "--env=LD_LIBRARY_PATH=/compat", "--volume="+str(runtime/"compat")+":/compat",
             "--env=OMP_NUM_THREADS=1", "--env=OPENBLAS_NUM_THREADS=1", "--env=MKL_NUM_THREADS=1",
             "--env=CUDA_VISIBLE_DEVICES=", "--volume="+str(work)+":/audit",
             "--volume="+str(Path(__file__).resolve().parent)+":/code",
+            "--volume="+str(checkpoint.parent)+":/checkpoint",
+            "--env=MASIF_CHECKPOINT_PREFIX=/checkpoint/"+checkpoint.name,
             "masif-audit", "python", "/code/augmentation_masif_bridge.py", "/audit/"+job]
 
 

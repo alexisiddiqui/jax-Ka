@@ -43,8 +43,15 @@ def checked(args,cwd=None):
     return p.stdout.decode()
 
 
-def model():
+def model(checkpoint=None, allow_nonfinite=False):
     import tensorflow as tf
+    from masif_checkpoint import validate_checkpoint,resolve_checkpoint
+    checkpoint=resolve_checkpoint(checkpoint)
+    if allow_nonfinite:
+        # Used only by the explicit historical-defect diagnostic.
+        validation=dict(parameters_finite=False,legacy_diagnostic=True)
+    else:
+        validation=validate_checkpoint(checkpoint)
     original=tf.ConfigProto
     def config(*args,**kwargs):
         cfg=original(*args,**kwargs)
@@ -54,8 +61,12 @@ def model():
     tf.ConfigProto=config
     from masif_modules.MaSIF_ppi_search import MaSIF_ppi_search
     obj=MaSIF_ppi_search(12.,n_thetas=16,n_rhos=5,n_rotations=16,idx_gpu="/cpu:0",feat_mask=[1.]*5)
-    checkpoint="/masif/data/masif_ppi_search/nn_models/sc05/all_feat/model_data/model"
     obj.saver.restore(obj.session,checkpoint)
+    obj.checkpoint_prefix=checkpoint
+    obj.checkpoint_validation=validation
+    obj.checkpoint_sha256={name:sha(str(checkpoint)+suffix)
+        for name,suffix in [('model.data-00000-of-00001','.data-00000-of-00001'),
+                            ('model.index','.index'),('model.meta','.meta')]}
     return obj
 
 
@@ -192,7 +203,8 @@ def polar_at_centers(mesh,centers,seed,radius=12.,max_vertices=200):
 
 
 def features_at(mesh,hbond,potential,hydropathy,centers,seed,raw_only=False):
-    from masif_modules.read_data_from_surface import compute_ddc,normalize_electrostatics
+    from masif_modules.read_data_from_surface import compute_ddc
+    from masif_checkpoint import normalize_paper_electrostatics as normalize_electrostatics
     mesh.add_attribute("vertex_mean_curvature"); mesh.add_attribute("vertex_gaussian_curvature")
     h=mesh.get_attribute("vertex_mean_curvature");k=mesh.get_attribute("vertex_gaussian_curvature")
     elem=h*h-k;elem[elem<0]=1e-8
@@ -250,11 +262,11 @@ def preflight(job):
     descriptor_error=float(np.max(np.abs(infer(obj,uf[:1],ur[:1],ut[:1],um[:1])-infer(obj,cf,cr,ct,cm))))
     if feature_error>1e-5 or radius_error>1e-5 or descriptor_error>1e-4:
         raise ValueError("selected-center adapter differs from upstream: {}".format((feature_error,radius_error,descriptor_error)))
-    files=list(Path("/masif/data/masif_ppi_search/nn_models/sc05/all_feat/model_data").glob("model*"))
     source_files=["masif_modules/MaSIF_ppi_search.py","masif_modules/read_data_from_surface.py","geometry/compute_polar_coordinates.py","triangulation/computeMSMS.py","triangulation/computeCharges.py","triangulation/computeHydrophobicity.py"]
     result=dict(passed=True,python=sys.version,numpy=np.__version__,tensorflow=tf.__version__,
                 selected_center_upstream_check=dict(feature_error=feature_error,radius_error_A=radius_error,descriptor_error=descriptor_error),
-                checkpoint_sha256={f.name:sha(f) for f in files},repeat_max_abs_error=error,
+                checkpoint_sha256=obj.checkpoint_sha256,checkpoint_validation=obj.checkpoint_validation,
+                repeat_max_abs_error=error,
                 descriptor_dimensions=80,source_sha256={f:sha(Path("/masif/source")/f) for f in source_files},
                 environment={k:os.environ.get(k) for k in ("MSMS_BIN","APBS_BIN","MULTIVALUE_BIN","PDB2PQR_BIN")})
     for name,binary in result["environment"].items():
@@ -347,7 +359,7 @@ def frame(job):
 
 def deferred_electrostatics(job):
     """Evaluate charges on the retained mesh; never remesh or reprotonate."""
-    from masif_modules.read_data_from_surface import normalize_electrostatics
+    from masif_checkpoint import normalize_paper_electrostatics as normalize_electrostatics
     started=time.time()
     with np.load(job["mesh"]) as z:vertices=z["electrostatics_vertices" if "electrostatics_vertices" in z else "vertices"].copy()
     t=time.time();potentials,identity=electrostatics(vertices,Path(job["protonated"]))

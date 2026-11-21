@@ -29,7 +29,7 @@ def sha256(path):
 
 def manifest_files(root, manifest):
     root=Path(root).resolve()
-    if manifest.get('format')!='augmentation-feature-cache-v1' or manifest.get('verified') is not True:
+    if manifest.get('format') not in ('augmentation-feature-cache-v1','augmentation-records-v1') or manifest.get('verified') is not True:
         raise ValueError('not a verified feature release')
     files=manifest['files']
     if 'manifest.json' in files:raise ValueError('outer manifest cannot hash itself')
@@ -50,7 +50,7 @@ import hashlib,json,os,subprocess,sys
 from pathlib import Path
 destination=Path(sys.argv[1]); project=sys.argv[2]
 raw=sys.stdin.buffer.read(); manifest=json.loads(raw); files=manifest['files']
-if manifest.get('format')!='augmentation-feature-cache-v1' or not manifest.get('verified'):raise RuntimeError('invalid release')
+if manifest.get('format') not in ('augmentation-feature-cache-v1','augmentation-records-v1') or not manifest.get('verified'):raise RuntimeError('invalid release')
 stage=Path(str(destination)+'.incoming');control=Path(str(destination)+'.transfer')
 if destination.exists():
  p=destination/'manifest.json'

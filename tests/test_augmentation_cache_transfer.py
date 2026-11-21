@@ -38,6 +38,12 @@ def test_verify_resumes_after_marker_installed_but_before_directory_rename(tmp_p
     assert (args.destination/'manifest.json').read_bytes()==args.expected_manifest.read_bytes()
 
 
+def test_native_record_release_uses_same_hash_checked_publication(tmp_path):
+    args,manifest=fixture(tmp_path);manifest['format']='augmentation-records-v1'
+    args.expected_manifest.write_text(json.dumps(manifest));transfer.verify(args)
+    assert json.loads((args.destination/'manifest.json').read_text())['format']=='augmentation-records-v1'
+
+
 @pytest.mark.parametrize('failure',['corrupt','extra','escape','symlink'])
 def test_bad_or_unlisted_payload_never_publishes(tmp_path,failure):
     args,manifest=fixture(tmp_path)
