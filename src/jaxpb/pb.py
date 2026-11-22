@@ -12,7 +12,7 @@ Jitted programs (all module level, argument-pure, static shapes from records.py)
 DEVIATIONS from DESIGN.md (reasons in the M1 report): x64 only inside geometry (process-wide x64 would promote the f32
 map/PB code through weak-typed scalars); coarse+fine+model maps in ONE per-class program (fine/model read the class atom
 and probe arrays); site potentials computed for all class-c atoms in post[c]; lane pool = per-phase pool with width
-compaction (16/64/256), no cross-batch refill (a phase never has more than 2*B*T_MAX = 256 lanes).
+device compaction on fixed widths and CPU lane tiles, no cross-batch refill (a phase has at most 2*B*T_MAX = 256 lanes).
 """
 from __future__ import annotations
 
@@ -181,7 +181,7 @@ def _coefs(maps, h):
 
 
 def _codes(maps, h):
-    """Pallas SOR operator: uint8 code [n^3] + 1/diag table [16] (sor.op_code / sor.op_lut)."""
+    """GPU SOR operator: uint8 code [n^3] + 1/diag table [16] (sor.op_code / sor.op_lut)."""
     return SOR.op_code(maps), SOR.op_lut(_kap2h2(h), EPSIN, EPSOUT)
 
 
@@ -197,9 +197,10 @@ def _rhs_setup(qp, q, acent, h, spec, bc_phi):
 @partial(jax.jit, static_argnames=("backend",))
 def setup1(mc, ms, acent, qp, q, sqp, sq, spec, backend="xla"):
     """phase 1 items: coarse (B x T) then model (B x T), flattened to [2BT]; coefficient table [2B] (coarse, model) for
-    the selected backend only: XLA coefficients or Pallas operator codes."""
+    the selected backend only: CPU coefficients or GPU operator codes."""
     if backend == "xla":
-        cc = jax.vmap(lambda m: _coefs(m, 1.0))(mc); cs = jax.vmap(lambda m: _coefs(m, 0.25))(ms)
+        coef = _coefs if jax.default_backend() == "cpu" else _codes
+        cc = jax.vmap(lambda m: coef(m, 1.0))(mc); cs = jax.vmap(lambda m: coef(m, 0.25))(ms)
         kc = ks = ()
     elif backend == "pallas":
         kc = jax.vmap(lambda m: _codes(m, 1.0))(mc); ks = jax.vmap(lambda m: _codes(m, 0.25))(ms)
@@ -226,7 +227,8 @@ def setup2(mf, acent, qp, q, spec, store1, backend="xla"):
     phic = store1[:B_ * T_].reshape((B_, T_) + store1.shape[1:])
     pad2 = lambda x: jnp.concatenate([x, jnp.zeros_like(x)])
     if backend == "xla":
-        cf = tuple(pad2(x) for x in jax.vmap(lambda m: _coefs(m, 0.25))(mf)); kf = ()
+        coef = _coefs if jax.default_backend() == "cpu" else _codes
+        cf = tuple(pad2(x) for x in jax.vmap(lambda m: coef(m, 0.25))(mf)); kf = ()
     elif backend == "pallas":
         kf = tuple(pad2(x) for x in jax.vmap(lambda m: _codes(m, 0.25))(mf)); cf = ()
     else:

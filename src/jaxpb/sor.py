@@ -1,31 +1,28 @@
-"""jaxpb.sor -- DelPhi-emulating red-black SOR on an XLA lane pool (PB mode "delphi").
+"""DelPhi red-black SOR with bounded lane pools (PB mode "delphi").
 
-Per lane (one right-hand side on one operator): zero interior start, even colour ((i+j+k) even) first, constant omega,
-stop after the first 10-sweep block whose last sweep changed phi by < RES2 (max abs), cap NLIT -- identical to v1
-sor_delphi / v2 sor_chunk, so sweep counts and potentials are those of the prototypes.
+Even colour first, constant per-lane omega, zero interior start, max-change
+checked every RC.CHECK sweeps, RES2 threshold and NLIT cap. Finished lanes retain
+all outputs at their first passing block.
 
-Lane pool: lanes live in a pool of width W in LANE_WIDTHS; each lane carries its operator index into a coefficient table
-[E, n^3] (ex, ey, ez, dinv) so lanes of different sites/grids share one program. One jitted `sor_block[W]` call = one
-10-sweep stop-check block for all W lanes; after each block the host moves finished lanes to the output store and,
-when the live lanes fit a smaller width, compacts the pool (no lane ever sweeps past its own stop test; frozen lanes
-are bitwise unchanged). Executables: sor_block x3 widths, lanes_init x3, lanes_store x3, lanes_take <= 3 (the
-coefficient table always has E = 2B entries: phase 2 pads it, so sor_block does not recompile per phase).
+The GPU XLA stencil packs the two colours and decodes shared byte operators
+with a 16-entry diagonal LUT. Odd grids use contiguous shifted colour arrays;
+even grids use fixed neighbour indices. CPU retains the reference full-grid
+stencil because packing changes its shape-dependent fusion/FMA rounding.
+Only the checked sweep reduces max-change: a split final sweep on GPU, an
+in-loop conditional on CPU (splitting the CPU loop also changes rounding).
 
-Pallas backend (M5, `sor_solve`): the same iteration as ONE jitted program per lane count. Lanes keep a flat, zero-padded
-copy of phi/rhs ([W, NF], interior offset OFF >= n^2 so every neighbour load is in bounds) and read the operator as a
-uint8 code per grid point (bit0 ex, bit1 ey, bit2 ez inside the solute (eps_in), bit3 ion-accessible) plus a 16-entry
-1/diag table per operator (diag = number of eps_in faces * eps_in + rest * eps_out + kappa^2 h^2 eps_out ion, exact
-integer partial sums as in pb.operator_coeffs). One Triton kernel launch = one colour half-sweep for all lanes on a
-(lane, BLK-point block) grid; the launch boundary is the red/black synchronisation. A lane whose done flag is set
-returns at once (per-lane early exit, no host repacking); the 10-sweep max-change stop and the NLIT cap are evaluated on
-the device in a lax.while_loop, and the max over blocks is order-independent, so the solve is deterministic.
-Why not one program per lane for the whole solve: a red/black half-sweep needs a grid-wide barrier between colours;
-inside one Triton program that would mean a CTA barrier + global-memory fence that Pallas does not expose, and one
-program per lane leaves the A40 with 256 CTAs of serial work. The per-colour launch is the DESIGN section 3 fallback.
+A device while-loop compacts live lanes at block boundaries and switches among
+fixed widths; there is no per-block host synchronisation. CPU work is tiled
+into small lane groups to bound the coefficient gathers and stencil buffers.
+Each initial width has one executable containing the smaller-width branches;
+operator tables have the same padded shape in both PB phases.
+
+Pallas retains its original whole-solve device loop and per-lane early exit.
+Block compaction was exact but slower, so its production path is unchanged.
 """
 from __future__ import annotations
 
-from functools import partial
+from functools import lru_cache, partial
 
 import numpy as np
 import jax
@@ -49,8 +46,89 @@ def face_mask_np(n):
     return m
 
 
+@lru_cache(maxsize=16)
+def colour_layout(n):
+    """Equal-sized colour lists (one harmless padded point for an odd cube)."""
+    f = np.arange(n ** 3, dtype=np.int32)
+    parity = (f // (n*n) + (f // n) % n + f % n) % 2
+    m = (n ** 3 + 1) // 2
+    ids = np.stack([np.pad(f[parity == c], (0, m - np.sum(parity == c))) for c in (0, 1)])
+    inner = ~face_mask_np(n).reshape(-1)[ids]
+    if n % 2:
+        inner[1, -1] = False
+    inverse = np.empty(n ** 3, np.int32)
+    for c in (0, 1):
+        real = f[parity == c]
+        inverse[real] = np.arange(len(real), dtype=np.int32)
+    return ids, inner, parity, inverse
+
+
+def pack(a, n):
+    return a.reshape(a.shape[:-3] + (n ** 3,))[..., jnp.asarray(colour_layout(n)[0])]
+
+
+def unpack(a, n):
+    _, _, parity, inverse = colour_layout(n)
+    return a[..., jnp.asarray(parity), jnp.asarray(inverse)].reshape(a.shape[:-2] + (n, n, n))
+
+
+def _neighbour(a, colour, offset, n):
+    # On odd grids, spatial parity equals flat-index parity: every neighbour is a
+    # constant shift of the opposite packed colour. Only interior entries update.
+    if n % 2:
+        return jnp.roll(a, -((colour + offset) // 2), axis=-1)
+    ids, _, _, inverse = colour_layout(n)
+    return a[..., jnp.asarray(inverse[(ids[colour] + offset) % (n ** 3)])]
+
+
+def sor_chunk_packed(phi, rhs, code, lut, om, it, mc, done, *, n,
+              res2=RC.RES2, nlit=RC.NLIT, check=RC.CHECK):
+    """One stop-check block on [2,ceil(n^3/2)] red/black points, even first.
+
+    Decode shared byte operators inside the stencil instead of expanding four f32
+    coefficient grids per lane. Keep the reference expression's left-to-right sums.
+    Faces and the odd-grid pad are never updated; done lanes freeze all outputs.
+    """
+    masks = jnp.asarray(colour_layout(n)[1])
+
+    def half(p, colour):
+        c0 = code[colour].astype(jnp.int32)
+        other = code[1-colour].astype(jnp.int32)
+        cxm = _neighbour(other, colour, -n*n, n)
+        cym = _neighbour(other, colour, -n, n)
+        czm = _neighbour(other, colour, -1, n)
+        e = lambda c, bit: jnp.where(((c >> bit) & 1) != 0, jnp.float32(EPS_IN), jnp.float32(EPS_OUT))
+        v = p[1-colour]
+        nb = (e(c0, 0) * _neighbour(v, colour, n*n, n) + e(cxm, 0) * _neighbour(v, colour, -n*n, n)
+              + e(c0, 1) * _neighbour(v, colour, n, n) + e(cym, 1) * _neighbour(v, colour, -n, n)
+              + e(c0, 2) * _neighbour(v, colour, 1, n) + e(czm, 2) * _neighbour(v, colour, -1, n))
+        idx = ((c0 & 1) + (cxm & 1) + ((c0 >> 1) & 1) + ((cym >> 1) & 1)
+               + ((c0 >> 2) & 1) + ((czm >> 2) & 1) + 8 * ((c0 >> 3) & 1))
+        gs = (nb + rhs[colour]) * lut[idx]
+        old = p[colour]
+        new = jnp.where(masks[colour], old + om * (gs - old), old)
+        return p.at[colour].set(new)
+
+    def sweep(p):
+        return half(half(p, 0), 1)
+
+    p = lax.fori_loop(0, check - 1, lambda k, p: sweep(p), phi)
+    new = sweep(p)
+    mc2 = jnp.max(jnp.abs(new - p))
+    it2 = it + check
+    done2 = (mc2 < res2) | (it2 >= nlit)
+    return (jnp.where(done, phi, new), jnp.where(done, it, it2), jnp.where(done, mc, mc2), done | done2)
+
+
+@partial(jax.jit, donate_argnums=(0, 2, 3, 4), static_argnames=("n",))
+def _packed_block(phi, rhs, it, mc, done, om, op, code, lut, *, n):
+    """One device block for W packed lanes; shared codes [E,n^3], LUT [E,16]."""
+    cd = code[op][..., jnp.asarray(colour_layout(n)[0])]
+    return jax.vmap(partial(sor_chunk_packed, n=n))(phi, rhs, cd, lut[op], om, it, mc, done)
+
+
 def sor_chunk(phi, rhs, ex, ey, ez, dinv, cA, cB, om, it, mc, done, res2=RC.RES2, nlit=RC.NLIT, check=RC.CHECK):
-    """one 10-sweep block of v2 maps2.sor_chunk (NBLK=1) for one lane."""
+    """Reference CPU stencil, with a conditional reduction on the checked sweep."""
     def gs(p):
         nb = (ex * jnp.roll(p, -1, 0) + jnp.roll(ex, 1, 0) * jnp.roll(p, 1, 0)
               + ey * jnp.roll(p, -1, 1) + jnp.roll(ey, 1, 1) * jnp.roll(p, 1, 1)
@@ -61,10 +139,10 @@ def sor_chunk(phi, rhs, ex, ey, ez, dinv, cA, cB, om, it, mc, done, res2=RC.RES2
         p, mc_ = s
         new = jnp.where(cA, p + om * (gs(p) - p), p)
         new = jnp.where(cB, new + om * (gs(new) - new), new)
-        mc_ = jnp.where(k == check - 1, jnp.max(jnp.abs(new - p)), mc_)
+        mc_ = lax.cond(k == check - 1, lambda _: jnp.max(jnp.abs(new - p)), lambda _: mc_, operand=None)
         return new, mc_
 
-    new, mc2 = jax.lax.fori_loop(0, check, body, (phi, mc))
+    new, mc2 = lax.fori_loop(0, check, body, (phi, mc))
     it2 = it + check
     done2 = (mc2 < res2) | (it2 >= nlit)
     return (jnp.where(done, phi, new), jnp.where(done, it, it2), jnp.where(done, mc, mc2), done | done2)
@@ -74,9 +152,16 @@ _lanes = jax.vmap(sor_chunk, in_axes=(0, 0, 0, 0, 0, 0, None, None, 0, 0, 0, 0))
 
 
 @partial(jax.jit, donate_argnums=(0, 2, 3, 4))
-def sor_block(phi, rhs, it, mc, done, om, op, exE, eyE, ezE, dvE, cA, cB):
+def _cpu_block(phi, rhs, it, mc, done, om, op, exE, eyE, ezE, dvE, cA, cB):
     """phi/rhs [W,n,n,n]; it/mc/done/om/op [W]; coefficient table [E,n,n,n] x4. One 10-sweep block per lane."""
     return _lanes(phi, rhs, exE[op], eyE[op], ezE[op], dvE[op], cA, cB, om, it, mc, done)
+
+
+def sor_block(phi, rhs, it, mc, done, om, op, *coefs, n):
+    if phi.ndim == 4:
+        cA, cB = (jnp.asarray(m) for m in colour_masks(n))
+        return _cpu_block(phi, rhs, it, mc, done, om, op, *coefs, cA, cB)
+    return _packed_block(phi, rhs, it, mc, done, om, op, *coefs, n=n)
 
 
 @partial(jax.jit, static_argnames=("W",))
@@ -86,6 +171,8 @@ def lanes_init(phi0, rhs0, om0, item, W):
     ii = jnp.maximum(item, 0)
     phi = jnp.where(ok[:, None, None, None], phi0[ii], 0.0)
     rhs = jnp.where(ok[:, None, None, None], rhs0[ii], 0.0)
+    if jax.default_backend() != "cpu":
+        phi, rhs = pack(phi, phi0.shape[1]), pack(rhs, phi0.shape[1])
     return (phi, rhs, jnp.zeros(W, jnp.int32), jnp.full(W, 1e9, phi0.dtype), ~ok, jnp.where(ok, om0[ii], 1.0),
             jnp.zeros_like(phi0))
 
@@ -94,7 +181,7 @@ def lanes_init(phi0, rhs0, om0, item, W):
 def lanes_store(store, phi, lane_item):
     """store[item] = phi[lane] for lanes with lane_item >= 0 (others dropped)."""
     tgt = jnp.where(lane_item >= 0, lane_item, store.shape[0])
-    return store.at[tgt].set(phi, mode="drop")
+    return store.at[tgt].set(unpack(phi, store.shape[1]) if phi.ndim == 3 else phi, mode="drop")
 
 
 @jax.jit
@@ -106,49 +193,81 @@ def lanes_take(phi, rhs, it, mc, done, om, op, idx):
     return (z(phi, 0.0), z(rhs, 0.0), z(it, 0), z(mc, 1e9), jnp.where(ok, done[i], True), z(om, 1.0), z(op, 0))
 
 
-def width_for(n):
-    for w in RC.LANE_WIDTHS:
+def width_for(n, widths=None):
+    widths = RC.LANE_WIDTHS if widths is None else widths
+    for w in widths:
         if n <= w:
             return w
-    raise ValueError(f"{n} lanes > max width {RC.LANE_WIDTHS[-1]}")
+    raise ValueError(f"{n} lanes > max width {widths[-1]}")
 
 
 def run_pool(phi0, rhs0, om0, op0, valid, coefs, stats=None):
-    """Solve all valid items. phi0/rhs0 [NI,n,n,n] device, om0 [NI], op0 [NI] operator index, valid [NI] host bool,
-    coefs = (exE, eyE, ezE, dvE) [E,n,n,n]. NI <= max lane width. Returns phi store [NI,n,n,n], sweeps [NI] (host),
-    last max change [NI] (host)."""
+    """XLA pool; shared CPU coefficients or GPU byte operators, fixed width ladder."""
+    return _run_pool(phi0, rhs0, om0, op0, valid, coefs, stats=stats)
+
+
+def _run_pool(phi0, rhs0, om0, op0, valid, coefs, stats=None):
     NI = phi0.shape[0]; n = phi0.shape[1]
-    cA, cB = (jax.device_put(m) for m in colour_masks(n))
     items = np.nonzero(valid)[0]
-    W = width_for(len(items))
-    item = np.full(W, -1, np.int64); item[:len(items)] = items
-    phi, rhs, it, mc, done, om, store = lanes_init(phi0, rhs0, om0, jax.device_put(item.astype(np.int32)), W=W)
-    op = jax.device_put(np.where(item >= 0, np.asarray(op0)[np.maximum(item, 0)], 0).astype(np.int32))
+    # A bounded lane tile also limits CPU working-set size. No operator or grid
+    # depends on a lane's neighbours, so chunks retain each lane's stop block.
+    widths = RC.CPU_LANE_WIDTHS if jax.default_backend() == "cpu" else RC.LANE_WIDTHS
+    chunk = widths[-1]
+    op_h = np.asarray(op0)
+    store = None
     res_it = np.zeros(NI, np.int32); res_mc = np.zeros(NI, np.float32)
-    lane_item = item.copy()
     blocks = 0; lane_blocks = 0
-    while True:
-        phi, it, mc, done = sor_block(phi, rhs, it, mc, done, om, op, *coefs, cA, cB)
-        blocks += 1; lane_blocks += W
-        d = np.asarray(done); it_h = np.asarray(it); mc_h = np.asarray(mc)
-        fin = d & (lane_item >= 0)
-        if fin.any():
-            sel = np.where(fin, lane_item, -1)
-            store = lanes_store(store, phi, jax.device_put(sel.astype(np.int32)))
-            res_it[lane_item[fin]] = it_h[fin]; res_mc[lane_item[fin]] = mc_h[fin]
-            lane_item = np.where(fin, -1, lane_item)
-        live = np.nonzero(lane_item >= 0)[0]
-        if len(live) == 0:
-            break
-        W2 = width_for(len(live))
-        if W2 < W:
-            idx = np.full(W2, -1, np.int64); idx[:len(live)] = live
-            phi, rhs, it, mc, done, om, op = lanes_take(phi, rhs, it, mc, done, om, op, jax.device_put(idx.astype(np.int32)))
-            lane_item = np.where(idx >= 0, lane_item[np.maximum(idx, 0)], -1)
-            W = W2
+    for start in range(0, max(len(items), 1), chunk):
+        group = items[start:start + chunk]
+        W = width_for(len(group), widths)
+        item = np.full(W, -1, np.int32); item[:len(group)] = group
+        phi, rhs, it, mc, done, om, empty = lanes_init(phi0, rhs0, om0, jax.device_put(item), W=W)
+        if store is None:
+            store = empty
+        del empty
+        op = jax.device_put(np.where(item >= 0, op_h[np.maximum(item, 0)], 0).astype(np.int32))
+        phi, it, mc, done, nb, lb = device_solve(phi, rhs, it, mc, done, om, op, *coefs,
+                                                n=n, widths=tuple(w for w in widths if w <= W))
+        store = lanes_store(store, phi, jax.device_put(item))
+        res_it[group] = np.asarray(it)[:len(group)]
+        res_mc[group] = np.asarray(mc)[:len(group)]
+        blocks += int(nb); lane_blocks += int(lb)
     if stats is not None:
         stats.append(dict(blocks=blocks, lane_blocks=lane_blocks, needed=int(res_it[valid].sum() // RC.CHECK)))
     return store, res_it, res_mc
+
+
+@partial(jax.jit, donate_argnums=(0, 2, 3, 4), static_argnames=("n", "widths"))
+def device_solve(phi, rhs, it, mc, done, om, op, *coefs, n, widths):
+    """Compact live lanes and select a bounded width at stop blocks on the device.
+
+    The carry is in original lane order. A sentinel drops padding scatters, so
+    finished lanes retain their potential, sweep count and maxchange exactly.
+    No host synchronisation occurs between blocks.
+    """
+    W = phi.shape[0]
+    def body(carry):
+        p, it, mc, done, blocks, lb = carry
+        live = jnp.sum(~done)
+        indices = jnp.nonzero(~done, size=W, fill_value=W)[0]
+        ii = jnp.minimum(indices, W-1)
+        def branch(w):
+            def solve(_):
+                ix = ii[:w]; active = indices[:w] < W
+                args = (p[ix], rhs[ix], it[ix], mc[ix], ~active, om[ix], op[ix])
+                if p.ndim == 4:
+                    ca, cb = (jnp.asarray(m) for m in colour_masks(n))
+                    q, qi, qm, qd = _cpu_block(*args, *coefs, ca, cb)
+                else:
+                    q, qi, qm, qd = _packed_block(*args, *coefs, n=n)
+                idx = indices[:w]
+                put = lambda a, v: a.at[idx].set(v, mode="drop")
+                return put(p,q), put(it,qi), put(mc,qm), put(done,qd), blocks+1, lb+w
+            return solve
+        choice = sum(live > w for w in widths[:-1])
+        return lax.switch(choice, tuple(branch(w) for w in widths), operand=None)
+    init = phi, it, mc, done, jnp.int32(0), jnp.int32(0)
+    return lax.while_loop(lambda c: ~jnp.all(c[3]), body, init)
 
 
 # ================================================================================================ Pallas backend (M5)

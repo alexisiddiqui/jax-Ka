@@ -41,14 +41,15 @@ om0 = rng.uniform(1.6, 1.9, W).astype(np.float32)
 op0 = (np.arange(W) % E).astype(np.int32)
 valid = np.ones(W, bool); valid[-1] = False
 args = (jnp.asarray(phi0), jnp.asarray(rhs0), jnp.asarray(om0), jnp.asarray(op0))
-s_x, it_x, mc_x = SOR.run_pool(*args, valid, coefs)
+xla_ops = coefs if jax.default_backend() == "cpu" else codes
+s_x, it_x, mc_x = SOR.run_pool(*args, valid, xla_ops)
 st = []
 ip = not A.gpu
 s_p, it_p, mc_p = SOR.run_pool_pallas(*args, valid, codes, stats=st, interpret=ip)
 s_p2, it_p2, _ = SOR.run_pool_pallas(*args, valid, codes, interpret=ip)
 tim = {}
 if A.gpu:
-    for name, fn in (("xla", lambda: SOR.run_pool(*args, valid, coefs)), ("pallas", lambda: SOR.run_pool_pallas(*args, valid, codes))):
+    for name, fn in (("xla", lambda: SOR.run_pool(*args, valid, xla_ops)), ("pallas", lambda: SOR.run_pool_pallas(*args, valid, codes))):
         t = time.perf_counter(); jax.block_until_ready(fn()); tim[name + "_s"] = time.perf_counter() - t
 s_x, s_p, s_p2 = (np.asarray(a) for a in (s_x, s_p, s_p2))
 scale = float(np.abs(s_x).max())

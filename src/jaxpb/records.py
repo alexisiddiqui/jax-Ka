@@ -145,7 +145,8 @@ GEO_CHUNK = 1 << 17                   # probe candidates per geometry chunk
 GEO_K = 16                            # atoms per hashed cell (burial candidates; overflow -> XL_GEO_K retry, same class). SPEED lever 2: 32 -> 16 (max measured occupancy 10)
 XL_GEO_K = 64
 
-LANE_WIDTHS = (16, 64, 256)           # SOR lane-pool widths
+LANE_WIDTHS = (16, 64, 128, 256)           # GPU SOR lane-pool widths
+CPU_LANE_WIDTHS = (4, 8, 16)             # CPU working-set tiles; independent lanes
 
 # assembly microstate class (energy track, request 6): per state-size class c
 MC_C = tuple(n // 8 for n in NATOM_ALL_C)      # microstates (= tautomers incl. references) per state
