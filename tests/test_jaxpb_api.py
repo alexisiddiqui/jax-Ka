@@ -115,6 +115,12 @@ def main(wd=None):
 
     # 1. full run
     s1 = api.run(items, str(wd / "full"), cfg, echo=False)
+    assert "per_state" not in s1
+    assert s1["state_timing"]["count"] == len(recs)
+    assert s1["state_timing"]["failed"] == 0
+    assert "t_pb" in s1["state_timing"]["totals"]
+    z = np.load(wd / "full" / "labels_00000.npz")
+    assert len(json.loads(str(z["timing_json"]))["states"]) == cfg.shard_size
     full = per_state(wd / "full")
     assert len(full) == len(recs) and all(v["status"] == "ok" for v in full.values())
     lab = api.label(recs[:3], cfg)

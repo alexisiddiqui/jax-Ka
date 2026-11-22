@@ -24,6 +24,9 @@ from pathlib import Path
 
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "jobs"))
+from speed import state_timings
+
 ap = argparse.ArgumentParser()
 ap.add_argument("phase", choices=["prep", "items", "compare", "l3", "scale"]); ap.add_argument("out")
 ap.add_argument("dirs", nargs="*")
@@ -350,23 +353,29 @@ def disk(d, lab):
 
 
 def throughput(s):
-    ps = [p for p in s["per_state"] if not p.get("failed")]
-    warm = [p for p in ps if p.get("compiles", 1) == 0]
+    nstates = nwarm = 0; tpb = tasm = 0.0
+    sub = {k: 0.0 for k in ("t_geometry", "t_maps", "t_solves", "t_sor", "t_post")}
+    for p in state_timings(s):
+        if p.get("failed"):
+            continue
+        nstates += 1
+        if p.get("compiles", 1) == 0:
+            nwarm += 1; tpb += p["t_pb"]; tasm += p["t_asm"]
+            for k in sub:
+                sub[k] += p.get(k, 0.0)
     tb = [b for b in s["titration_batches"] if b["compiles"] == 0]
-    out = dict(pid_summary_out=s["out"], states=len(ps), warm_states=len(warm), compiles=s["compiles"]["n_compiled"],
+    out = dict(pid_summary_out=s["out"], states=nstates, warm_states=nwarm, compiles=s["compiles"]["n_compiled"],
                cache_hits=s["compiles"]["n_cache_hits"], compiles_after_shard=s["compiles_after_shard"],
                shards_written=s["shards_written"], shards_skipped=s["shards_skipped"], wall_s=s["wall_s"],
                compile_names=s["compiles"]["names"], memory=s.get("memory"), shard_bytes=s.get("shard_bytes"))
-    if warm:
-        tpb = sum(p["t_pb"] for p in warm); tasm = sum(p["t_asm"] for p in warm)
-        sub = {k: sum(p.get(k, 0.0) for p in warm) for k in ("t_geometry", "t_maps", "t_solves", "t_sor", "t_post")}
+    if nwarm:
         nt = sum(b["states"] for b in tb); tt = sum(b["seconds"] for b in tb)
-        out["warm"] = dict(pb_s_per_state=tpb / len(warm), asm_s_per_state=tasm / len(warm),
+        out["warm"] = dict(pb_s_per_state=tpb / nwarm, asm_s_per_state=tasm / nwarm,
                            titr_s_per_state=(tt / nt) if nt else None, titr_states=nt,
-                           pb_breakdown_s_per_state={k: v / len(warm) for k, v in sub.items()},
-                           states_per_a40_hour=dict(pb=3600 * len(warm) / tpb, assembly=3600 * len(warm) / tasm,
+                           pb_breakdown_s_per_state={k: v / nwarm for k, v in sub.items()},
+                           states_per_a40_hour=dict(pb=3600 * nwarm / tpb, assembly=3600 * nwarm / tasm,
                                                     titration=(3600 * nt / tt) if tt else None,
-                                                    total=3600 / (tpb / len(warm) + tasm / len(warm) + ((tt / nt) if nt else 0))))
+                                                    total=3600 / (tpb / nwarm + tasm / nwarm + ((tt / nt) if nt else 0))))
     return out
 
 

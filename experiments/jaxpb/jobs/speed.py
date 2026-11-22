@@ -35,6 +35,18 @@ def sha(x):
     return h.hexdigest()[:24]
 
 
+def state_timings(summary):
+    """Stream old summaries or the written shards' timing records (OPT1 bounded driver summaries)."""
+    if "per_state" in summary:
+        yield from summary["per_state"]
+        return
+    for k in summary.get("shards_written", []):
+        path = os.path.join(summary["out"], f"labels_{k:05d}.npz")
+        with np.load(path) as z:
+            rows = json.loads(str(z["timing_json"]))["states"]
+        yield from rows
+
+
 def jdump(obj, path):
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
@@ -287,16 +299,20 @@ def mode_labels(a):
             bad[k] = b
     runs = sorted(glob.glob(os.path.join(a.digests[1], "run_*.json")))
     summ = json.load(open(runs[-1])) if runs else {}
-    per = summ.get("per_state", [])
-    warm = [p for p in per if not p.get("compiles") and not p.get("failed")]
+    nwarm = 0; wt = dict(t_pb=0.0, t_asm=0.0, t_geometry=0.0, t_maps=0.0)
+    for p in state_timings(summ):
+        if not p.get("compiles") and not p.get("failed"):
+            nwarm += 1
+            for k in wt:
+                wt[k] += p.get(k, 0.0)
     tb = summ.get("titration_batches", [])
     res = dict(ref=a.digests[0], run=a.digests[1], n_ref=len(R), n=len(X), arrays=keys, all_equal=not bad, bad=bad,
                compiles=summ.get("compiles", {}).get("n_compiled"), wall_s=summ.get("wall_s"),
-               warm_states=len(warm), pb_s=float(np.mean([p["t_pb"] for p in warm])) if warm else None,
-               asm_s=float(np.mean([p["t_asm"] for p in warm])) if warm else None,
+               warm_states=nwarm, pb_s=wt["t_pb"] / nwarm if nwarm else None,
+               asm_s=wt["t_asm"] / nwarm if nwarm else None,
                titr_s_per_state=(sum(b["seconds"] for b in tb if not b["compiles"]) / max(1, sum(b["states"] for b in tb if not b["compiles"]))),
-               geo_s=float(np.mean([p.get("t_geometry", 0) for p in warm])) if warm else None,
-               maps_s=float(np.mean([p.get("t_maps", 0) for p in warm])) if warm else None)
+               geo_s=wt["t_geometry"] / nwarm if nwarm else None,
+               maps_s=wt["t_maps"] / nwarm if nwarm else None)
     print(json.dumps({k: v for k, v in res.items() if k != "bad"}), "bad:", list(bad)[:10], flush=True)
     jdump(res, a.out)
 

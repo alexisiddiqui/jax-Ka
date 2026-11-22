@@ -56,25 +56,31 @@ def grid_coords(acent, h, n):
     return acent[0] + ax, acent[1] + ax, acent[2] + ax
 
 
-def build_cells(P, w, lo, ncell, cell, K):
-    """Bin points P (n,3) into a dense (ncell^3, K) index table over lo + [0, ncell*cell). Returns table, max occupancy."""
+def build_cells(P, w, lo, ncell, cell, K, batch_size=1):
+    """Stable dense or CSR cells, selected from a static whole-group byte budget.
+
+    CSR retains the finite K capacity and dense candidate order without the large coarse-probe allocation.
+    Both representations use site-specific origins and uncapped occupancy for overflow detection.
+    """
     c = jnp.floor((P - lo) / cell).astype(jnp.int32)
     ok = jnp.all((c >= 0) & (c < ncell), axis=1)
     cid = jnp.where(ok, (c[:, 0] * ncell + c[:, 1]) * ncell + c[:, 2], ncell ** 3)
-    order = jnp.argsort(cid); sc = cid[order]
-    start = jnp.searchsorted(sc, jnp.arange(ncell ** 3), side="left")
-    stop = jnp.searchsorted(sc, jnp.arange(ncell ** 3), side="right")
-    kk = jnp.arange(K)
-    idx = start[:, None] + kk[None, :]
-    table = jnp.where(idx < stop[:, None], order[jnp.minimum(idx, P.shape[0] - 1)], -1)
-    return table, jnp.max(stop - start)
+    order = jnp.argsort(cid, stable=True).astype(jnp.int32); sc = cid[order]
+    bounds = jnp.searchsorted(sc, jnp.arange(ncell ** 3 + 1, dtype=jnp.int32), side="left").astype(jnp.int32)
+    start, stop = bounds[:-1], bounds[1:]
+    table_budget = (16 if jax.default_backend() == "cpu" else 320) << 20
+    if batch_size * ncell ** 3 * K * 4 <= table_budget:
+        kk = start[:, None] + jnp.arange(K)
+        table = jnp.where(kk < stop[:, None], order[jnp.minimum(kk, order.shape[0] - 1)], -1)
+        return table, jnp.max(stop - start)
+    return (order, start.astype(jnp.int32), stop.astype(jnp.int32), jnp.arange(K, dtype=jnp.int32)), jnp.max(stop - start)
 
 
-def query_min(Q, P, w, table, lo, ncell, cell, chunk=None, reach=1):
+def query_min(Q, P, w, table, lo, ncell, cell, chunk=None, reach=1, batch_size=1):
     """min_j |q - p_j| - w_j over points in the (2*reach+1)^3 neighbouring cells; (dmin, argmin) (inf / -1 if none)."""
     rr = range(-reach, reach + 1)
     offs = jnp.array([(a, b, c) for a in rr for b in rr for c in rr], jnp.int32)
-    chunk = chunk or max(1024, (1 << 22) // (offs.shape[0] * table.shape[1]))
+    chunk = chunk or _q_chunk(reach, _table_K(table), batch_size)
     nq = Q.shape[0]; pad = (-nq) % chunk
     Qp = jnp.concatenate([Q, jnp.zeros((pad, 3), Q.dtype)]).reshape(-1, chunk, 3)
 
@@ -87,8 +93,42 @@ def _offs(reach):
     return jnp.array([(a, b, c) for a in rr for b in rr for c in rr], jnp.int32)
 
 
-def _q_chunk(reach, K):
-    return max(1024, (1 << 22) // ((2 * reach + 1) ** 3 * K))
+# Static whole-group budgets: CPU intermediates stay within a 32 MiB cache budget;
+# fused GPU query kinds use separate budgets and an 8-byte candidate estimate.
+QUERY_BYTES = 32 << 20
+REACH_BYTES = 32 << 20
+GPU_ATOM_BYTES = 512 << 20
+GPU_CULL_BYTES = 512 << 20
+GPU_PROBE_BYTES = 512 << 20
+GPU_BRUTE_BYTES = 512 << 20
+GPU_REACH_BYTES = 512 << 20
+CSR_SLAB = 128
+
+
+def _query_bytes():
+    # GPU fusion tolerates wider tiles; CPU materializes more candidate intermediates.
+    return QUERY_BYTES if jax.default_backend() == "cpu" else GPU_BRUTE_BYTES
+
+
+def _reach_bytes():
+    return REACH_BYTES if jax.default_backend() == "cpu" else GPU_REACH_BYTES
+
+
+def _q_chunk(reach, K, B=1):
+    if jax.default_backend() == "cpu":
+        return min(1024 if K > 32 else 4096,
+                   max(1, QUERY_BYTES // (B * (2 * reach + 1) ** 3 * min(K, CSR_SLAB) * 48)))
+    # Fused GPU candidates need indices and distances rather than every CPU intermediate.
+    # Separate static query kinds: atom, cull and probe; restore baseline atom/cull widths.
+    if K > 48:
+        return min(1024, max(1, GPU_PROBE_BYTES // (B * (2 * reach + 1) ** 3 * 32 * 8)))
+    budget = GPU_CULL_BYTES if reach == 2 else GPU_ATOM_BYTES
+    return max(1024, budget // (B * (2 * reach + 1) ** 3 * K * 8))
+
+
+def _brute_chunk(K, B=1):
+    per_candidate = 48 if jax.default_backend() == "cpu" else 8
+    return min(65536, max(1, _query_bytes() // (B * K * per_candidate)))
 
 
 def _pick(q, P, w, idx):
@@ -96,17 +136,53 @@ def _pick(q, P, w, idx):
     pp = P[jnp.maximum(idx, 0)]
     d = jnp.linalg.norm(q[:, None, :] - pp, axis=2) - w[jnp.maximum(idx, 0)]
     d = jnp.where(idx >= 0, d, jnp.inf)
-    a = jnp.argmin(d, axis=1)
+    a = jnp.argmin(d, axis=1).astype(jnp.int32)
     return jnp.take_along_axis(d, a[:, None], 1)[:, 0], jnp.take_along_axis(idx, a[:, None], 1)[:, 0]
 
 
+def _table_K(table):
+    return table[3].shape[0] if isinstance(table, tuple) else table.shape[1]
+
+
 def _q_one(q, P, w, table, lo, ncell, cell, offs):
-    """query_min on one chunk of rows (dense cell table)."""
+    """Reconstruct only this query tile, in the dense table's offset-major, slot-minor order."""
     c = jnp.floor((q - lo) / cell).astype(jnp.int32)
     cc = c[:, None, :] + offs[None]
     ok = jnp.all((cc >= 0) & (cc < ncell), axis=2)
     cid = jnp.where(ok, (cc[..., 0] * ncell + cc[..., 1]) * ncell + cc[..., 2], 0)
-    idx = jnp.where(ok[..., None], table[cid], -1).reshape(q.shape[0], -1)
+    if not isinstance(table, tuple):
+        idx = jnp.where(ok[..., None], table[cid], -1).reshape(q.shape[0], -1)
+        return _pick(q, P, w, idx)
+    order, start, stop, slots = table
+    K = slots.shape[0]
+    if K > CSR_SLAB:
+        # Stream occupied slot slabs. Preserve the original offset-major/slot-minor rank on ties,
+        # even though slabs visit later cells before the preceding cells' higher-numbered slots.
+        st, en = start[cid], stop[cid]
+        count = jnp.where(ok, jnp.minimum(en - st, K), 0)
+        nslab = (jnp.max(count) + CSR_SLAB - 1) // CSR_SLAB
+        init = (jnp.full(q.shape[0], jnp.inf, q.dtype), jnp.full(q.shape[0], -1, jnp.int32),
+                jnp.full(q.shape[0], jnp.iinfo(jnp.int32).max, jnp.int32))
+
+        def slab(k, best):
+            slot = k * CSR_SLAB + jnp.arange(CSR_SLAB, dtype=jnp.int32)
+            kk = st[..., None] + slot
+            idx = jnp.where(ok[..., None] & (slot < K) & (kk < en[..., None]),
+                            order[jnp.minimum(kk, order.shape[0] - 1)], -1).reshape(q.shape[0], -1)
+            pp = P[jnp.maximum(idx, 0)]
+            d = jnp.linalg.norm(q[:, None, :] - pp, axis=2) - w[jnp.maximum(idx, 0)]
+            d = jnp.where(idx >= 0, d, jnp.inf)
+            a = jnp.argmin(d, axis=1).astype(jnp.int32)
+            value = jnp.take_along_axis(d, a[:, None], 1)[:, 0]
+            point = jnp.take_along_axis(idx, a[:, None], 1)[:, 0]
+            rank = ((a // CSR_SLAB) * K + k * CSR_SLAB + a % CSR_SLAB).astype(jnp.int32)
+            take = (value < best[0]) | ((value == best[0]) & (rank < best[2]))
+            return tuple(jnp.where(take, x, y) for x, y in zip((value, point, rank), best))
+        value, point, _ = jax.lax.fori_loop(0, nslab, slab, init)
+        return value, point
+    kk = start[cid][..., None] + slots
+    idx = jnp.where(ok[..., None] & (kk < stop[cid][..., None]),
+                    order[jnp.minimum(kk, order.shape[0] - 1)], -1).reshape(q.shape[0], -1)
     return _pick(q, P, w, idx)
 
 
@@ -127,7 +203,7 @@ def _q_one_hashed(q, P, w, sc, order, lo, ncell, cell, offs, K):
 def _b_one(q, P, w):
     """brute_min on one chunk of rows."""
     d = jnp.linalg.norm(q[:, None, :] - P[None], axis=2) - w[None]
-    a = jnp.argmin(d, axis=1)
+    a = jnp.argmin(d, axis=1).astype(jnp.int32)
     return jnp.take_along_axis(d, a[:, None], 1)[:, 0], a.astype(jnp.int32)
 
 
@@ -288,7 +364,7 @@ def probe_cells_hashed(P, lo, ncell, cell):
     c = jnp.floor((P - lo) / cell).astype(jnp.int32)
     ok = jnp.all((c >= 0) & (c < ncell), axis=1)
     cid = jnp.where(ok, (c[:, 0] * ncell + c[:, 1]) * ncell + c[:, 2], ncell ** 3)
-    order = jnp.argsort(cid); sc = cid[order]
+    order = jnp.argsort(cid, stable=True).astype(jnp.int32); sc = cid[order]
     run = jnp.searchsorted(sc, sc, side="right") - jnp.searchsorted(sc, sc, side="left")
     return sc, order, jnp.max(jnp.where(sc < ncell ** 3, run, 0))
 
@@ -305,6 +381,9 @@ def _dyn_rows(fn, Q, cnt, chunk, args, axes):
         dm, am = c
         q = jax.lax.dynamic_slice_in_dim(Qp, i * chunk, chunk, axis=1)
         d, a = f(q, *args)
+        valid = jnp.arange(chunk)[None] + i * chunk < cnt[:, None]
+        d = jnp.where(valid, d, jnp.inf)
+        a = jnp.where(valid, a, -1)
         return (jax.lax.dynamic_update_slice_in_dim(dm, d, i * chunk, axis=1),
                 jax.lax.dynamic_update_slice_in_dim(am, a, i * chunk, axis=1))
     init = (jnp.full((B, nr), jnp.inf, Q.dtype), jnp.full((B, nr), -1, jnp.int32))
@@ -319,9 +398,11 @@ def _fill_from(x, cnt, src):
     return jnp.where(jnp.arange(x.shape[1])[None] < cnt[:, None], x, v)
 
 
-def build_maps_b(pos, rad, probes, acent, h, n, Ka, Kp, ncell_a, ncell_p, NS, NB, PB, brute, hstat, shared, rp=RP, exrad=EXRAD):
+def build_maps_b(pos, rad, probes, acent, h, n, Ka, Kp, ncell_a, ncell_p, NS, NB, PB, brute, hstat, shared, rp=RP, exrad=EXRAD, active=None):
     """build_maps (identical outputs) for B sites at once; pos/rad/probes shared by the sites (shared) or per site [B,...]."""
     pa = None if shared else 0
+    B = acent.shape[0]
+    active = jnp.ones(B, bool) if active is None else active
     dt = pos.dtype
     rmax = 2.0; L = (n - 1) * h; ca = rmax + exrad + 0.01; cp = PCELL
     N3 = n ** 3; nbk = -(-n // BLK); NBLK = nbk ** 3
@@ -330,18 +411,18 @@ def build_maps_b(pos, rad, probes, acent, h, n, Ka, Kp, ncell_a, ncell_p, NS, NB
     V = lambda f, *ax: jax.vmap(f, in_axes=ax)
 
     # -------------------------------------------------- per-site set-up: cells, region probes, grid, block classes
-    def stage0(pos, rad, probes, a):
+    def stage0(pos, rad, probes, a, budget_B=B):
         lo = a - L / 2 - (rmax + exrad + 0.5)
         if brute:
-            tab_a = jnp.zeros((1, 1), jnp.int32); ov_a = jnp.asarray(0)
+            tab_a = tuple(jnp.zeros(1, jnp.int32) for _ in range(4)); ov_a = jnp.asarray(0)
         else:
-            tab_a, ov_a = build_cells(pos, rad, lo, ncell_a, ca, Ka)
+            tab_a, ov_a = build_cells(pos, rad, lo, ncell_a, ca, Ka, batch_size=budget_B)
         lop = a - L / 2 - (rp + 0.5)
         if PROBE_HASH:
             psc, pord, ov_p = probe_cells_hashed(probes, lop, ncell_p, cp)
             ptab = (psc, pord)
         else:
-            tab_p, ov_p = build_cells(probes, jnp.zeros(probes.shape[0], dt), lop, ncell_p, cp, Kp)
+            tab_p, ov_p = build_cells(probes, jnp.zeros(probes.shape[0], dt), lop, ncell_p, cp, Kp, batch_size=budget_B)
             ptab = (tab_p,)
         preg, pval, npreg = region_probes(probes, a, h, n, PB, rp)
         x, y, z = grid_coords(a, h, n)
@@ -355,9 +436,9 @@ def build_maps_b(pos, rad, probes, acent, h, n, Ka, Kp, ncell_a, ncell_p, NS, NB
             C = jnp.stack([CX, CY, CZ], -1).reshape(-1, 3)
             r = 1.75 * h * np.sqrt(3.0) + MARG
             if brute:
-                vc, _ = brute_min(C, pos, rad); lbc = vc
+                vc, _ = brute_min(C, pos, rad, chunk=_brute_chunk(pos.shape[0], budget_B)); lbc = vc
             else:
-                vc, _ = query_min(C, pos, rad, tab_a, lo, ncell_a, ca, reach=2)
+                vc, _ = query_min(C, pos, rad, tab_a, lo, ncell_a, ca, reach=2, batch_size=budget_B)
                 lbc = jnp.minimum(vc, 2 * ca - jnp.max(rad))
             inb = vc + r < 0
             outb = (lbc - r >= max(rp, exrad)) & ~inb
@@ -376,13 +457,17 @@ def build_maps_b(pos, rad, probes, acent, h, n, Ka, Kp, ncell_a, ncell_p, NS, NB
         return dict(lo=lo, tab_a=tab_a, ov_a=ov_a, lop=lop, ptab=ptab, ov_p=ov_p, preg=preg, pval=pval, npreg=npreg, G=G,
                     flat=flat, Gm=Gm, nmix=nmix, pcls=pcls)
     S = V(stage0, pa, pa, pa, 0)(pos, rad, probes, acent)
+    # Padding has no query/reach rows and never contributes to overflow. It no longer repeats a real site.
+    for key in ("nmix", "npreg", "ov_a", "ov_p"):
+        S[key] = jnp.where(active, S[key], 0)
+    S["pval"] = S["pval"] & active[:, None]
 
     def qrows(Q, cnt, w, wax):
         """nearest-atom query (cell list or brute) of rows [0, cnt) of Q [B, nq, 3]."""
         if brute:
-            return _dyn_rows(_b_one, Q, cnt, 65536, (pos, w), (pa, wax))
-        return _dyn_rows(lambda q, P, w_, tab, lo: _q_one(q, P, w_, tab, lo, ncell_a, ca, offs1), Q, cnt,
-                         _q_chunk(1, Ka), (pos, w, S["tab_a"], S["lo"]), (pa, wax, 0, 0))
+            return _dyn_rows(_b_one, Q, jnp.where(active, cnt, 0), _brute_chunk(pos.shape[-2], B), (pos, w), (pa, wax))
+        return _dyn_rows(lambda q, P, w_, tab, lo: _q_one(q, P, w_, tab, lo, ncell_a, ca, offs1), Q, jnp.where(active, cnt, 0),
+                         _q_chunk(1, Ka, B), (pos, w, S["tab_a"], S["lo"]), (pa, wax, 0, 0))
 
     ncnt = S["nmix"] * (BLK ** 3)
     da_m, _ = qrows(S["Gm"], ncnt, rad, pa)
@@ -451,13 +536,13 @@ def build_maps_b(pos, rad, probes, acent, h, n, Ka, Kp, ncell_a, ncell_p, NS, NB
         return needb, nbproj, bi2, Gb[bi2]
     needb, nbproj, bi2, Gq = V(stage5, 0, 0, 0)(dcp_b, bidx, Gb)
     zp = jnp.zeros(probes.shape[-2], dt)
-    npq = jnp.minimum(nbproj, NB) if DYN_BPROJ else jnp.full_like(nbproj, NB)
+    npq = jnp.where(active, jnp.minimum(nbproj, NB) if DYN_BPROJ else jnp.full_like(nbproj, NB), 0)
     if PROBE_HASH:
         fq = lambda q, P, w_, sc, order, lo: _q_one_hashed(q, P, w_, sc, order, lo, ncell_p, cp, offsP, Kp)
-        _, ip2 = _dyn_rows(fq, Gq, npq, _q_chunk(PREACH, Kp), (probes, zp) + S["ptab"] + (S["lop"],), (pa, None, 0, 0, 0))
+        _, ip2 = _dyn_rows(fq, Gq, npq, _q_chunk(PREACH, Kp, B), (probes, zp) + S["ptab"] + (S["lop"],), (pa, None, 0, 0, 0))
     else:
         fq = lambda q, P, w_, tab, lo: _q_one(q, P, w_, tab, lo, ncell_p, cp, offsP)
-        _, ip2 = _dyn_rows(fq, Gq, npq, _q_chunk(PREACH, Kp), (probes, zp) + S["ptab"] + (S["lop"],), (pa, None, 0, 0))
+        _, ip2 = _dyn_rows(fq, Gq, npq, _q_chunk(PREACH, Kp, B), (probes, zp) + S["ptab"] + (S["lop"],), (pa, None, 0, 0))
     ip2 = _fill_from(ip2, npq, jnp.zeros_like(npq))     # padding rows (bi2 = 0) duplicate row 0 when needb[0]
 
     def stage6(probes, Gb, needb, bi2, ip2, dcp, sa):
@@ -472,7 +557,9 @@ def build_maps_b(pos, rad, probes, acent, h, n, Ka, Kp, ncell_a, ncell_p, NS, NB
     ctr = jnp.stack([S["ov_a"].astype(jnp.int32), S["ov_p"].astype(jnp.int32), (nbproj - NB).astype(jnp.int32),
                      (ov_s - NS).astype(jnp.int32), (nbd - NB).astype(jnp.int32), (S["npreg"] - PB).astype(jnp.int32),
                      nbd.astype(jnp.int32)], -1)
-    return res, ctr
+    res = {key: jnp.where(active.reshape((B,) + (1,) * (value.ndim - 1)), value,
+                          jnp.full_like(value, -1 if key == "bidx" else 0)) for key, value in res.items()}
+    return res, jnp.where(active[:, None], ctr, 0)
 
 
 def reach_mask_b(p, pvalid, npreg, acent, h, n, ax, hstat, PB, rp=RP, budget=1 << 22):
@@ -481,12 +568,15 @@ def reach_mask_b(p, pvalid, npreg, acent, h, n, ax, hstat, PB, rp=RP, budget=1 <
     dt = p.dtype
     off = jnp.zeros(3, dt).at[ax].set(h / 2)
     O = jnp.asarray(reach_offsets(hstat, rp), jnp.int32)
-    ch = max(256, budget // O.shape[0]); B, npb = p.shape[:2]; pad = (-npb) % ch
+    B, npb = p.shape[:2]
+    per_candidate = 64 if jax.default_backend() == "cpu" else 8
+    ch = max(1, _reach_bytes() // (B * O.shape[0] * per_candidate)); pad = (-npb) % ch
+    xyz = jax.vmap(lambda a: grid_coords(a, h, n))(acent)
     pp = jnp.concatenate([p, jnp.zeros((B, pad, 3), dt)], 1).reshape(B, -1, ch, 3)
     vv = jnp.concatenate([pvalid, jnp.zeros((B, pad), bool)], 1).reshape(B, -1, ch)
 
-    def one(pc, ok0, a, mask):
-        x, y, z = grid_coords(a, h, n)
+    def one(pc, ok0, a, mask, xyz):
+        x, y, z = xyz
         i0 = jnp.floor((pc - a - off) / h + (n - 1) / 2).astype(jnp.int32)
         idx = i0[:, None, :] + O[None]
         ok = jnp.all((idx >= 0) & (idx < n), axis=2) & ok0[:, None]
@@ -499,7 +589,7 @@ def reach_mask_b(p, pvalid, npreg, acent, h, n, ax, hstat, PB, rp=RP, budget=1 <
     f = jax.vmap(one)
 
     def body(c, mask):
-        return f(pp[:, c], vv[:, c], acent, mask)
+        return f(pp[:, c], vv[:, c], acent, mask, xyz)
     nch = pp.shape[1]
     if DYN_REACH:
         nch = (jnp.max(jnp.minimum(npreg, PB)) + ch - 1) // ch
@@ -507,7 +597,34 @@ def reach_mask_b(p, pvalid, npreg, acent, h, n, ax, hstat, PB, rp=RP, budget=1 <
 
 
 @partial(jax.jit, static_argnames=("sz",))
-def maps_batch(pos_m, rad_m, probes, acent, spos, srad, sprb, sz: Sizes):
+def maps_batch(pos_m, rad_m, probes, acent, spos, srad, sprb, sz: Sizes, active=None):
+    """One executable per class: fixed CPU groups of four and GPU groups of eight, with explicit site validity."""
+    B = acent.shape[0]
+    group = 4 if jax.default_backend() == "cpu" else min(8, B)
+    active = jnp.ones(B, bool) if active is None else active
+    pad = (-B) % group
+    args = (acent, spos, srad, sprb, active)
+    padded = tuple(jnp.pad(x, ((0, pad),) + ((0, 0),) * (x.ndim - 1)) for x in args)
+    width = B + pad
+    grouped = tuple(x.reshape((width // group, group) + x.shape[1:]) for x in padded)
+
+    def empty_maps(width):
+        def grid(nb):
+            shape = (width, RC.GSIZE, RC.GSIZE, RC.GSIZE)
+            return dict(ex=jnp.zeros(shape, bool), ey=jnp.zeros(shape, bool), ez=jnp.zeros(shape, bool),
+                        ion=jnp.zeros(shape, bool), bidx=jnp.full((width, nb), -1, jnp.int32),
+                        surf=jnp.zeros((width, nb, 3), pos_m.dtype))
+        return grid(sz.NBc), grid(sz.NBf), grid(sz.NBs), jnp.zeros((width, 3, 7), jnp.int32)
+
+    def one(xs):
+        return jax.lax.cond(jnp.any(xs[4]),
+            lambda _: _maps_group(pos_m, rad_m, probes, *xs[:4], sz=sz, active=xs[4]),
+            lambda _: empty_maps(group), operand=None)
+    out = jax.lax.map(one, grouped)
+    return jax.tree_util.tree_map(lambda x: x.reshape((width,) + x.shape[2:])[:B], out)
+
+
+def _maps_group(pos_m, rad_m, probes, acent, spos, srad, sprb, sz: Sizes, active=None):
     """Coarse (h 1), focused (h 0.25) and model-compound (h 0.25) maps for B sites (batch-explicit build_maps_b; the M6
     per-site vmap of build_maps is maps_batch_ref).
     pos_m/rad_m [NA_C[c]] class arrays (FAR / 0 padded); probes [NP_C[c],3]; acent [B,3]; spos [B,MA,3], srad [B,MA]
@@ -516,9 +633,10 @@ def maps_batch(pos_m, rad_m, probes, acent, spos, srad, sprb, sz: Sizes):
     nca_c, ncp_c = ncells(1.0, n, "a"), ncells(1.0, n, "p")
     nca_f, ncp_f = ncells(0.25, n, "a"), ncells(0.25, n, "p")
     PBc = probes.shape[0]
-    mc, cc = build_maps_b(pos_m, rad_m, probes, acent, 1.0, n, sz.Ka, sz.Kp, nca_c, ncp_c, sz.NSc, sz.NBc, PBc, False, 1.0, True)
-    mf, cf = build_maps_b(pos_m, rad_m, probes, acent, 0.25, n, sz.Ka, sz.Kp, nca_f, ncp_f, sz.NSf, sz.NBf, sz.PBf, False, 0.25, True)
-    ms, cs = build_maps_b(spos, srad, sprb, acent, 0.25, n, sz.Ka, sz.Kp, nca_f, ncp_f, sz.NSs, sz.NBs, sz.PBs, True, 0.25, False)
+    active = jnp.ones(acent.shape[0], bool) if active is None else active
+    mc, cc = build_maps_b(pos_m, rad_m, probes, acent, 1.0, n, sz.Ka, sz.Kp, nca_c, ncp_c, sz.NSc, sz.NBc, PBc, False, 1.0, True, active=active)
+    mf, cf = build_maps_b(pos_m, rad_m, probes, acent, 0.25, n, sz.Ka, sz.Kp, nca_f, ncp_f, sz.NSf, sz.NBf, sz.PBf, False, 0.25, True, active=active)
+    ms, cs = build_maps_b(spos, srad, sprb, acent, 0.25, n, sz.Ka, sz.Kp, nca_f, ncp_f, sz.NSs, sz.NBs, sz.PBs, True, 0.25, False, active=active)
     return mc, mf, ms, jnp.stack([cc, cf, cs], 1)
 
 

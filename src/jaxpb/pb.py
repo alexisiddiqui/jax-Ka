@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from functools import partial
+from functools import lru_cache, partial
 from typing import Callable, Dict, List, Optional
 
 import numpy as np
@@ -96,14 +96,35 @@ def interp(phi, pts, acent, h, n):
     return jnp.where(inside, val, 0.0)
 
 
-def coulomb_bc(q_pos, q, acent, h, n, epsout, deblen):
+@lru_cache(maxsize=4)
+def face_indices(n):
+    """Fixed, unique C-order face list (38,402 entries at n=81)."""
+    return np.flatnonzero(SOR.face_mask_np(n).reshape(-1)).astype(np.int32)
+
+
+def face_points(acent, h, n):
+    # Use the original grid coordinate arithmetic before gathering; do not reassociate it.
     x, y, z = MP.grid_coords(acent, h, n)
-    X, Y, Z = jnp.meshgrid(x, y, z, indexing="ij")
-    G = jnp.stack([X, Y, Z], -1)
-    fm = face_mask(n)
-    r = jnp.linalg.norm(G[..., None, :] - q_pos, axis=-1)
-    val = jnp.sum(EPKT * q * jnp.exp(-r / deblen) / (epsout * r), axis=-1)
-    return jnp.where(fm, val, 0.0)
+    f = jnp.asarray(face_indices(n))
+    return jnp.stack([x[f // (n * n)], y[(f // n) % n], z[f % n]], -1)
+
+
+def face_grid(values, n):
+    return jnp.zeros(n ** 3, values.dtype).at[jnp.asarray(face_indices(n))].set(values).reshape(n, n, n)
+
+
+def coulomb_bc(q_pos, q, acent, h, n, epsout, deblen):
+    G = face_points(acent, h, n)
+    # Tile only points: the charge axis and its original jnp.sum reduction are unchanged.
+    chunk = 2048
+    pad = (-G.shape[0]) % chunk
+    points = jnp.concatenate([G, jnp.zeros((pad, 3), G.dtype)]).reshape(-1, chunk, 3)
+
+    def one(g):
+        r = jnp.linalg.norm(g[..., None, :] - q_pos, axis=-1)
+        return jnp.sum(EPKT * q * jnp.exp(-r / deblen) / (epsout * r), axis=-1)
+    values = jax.lax.map(one, points).reshape(-1)[:G.shape[0]]
+    return face_grid(values, n)
 
 
 def operator_coeffs(maps, epsin, epsout, kap2h2):
@@ -173,12 +194,18 @@ def _rhs_setup(qp, q, acent, h, spec, bc_phi):
     return jnp.where(fm, bc_phi, 0.0), jnp.where(fm, 0.0, src), om
 
 
-@jax.jit
-def setup1(mc, ms, acent, qp, q, sqp, sq, spec):
+@partial(jax.jit, static_argnames=("backend",))
+def setup1(mc, ms, acent, qp, q, sqp, sq, spec, backend="xla"):
     """phase 1 items: coarse (B x T) then model (B x T), flattened to [2BT]; coefficient table [2B] (coarse, model) for
-    the XLA lane pool and operator codes [2B] for the Pallas solve."""
-    cc = jax.vmap(lambda m: _coefs(m, 1.0))(mc); cs = jax.vmap(lambda m: _coefs(m, 0.25))(ms)
-    kc = jax.vmap(lambda m: _codes(m, 1.0))(mc); ks = jax.vmap(lambda m: _codes(m, 0.25))(ms)
+    the selected backend only: XLA coefficients or Pallas operator codes."""
+    if backend == "xla":
+        cc = jax.vmap(lambda m: _coefs(m, 1.0))(mc); cs = jax.vmap(lambda m: _coefs(m, 0.25))(ms)
+        kc = ks = ()
+    elif backend == "pallas":
+        kc = jax.vmap(lambda m: _codes(m, 1.0))(mc); ks = jax.vmap(lambda m: _codes(m, 0.25))(ms)
+        cc = cs = ()
+    else:
+        raise ValueError(backend)
 
     def coarse(a, qp_, q_, sp):
         return _rhs_setup(qp_, q_, a, 1.0, sp, coulomb_bc(qp_, q_, a, 1.0, N, EPSOUT, DEBL))
@@ -191,21 +218,23 @@ def setup1(mc, ms, acent, qp, q, sqp, sq, spec):
     return items, tuple(jnp.concatenate([x, y]) for x, y in zip(cc, cs)), tuple(jnp.concatenate([x, y]) for x, y in zip(kc, ks))
 
 
-@jax.jit
-def setup2(mf, acent, qp, q, spec, store1):
+@partial(jax.jit, static_argnames=("backend",))
+def setup2(mf, acent, qp, q, spec, store1, backend="xla"):
     """phase 2 items: focused (B x T) padded to [2BT]; faces from the coarse potentials (store1[:BT]). Coefficient
     table and codes padded to 2B entries (same shapes as phase 1: one SOR executable per lane width for both phases)."""
     B_, T_ = qp.shape[:2]
     phic = store1[:B_ * T_].reshape((B_, T_) + store1.shape[1:])
     pad2 = lambda x: jnp.concatenate([x, jnp.zeros_like(x)])
-    cf = tuple(pad2(x) for x in jax.vmap(lambda m: _coefs(m, 0.25))(mf))
-    kf = tuple(pad2(x) for x in jax.vmap(lambda m: _codes(m, 0.25))(mf))
-    fm = face_mask(N)
+    if backend == "xla":
+        cf = tuple(pad2(x) for x in jax.vmap(lambda m: _coefs(m, 0.25))(mf)); kf = ()
+    elif backend == "pallas":
+        kf = tuple(pad2(x) for x in jax.vmap(lambda m: _codes(m, 0.25))(mf)); cf = ()
+    else:
+        raise ValueError(backend)
 
     def fine(a, qp_, q_, sp, pc):
-        x, y, z = MP.grid_coords(a, 0.25, N)
-        G = jnp.stack(jnp.meshgrid(x, y, z, indexing="ij"), -1).reshape(-1, 3)
-        bcf = jnp.where(fm, interp(pc, G, a, 1.0, N).reshape(N, N, N), 0.0)
+        G = face_points(a, 0.25, N)
+        bcf = face_grid(interp(pc, G, a, 1.0, N), N)
         return _rhs_setup(qp_, q_, a, 0.25, sp, bcf)
     it = jax.vmap(jax.vmap(fine, in_axes=(None, 0, 0, 0, 0)))(acent, qp, q, spec[..., 1], phic)
     items = tuple(jnp.concatenate([x.reshape((-1,) + x.shape[2:]), jnp.zeros_like(x.reshape((-1,) + x.shape[2:]))]) for x in it)
@@ -303,10 +332,10 @@ class PBConfig:
 
 
 def _site_layout(rec: RC.StateRecord, sites: List[int], B: int, specfn: Callable):
-    """host arrays of one site batch (v2 jaxrun2.make_batch layout; padding sites repeat the last site, no lanes)."""
+    """Host arrays of one fixed site batch; padding has no atoms, probes or query rows."""
     T, QM, MA = RC.T_MAX, RC.QM, RC.MA
-    nreal = len(sites); glp = sites + [sites[-1]] * (B - nreal)
-    ac = np.zeros((B, 3)); spos = np.full((B, MA, 3), RC.FAR); srad = np.zeros((B, MA))
+    nreal = len(sites); glp = sites
+    ac = np.full((B, 3), RC.FAR); spos = np.full((B, MA, 3), RC.FAR); srad = np.zeros((B, MA))
     qp = np.zeros((B, T, QM, 3)); q = np.zeros((B, T, QM)); sqp = np.zeros((B, T, QM, 3)); sq = np.zeros((B, T, QM))
     spec = np.full((B, T, 4), 0.99); tl = np.full((B, T), -1, np.int64)
     pos64 = rec.pos.astype(np.float64)
@@ -335,7 +364,7 @@ def _site_layout(rec: RC.StateRecord, sites: List[int], B: int, specfn: Callable
             sqp[b, j, :len(mq)] = mp; sq[b, j, :len(mq)] = mq
             spec[b, j] = [RC.RELPAR_COARSE, specfn(t, 1), specfn(t, 2), -1.0]
             tl[b, j] = t
-    return dict(ac=ac, spos=spos, srad=srad, qp=qp, q=q, sqp=sqp, sq=sq, spec=spec), tl
+    return dict(ac=ac, spos=spos, srad=srad, qp=qp, q=q, sqp=sqp, sq=sq, spec=spec, active=np.arange(B) < nreal), tl
 
 
 def site_probes(spos, srad, OUT):
@@ -376,6 +405,8 @@ def _solve_state(rec: RC.StateRecord, cfg: PBConfig = PBConfig(), specfn: Option
     flags = {"xl_retries": 0, "class_bumps": 0}
     c = rec.size_class if c is None else c
     while True:
+        if not 0 <= c < len(RC.NA_C):
+            raise OverflowError(f"geometry exceeds last size class {len(RC.NA_C) - 1}")
         try:
             geo = GEO.geometry_state(rec.pos, rec.rad, c, parent=geo_parent, want_reuse=geo_out is not None)
             break
@@ -410,8 +441,8 @@ def _solve_state(rec: RC.StateRecord, cfg: PBConfig = PBConfig(), specfn: Option
             t1 = time.perf_counter()
             sprb, scnt, smx, _ = site_probes(lay["spos"], lay["srad"], sz.PBs)
             ov_model = bool((scnt > sz.PBs).any() or (smx > GEO.MX).any())
-            j = {k: RC.dev(v, np.float32) for k, v in lay.items()}
-            mc, mf, ms, ctr = MP.maps_batch(pos_m, rad_m, geo.probes, j["ac"], j["spos"], j["srad"], sprb, sz=sz)
+            j = {k: RC.dev(v, bool if k == "active" else np.float32) for k, v in lay.items()}
+            mc, mf, ms, ctr = MP.maps_batch(pos_m, rad_m, geo.probes, j["ac"], j["spos"], j["srad"], sprb, sz=sz, active=j["active"])
             ctr_h = np.asarray(ctr)
             ov = MP.overflow(ctr_h, sz)
             mark("maps")
@@ -422,28 +453,37 @@ def _solve_state(rec: RC.StateRecord, cfg: PBConfig = PBConfig(), specfn: Option
                 raise OverflowError(f"XL sizes overflow: {ov} model {ov_model}")
             flags["xl_retries"] += 1
             flags.setdefault("xl_reasons", []).append({**ov, "model_probes": ov_model})
+        del sprb
+        del j["spos"], j["srad"]
         maxctr = ctr_h.max(0) if maxctr is None else np.maximum(maxctr, ctr_h.max(0))
         valid = tl >= 0
+        spec_h = lay["spec"]
         if cfg.specrad == "estimate":
             rho_b = estimate_specrad(mf, ms)                       # [B,2] (focused, model)
             sp = lay["spec"].copy()
             sp[..., 1] = np.where(valid, rho_b[:, None, 0], sp[..., 1]); sp[..., 2] = np.where(valid, rho_b[:, None, 1], sp[..., 2])
             j["spec"] = RC.dev(sp, np.float32)
-        spec_h = np.asarray(j["spec"])
+            spec_h = sp
         t2 = time.perf_counter()
-        items1, cf1, kf1 = setup1(mc, ms, j["ac"], j["qp"], j["q"], j["sqp"], j["sq"], j["spec"])
+        items1, cf1, kf1 = setup1(mc, ms, j["ac"], j["qp"], j["q"], j["sqp"], j["sq"], j["spec"], backend=backend)
         BT = B * RC.T_MAX
-        jax.block_until_ready(items1); t4 = time.perf_counter()
+        if timing is not None:
+            jax.block_until_ready(items1)
+        t4 = time.perf_counter()
         op1 = np.concatenate([np.repeat(np.arange(B), RC.T_MAX), B + np.repeat(np.arange(B), RC.T_MAX)])
         st1, it1, mc1 = pool(items1[0], items1[1], items1[2], RC.dev(op1, np.int32),
                              np.concatenate([valid.reshape(-1), valid.reshape(-1)]), cf1 if xla else kf1, stats=sor_stats)
         tsor += time.perf_counter() - t4
-        items2, cf2, kf2 = setup2(mf, j["ac"], j["qp"], j["q"], j["spec"], st1)
-        jax.block_until_ready(items2); t4 = time.perf_counter()
+        del items1, cf1, kf1
+        items2, cf2, kf2 = setup2(mf, j["ac"], j["qp"], j["q"], j["spec"], st1, backend=backend)
+        if timing is not None:
+            jax.block_until_ready(items2)
+        t4 = time.perf_counter()
         op2 = np.concatenate([np.repeat(np.arange(B), RC.T_MAX), np.zeros(BT, np.int64)])
         st2, it2, mc2 = pool(items2[0], items2[1], items2[2], RC.dev(op2, np.int32),
                              np.concatenate([valid.reshape(-1), np.zeros(BT, bool)]), cf2 if xla else kf2, stats=sor_stats)
         t3 = time.perf_counter(); ts += t3 - t2; tsor += t3 - t4
+        del items2, cf2, kf2
         mark("sor")
         eM, eM0, eS, sit = (np.asarray(x) for x in post(mc, mf, ms, j["ac"], j["qp"], j["q"], j["sqp"], j["sq"], st1, st2, pos_all))
         tp += time.perf_counter() - t3
@@ -458,6 +498,7 @@ def _solve_state(rec: RC.StateRecord, cfg: PBConfig = PBConfig(), specfn: Option
                 out["sitpotM"][t] = sit[b, jj, :rec.n_atoms]
                 out["sweeps"][t] = [it1[k], it2[k], it1[BT + k]]; out["maxchange"][t] = [mc1[k], mc2[k], mc1[BT + k]]
                 out["rho"][t] = spec_h[b, jj, 1:3]
+        del st1, st2, mc, mf, ms, j, sit, eM, eM0, eS
     lane = sum(s["lane_blocks"] for s in sor_stats); need = sum(s["needed"] for s in sor_stats)
     flags.update({"ctr_" + g + "_" + n_: int(maxctr[gi, ni]) for gi, g in enumerate("cfs") for ni, n_ in enumerate(MP.CTR_NAMES)})
     tim.update(t_maps=tm, t_solves=ts, t_sor=tsor, t_post=tp, t_total=time.perf_counter() - T0, nbatches=nb,

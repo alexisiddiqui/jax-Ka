@@ -1,0 +1,830 @@
+{
+ "milestone": "PROFILE2 (current shipped code L12347F: Pallas vs XLA vs CPU; measurement only, no src changes)",
+ "date": "2026-11-21",
+ "status": "DONE (trimmed per user): Pallas arm full (20 states, cold/warm/inst/trace + per-op trace + MC); XLA arm = 20 states cold+warm (production split) and inst/fine split on 12 states (the 4 triples 4066/70c9/2db4/29d8; job cancelled before the d0d5 triple, the singles and the XLA trace -> no XLA GPU-idle numbers); CPU arm = 5 states (4066 AB/A/B triple c0, 4de4_A c1, 70c9_AB c2; 24d0_A not reached) + MC + B-memory test.",
+ "code": {
+  "frozen": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/a40-2026-11-21-prof2 (copy of bench-2026-11-21, src sha256-identical to local src; added jobs/prof2.py, jobs/prof2.sh; MANIFEST.sha256)",
+  "local": "jobs/prof2.py, jobs/prof2.sh"
+ },
+ "outputs": "Coulson:~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/prof2/{gpu/{pb_pallas,pb_xla,ops_ops,mc_pallas,mc_ref}.json, gpu/traces/pallas_2db42a83bc0b799f_AB.xplane.pb.gz, cpu/{pb_cpuA,pb_cpuB,btest_btest,mc_cpu}.json, smoke/}; logs a40/logs/jp2-*.out, logs/jp2-cpu-*.out",
+ "jobs": {
+  "smoke": 807470,
+  "gpu_pallas": 807474,
+  "gpu_xla": 807475,
+  "cpu_pb_A": 807476,
+  "cpu_pb_B": 807477,
+  "cpu_btest": 807478,
+  "cpu_mc": 807479,
+  "cancelled_per_user": [
+   807475,
+   807477
+  ]
+ },
+ "hardware": {
+  "gpu": "comp1400 A40 (1 of 4) + 12 CPUs Xeon Gold 6542Y, 2G/CPU, ogqt-main-7c3e3e9 + a40site shim; Pallas and XLA arms ran sequentially (dependency)",
+  "cpu": "amd96 comp0650, AMD EPYC 9224, 12 Slurm CPUs (6 physical cores), 4G/CPU, JAX CPU (XLA)"
+ },
+ "method": {
+  "production": "warm pass, uninstrumented: pb.solve_state stage timers (= bench)",
+  "fine_split": "instrumented pass: wrappers on module attributes (geometry_state, site_probes, maps_batch, estimate_specrad, setup1/2, run_pool[_pallas], post, assemble.energies + sub-programs), block_until_ready per call; compile seconds subtracted; instrumented PB total within 1.4% of the production pass (10.76 vs 10.61 s/state)",
+  "numerics": "every pass of every arm bitwise equal to bench energies (g, W, pairs, pKint, esolvM/S/M0): Pallas 20/20 x 4 passes + 5/5 scoped-op traces, XLA 20/20 + 12/12; CPU 3/3 where a bench CPU reference exists",
+  "gpu_idle": "jax.profiler trace of 5 states (4066_AB, 2db4_AB, 2db4_B, 24d0_A, d6004_AB); idle = 1 - union(kernel+copy)/stage wall",
+  "per_op": "separate process: named scopes on the geometry/maps helpers (metadata only, outputs bitwise), command buffers off, kernels mapped to op_name via the optimised-HLO dump (95% of kernels mapped; 595 instruction-name conflicts between class compiles -> maps per-op shares +-few %)",
+  "memory": "GPU: XLA compiled memory_analysis per program and class + allocator in-use/peak around each stage; CPU: VmHWM reset per stage; btest = maps_batch alone at B 4/8/16 on 4066_A",
+  "mc": "direct mc_pallas/mc_ref calls, S = 32 lanes per launch (bucket states cycled, distinct chain keys), 1 vs 3 blocks (GPU) -> marginal per-sweep cost; CPU 1 block; s/state at 50k/200k = overhead + per-sweep x (sweeps+1000) / 32"
+ },
+ "tables_s_per_state": {
+  "A40_pallas_20_states": {
+   "prep_load": {
+    "s": 0.0179,
+    "share": 0.0014
+   },
+   "geometry": {
+    "s": 2.0818,
+    "share": 0.1649
+   },
+   "site_probes": {
+    "s": 0.2175,
+    "share": 0.0172
+   },
+   "maps_batch": {
+    "s": 3.4018,
+    "share": 0.2695
+   },
+   "specrad_estimate": {
+    "s": 0.455,
+    "share": 0.036
+   },
+   "solve_setup (setup1+setup2)": {
+    "s": 0.203,
+    "share": 0.0161
+   },
+   "SOR (phase1 coarse+model)": {
+    "s": 2.4236,
+    "share": 0.192
+   },
+   "SOR (phase2 focused)": {
+    "s": 1.7478,
+    "share": 0.1385
+   },
+   "post": {
+    "s": 0.0735,
+    "share": 0.0058
+   },
+   "pb_host_other (layout, dispatch)": {
+    "s": 0.1575,
+    "share": 0.0125
+   },
+   "assembly": {
+    "s": 0.0455,
+    "share": 0.0036
+   },
+   "mc_200k": {
+    "s": 1.7982,
+    "share": 0.1425
+   },
+   "total_with_mc200k": 12.623,
+   "mc_50k_alternative": 0.4569
+  },
+  "A40_pallas_production_split_20_states": {
+   "t_geometry": 2.0676,
+   "t_maps": 3.6243,
+   "t_solves": 4.3603,
+   "t_sor": 4.159,
+   "t_post": 0.1078,
+   "t_total": 10.6084,
+   "t_other": 0.4485,
+   "t_asm": 0.0403,
+   "t_pb": 10.6092
+  },
+  "A40_xla_production_split_20_states": {
+   "t_geometry": 2.0692,
+   "t_maps": 3.6212,
+   "t_solves": 43.2304,
+   "t_sor": 43.0283,
+   "t_post": 0.1125,
+   "t_total": 49.5164,
+   "t_other": 0.4831,
+   "t_asm": 0.0434,
+   "t_pb": 49.5173
+  },
+  "A40_xla_fine_12_states": {
+   "prep_load": {
+    "s": 0.0179,
+    "share": 0.0002
+   },
+   "geometry": {
+    "s": 1.6008,
+    "share": 0.0145
+   },
+   "site_probes": {
+    "s": 0.2044,
+    "share": 0.0019
+   },
+   "maps_batch": {
+    "s": 3.1178,
+    "share": 0.0283
+   },
+   "specrad_estimate": {
+    "s": 0.4362,
+    "share": 0.004
+   },
+   "solve_setup (setup1+setup2)": {
+    "s": 0.1923,
+    "share": 0.0017
+   },
+   "SOR (phase1 coarse+model)": {
+    "s": 21.3295,
+    "share": 0.1934
+   },
+   "SOR (phase2 focused)": {
+    "s": 19.1987,
+    "share": 0.1741
+   },
+   "post": {
+    "s": 0.0669,
+    "share": 0.0006
+   },
+   "pb_host_other (layout, dispatch)": {
+    "s": 0.1591,
+    "share": 0.0014
+   },
+   "assembly": {
+    "s": 0.0355,
+    "share": 0.0003
+   },
+   "mc_200k": {
+    "s": 63.9117,
+    "share": 0.5796
+   },
+   "total_with_mc200k": 110.271,
+   "mc_50k_alternative": 16.2199
+  },
+  "A40_pallas_fine_same_12_states": {
+   "prep_load": {
+    "s": 0.0179,
+    "share": 0.0016
+   },
+   "geometry": {
+    "s": 1.6021,
+    "share": 0.1389
+   },
+   "site_probes": {
+    "s": 0.2057,
+    "share": 0.0178
+   },
+   "maps_batch": {
+    "s": 3.1248,
+    "share": 0.2709
+   },
+   "specrad_estimate": {
+    "s": 0.4302,
+    "share": 0.0373
+   },
+   "solve_setup (setup1+setup2)": {
+    "s": 0.192,
+    "share": 0.0166
+   },
+   "SOR (phase1 coarse+model)": {
+    "s": 2.253,
+    "share": 0.1953
+   },
+   "SOR (phase2 focused)": {
+    "s": 1.6242,
+    "share": 0.1408
+   },
+   "post": {
+    "s": 0.0687,
+    "share": 0.006
+   },
+   "pb_host_other (layout, dispatch)": {
+    "s": 0.1578,
+    "share": 0.0137
+   },
+   "assembly": {
+    "s": 0.0357,
+    "share": 0.0031
+   },
+   "mc_200k": {
+    "s": 1.8246,
+    "share": 0.1582
+   },
+   "total_with_mc200k": 11.537,
+   "mc_50k_alternative": 0.4636
+  },
+  "cpu12_xla_fine_5_states": {
+   "prep_load": {
+    "s": 0.0179,
+    "share": 0.0
+   },
+   "geometry": {
+    "s": 45.5415,
+    "share": 0.0469
+   },
+   "site_probes": {
+    "s": 3.7454,
+    "share": 0.0039
+   },
+   "maps_batch": {
+    "s": 370.0767,
+    "share": 0.3811
+   },
+   "specrad_estimate": {
+    "s": 1.1695,
+    "share": 0.0012
+   },
+   "solve_setup (setup1+setup2)": {
+    "s": 12.8318,
+    "share": 0.0132
+   },
+   "SOR (phase1 coarse+model)": {
+    "s": 202.5449,
+    "share": 0.2086
+   },
+   "SOR (phase2 focused)": {
+    "s": 170.7258,
+    "share": 0.1758
+   },
+   "post": {
+    "s": 1.2759,
+    "share": 0.0013
+   },
+   "pb_host_other (layout, dispatch)": {
+    "s": 1.1047,
+    "share": 0.0011
+   },
+   "assembly": {
+    "s": 0.0826,
+    "share": 0.0001
+   },
+   "mc_200k": {
+    "s": 161.8995,
+    "share": 0.1667
+   },
+   "total_with_mc200k": 971.016,
+   "mc_50k_alternative": 41.079
+  },
+  "A40_pallas_fine_same_5_states": {
+   "prep_load": {
+    "s": 0.0179,
+    "share": 0.0028
+   },
+   "geometry": {
+    "s": 1.3971,
+    "share": 0.2157
+   },
+   "site_probes": {
+    "s": 0.1186,
+    "share": 0.0183
+   },
+   "maps_batch": {
+    "s": 1.6054,
+    "share": 0.2478
+   },
+   "specrad_estimate": {
+    "s": 0.2509,
+    "share": 0.0387
+   },
+   "solve_setup (setup1+setup2)": {
+    "s": 0.1098,
+    "share": 0.0169
+   },
+   "SOR (phase1 coarse+model)": {
+    "s": 1.1857,
+    "share": 0.183
+   },
+   "SOR (phase2 focused)": {
+    "s": 0.8532,
+    "share": 0.1317
+   },
+   "post": {
+    "s": 0.0384,
+    "share": 0.0059
+   },
+   "pb_host_other (layout, dispatch)": {
+    "s": 0.136,
+    "share": 0.021
+   },
+   "assembly": {
+    "s": 0.0296,
+    "share": 0.0046
+   },
+   "mc_200k": {
+    "s": 0.7354,
+    "share": 0.1135
+   },
+   "total_with_mc200k": 6.478,
+   "mc_50k_alternative": 0.187
+  },
+  "note": "prep_load = StateRecord load from the shard (prep_pypka.py CPU prep 18 s/state is upstream, see bench.json); mc_200k = full-occupancy (S=32) bucket cost of each state's Mp bucket"
+ },
+ "pallas_vs_xla_speedup_same_12_states": {
+  "prep_load": 1.0,
+  "geometry": 1.0,
+  "site_probes": 0.99,
+  "maps_batch": 1.0,
+  "specrad_estimate": 1.01,
+  "solve_setup (setup1+setup2)": 1.0,
+  "SOR (phase1 coarse+model)": 9.47,
+  "SOR (phase2 focused)": 11.82,
+  "post": 0.97,
+  "pb_host_other (layout, dispatch)": 1.01,
+  "assembly": 0.99,
+  "mc_200k": 35.03,
+  "pb_total_warm": 4.79
+ },
+ "xla_over_pallas_production_20_states": {
+  "sor": 10.35,
+  "pb": 4.67,
+  "other_stages": "1.00 (geometry/maps/post identical programs)",
+  "mc_200k": 34.9
+ },
+ "cpu_over_a40_pallas_same_5_states": {
+  "prep_load": 1.0,
+  "geometry": 32.6,
+  "site_probes": 31.58,
+  "maps_batch": 230.52,
+  "specrad_estimate": 4.66,
+  "solve_setup (setup1+setup2)": 116.87,
+  "SOR (phase1 coarse+model)": 170.82,
+  "SOR (phase2 focused)": 200.1,
+  "post": 33.23,
+  "pb_host_other (layout, dispatch)": 8.12,
+  "assembly": 2.79,
+  "mc_200k": 220.15,
+  "pb_total_warm": 142.1
+ },
+ "sor": {
+  "pallas_20_states": {
+   "phase1": {
+    "calls": 111.0,
+    "t": 48.4724,
+    "NI": 28416.0,
+    "n_valid": 13696.0,
+    "useful_lane_sweeps": 727180.0,
+    "max_it_sum": 9920.0,
+    "launched_lane_sweeps": 2539520.0,
+    "exec_lane_sweeps_stats": 727180.0,
+    "half_sweep_launches": 19840.0,
+    "lane_occupancy_valid": 0.482,
+    "mean_sweeps_per_valid_lane": 53.0943,
+    "mean_max_sweeps_per_call": 89.3694,
+    "executed_or_launched_lane_sweeps": 2539520.0,
+    "waste_executed_over_useful": 3.4923,
+    "ns_per_useful_lane_sweep_point": 0.1254,
+    "ns_per_executed_lane_sweep_point": 0.0359
+   },
+   "phase2": {
+    "calls": 111.0,
+    "t": 34.9556,
+    "NI": 28416.0,
+    "n_valid": 6848.0,
+    "useful_lane_sweeps": 542680.0,
+    "max_it_sum": 10060.0,
+    "launched_lane_sweeps": 2575360.0,
+    "exec_lane_sweeps_stats": 542680.0,
+    "half_sweep_launches": 20120.0,
+    "lane_occupancy_valid": 0.241,
+    "mean_sweeps_per_valid_lane": 79.2465,
+    "mean_max_sweeps_per_call": 90.6306,
+    "executed_or_launched_lane_sweeps": 2575360.0,
+    "waste_executed_over_useful": 4.7456,
+    "ns_per_useful_lane_sweep_point": 0.1212,
+    "ns_per_executed_lane_sweep_point": 0.0255
+   }
+  },
+  "xla_12_states": {
+   "phase1": {
+    "calls": 63.0,
+    "t": 255.954,
+    "NI": 16128.0,
+    "n_valid": 7660.0,
+    "useful_lane_sweeps": 406360.0,
+    "max_it_sum": 5720.0,
+    "launched_lane_sweeps": 1464320.0,
+    "exec_lane_sweeps_stats": 1046720.0,
+    "sor_block_calls": 572.0,
+    "xla_lane_sweeps_W": 1046720.0,
+    "blocks_W256": 375.0,
+    "blocks_W64": 115.0,
+    "t_sor_block": 250.5231,
+    "blocks_W16": 82.0,
+    "lane_occupancy_valid": 0.475,
+    "mean_sweeps_per_valid_lane": 53.0496,
+    "mean_max_sweeps_per_call": 90.7937,
+    "executed_or_launched_lane_sweeps": 1046720.0,
+    "waste_executed_over_useful": 2.5758,
+    "ns_per_useful_lane_sweep_point": 1.1852,
+    "ns_per_executed_lane_sweep_point": 0.4601
+   },
+   "phase2": {
+    "calls": 63.0,
+    "t": 230.3847,
+    "NI": 16128.0,
+    "n_valid": 3830.0,
+    "useful_lane_sweeps": 302960.0,
+    "max_it_sum": 5750.0,
+    "launched_lane_sweeps": 1472000.0,
+    "exec_lane_sweeps_stats": 949280.0,
+    "sor_block_calls": 575.0,
+    "xla_lane_sweeps_W": 949280.0,
+    "blocks_W64": 166.0,
+    "blocks_W16": 85.0,
+    "t_sor_block": 225.7679,
+    "blocks_W256": 324.0,
+    "lane_occupancy_valid": 0.2375,
+    "mean_sweeps_per_valid_lane": 79.1018,
+    "mean_max_sweeps_per_call": 91.2698,
+    "executed_or_launched_lane_sweeps": 949280.0,
+    "waste_executed_over_useful": 3.1334,
+    "ns_per_useful_lane_sweep_point": 1.4309,
+    "ns_per_executed_lane_sweep_point": 0.4567
+   }
+  },
+  "cpu_5_states": {
+   "phase1": {
+    "calls": 15.0,
+    "t": 1012.7245,
+    "NI": 3840.0,
+    "n_valid": 1700.0,
+    "useful_lane_sweeps": 89660.0,
+    "max_it_sum": 1290.0,
+    "launched_lane_sweeps": 330240.0,
+    "exec_lane_sweeps_stats": 230880.0,
+    "sor_block_calls": 129.0,
+    "xla_lane_sweeps_W": 230880.0,
+    "blocks_W256": 82.0,
+    "blocks_W64": 28.0,
+    "t_sor_block": 1012.0575,
+    "blocks_W16": 19.0,
+    "lane_occupancy_valid": 0.4427,
+    "mean_sweeps_per_valid_lane": 52.7412,
+    "mean_max_sweeps_per_call": 86.0,
+    "executed_or_launched_lane_sweeps": 230880.0,
+    "waste_executed_over_useful": 2.5751,
+    "ns_per_useful_lane_sweep_point": 21.2538,
+    "ns_per_executed_lane_sweep_point": 8.2537
+   },
+   "phase2": {
+    "calls": 15.0,
+    "t": 853.629,
+    "NI": 3840.0,
+    "n_valid": 850.0,
+    "useful_lane_sweeps": 66740.0,
+    "max_it_sum": 1320.0,
+    "launched_lane_sweeps": 337920.0,
+    "exec_lane_sweeps_stats": 194400.0,
+    "sor_block_calls": 132.0,
+    "xla_lane_sweeps_W": 194400.0,
+    "blocks_W64": 46.0,
+    "blocks_W16": 23.0,
+    "t_sor_block": 852.2099,
+    "blocks_W256": 63.0,
+    "lane_occupancy_valid": 0.2214,
+    "mean_sweeps_per_valid_lane": 78.5176,
+    "mean_max_sweeps_per_call": 88.0,
+    "executed_or_launched_lane_sweeps": 194400.0,
+    "waste_executed_over_useful": 2.9128,
+    "ns_per_useful_lane_sweep_point": 24.0673,
+    "ns_per_executed_lane_sweep_point": 8.2626
+   }
+  },
+  "reading": [
+   "Pallas: grid always 256 lanes (2*B*T_MAX); valid lanes 48% in phase 1 and 24% in phase 2 (phase 2 pads to 2B by design + T_MAX padding); launched/useful lane-sweeps 3.5x (ph1) and 4.7x (ph2), but dead lanes exit at once: per useful lane-sweep 0.125 ns/grid point, identical in both phases",
+   "lane imbalance: mean sweeps per valid lane 53 (ph1) / 79 (ph2) vs mean per-call max 89 / 91 -> the last ~40% of half-sweep launches run a shrinking set of lanes; ~2 x 90 = 180 half-sweep launches per phase per site batch (~2,000 launches per state)",
+   "XLA pool: executed/useful lane-sweeps 2.6x (ph1), 3.1x (ph2) (lockstep width 256/64/16); 0.46 ns per executed lane-sweep point = 3.7x the Pallas cost per useful lane-sweep; x waste -> 9.5-11.8x SOR",
+   "CPU: 8.3 ns per executed lane-sweep point (18x the XLA-A40 per-sweep cost), same 2.6-2.9x lockstep waste",
+   "roofline (estimate): ~10-12 B/point/half-sweep from DRAM at 696 GB/s ~ 0.03-0.035 ns per lane-sweep point; Pallas achieves 0.125 -> ~3.5-4x off the bandwidth roof (each half-sweep reads/writes every point of the block but updates half; 7 phi + 4 code loads per point uncached)"
+  ]
+ },
+ "gpu_idle_pallas_5_traced_states": {
+  "geometry": 0.034,
+  "site_probes": 0.164,
+  "maps": 0.034,
+  "specrad": 0.838,
+  "setup1": 0.063,
+  "sor1": 0.01,
+  "setup2": 0.038,
+  "sor2": 0.014,
+  "post": 0.076,
+  "assembly": 0.648,
+  "host_gaps_between_stages_share_of_span": 0.01,
+  "notes": [
+   "specrad (DelPhi relfac port) = 0.455 s/state, 84% GPU-idle: the products are on the device, the float32 sequential cumsum over [16,2,265,720] runs on the host (numpy)",
+   "geometry window holds 3.8 s of memcpy in 18.4 s of traced geometry wall (5 states, 21%, overlapped: idle only 3.4%)",
+   "xla arm: not traced (cancelled)"
+  ]
+ },
+ "per_op_split_pallas": {
+  "geometry_geo_probes": {
+   "burial": 0.572,
+   "candidate_gather": 0.411,
+   "arc_gen": 0.009,
+   "finish": 0.005,
+   "other": 0.004,
+   "note": "share of geo_probes kernel time (AB / from-scratch states); geo_probes_reuse (A/B): near-burial 0.66, in_sorted 0.10, arc gen 0.10"
+  },
+  "geometry_s_per_state": {
+   "geo_probes": 1.87,
+   "geo_probes_reuse": 0.16,
+   "host_and_pairs": 0.05
+  },
+  "maps_by_grid": {
+   "focused": 0.564,
+   "coarse": 0.368,
+   "model": 0.06,
+   "unmapped": 0.008
+  },
+  "maps_by_op": {
+   "reach_mask": 0.246,
+   "cell_tables": 0.205,
+   "midpoint_query": 0.158,
+   "other_scatter_nonzero_boundary": 0.101,
+   "probe_projection_query": 0.094,
+   "contact_query": 0.072,
+   "region_probes": 0.059,
+   "ion_query": 0.05,
+   "block_cull": 0.006,
+   "boundary_atom_query": 0.004,
+   "bproj_contact": 0.004
+  },
+  "maps_top_ops_share": {
+   "focused_reach": 0.166,
+   "coarse_cells": 0.127,
+   "focused_q_mid": 0.113,
+   "focused_cells": 0.077,
+   "coarse_reach": 0.061,
+   "focused_q_contact": 0.055,
+   "focused_q_pproj": 0.047,
+   "coarse_q_pproj": 0.045,
+   "coarse_q_mid": 0.042,
+   "focused_q_ion": 0.036
+  },
+  "site_probes": "geometry_sites (model compounds) 0.18 s/state, unscoped"
+ },
+ "memory": {
+  "gpu_compiled_bytes_per_program_GB": {
+   "maps_batch": {
+    "temp": "11.25 (c0) - 11.43 (c3)",
+    "out": 0.13
+   },
+   "geometry_sites": {
+    "temp": 3.69
+   },
+   "sor_solve": {
+    "args": 1.11,
+    "out": 0.54,
+    "temp": 1.12
+   },
+   "setup1": {
+    "out": 1.38,
+    "temp": 0.37
+   },
+   "setup2": {
+    "args": 0.58,
+    "out": 1.38,
+    "temp": 0.68
+   },
+   "post": {
+    "args": 1.11,
+    "temp": 0.84
+   },
+   "geo_probes": {
+    "temp": 0.82
+   },
+   "geo_probes_reuse": {
+    "temp": 0.09
+   },
+   "relfac_terms": {
+    "temp": 0.14
+   },
+   "mc_pallas_Mp1024": {
+    "args": 0.135,
+    "temp": 0.01
+   }
+  },
+  "gpu_stage": {
+   "live_between_stages_GB": 4.5,
+   "process_peak_GB": 16.15,
+   "peak_set_by": "maps (MemTrack: maps raises the peak in c0/c2/c3 to 15.4/15.8/16.15 GB = ~4.5 live + 11.3-11.4 maps temp); setup1/2 +1.4 GB live, SOR +0.5 GB"
+  },
+  "cpu_per_stage_peak_rss_GB": {
+   "maps": "21.2-25.1",
+   "setup1": "16.7-20.6",
+   "sor": "5.8-15.2",
+   "site_probes": "10.0-14.0",
+   "post": "7.0-7.2",
+   "geometry": "1.9-3.9",
+   "specrad": "5.5-5.8 (21 when no free between)",
+   "assembly": "1.6-2.4"
+  },
+  "cpu_compiled_temp_GB": {
+   "maps_batch_B16": 19.99,
+   "setup1": 13.98,
+   "geometry_sites": 8.52,
+   "geo_probes": 2.3,
+   "post": 1.67,
+   "sor_block": 0.51
+  },
+  "cpu_btest_4066_A": {
+   "B4": {
+    "maps_temp_GB": 5.0,
+    "peak_rss_GB": 5.84,
+    "wall_s": 14.2
+   },
+   "B8": {
+    "maps_temp_GB": 9.99,
+    "peak_rss_GB": 11.03,
+    "wall_s": 29.2
+   },
+   "B16": {
+    "maps_temp_GB": 19.99,
+    "peak_rss_GB": 21.0,
+    "wall_s": 69.8
+   }
+  },
+  "cpu_reading": "the 21-25 GB is the maps_batch XLA-CPU temp buffer: 1.25 GB per site, linear in B (5/10/20 GB at B 4/8/16; RSS = temp + ~1 GB), not the fine grids or compile; second is setup1 (14 GB temp on CPU vs 0.37 GB on the A40: the Coulomb boundary [n^3 x QM] per item is not fused on CPU). B=4 is also faster per site on CPU (3.6 vs 4.4 s/site)"
+ },
+ "mc_per_bucket_S32": {
+  "64": {
+   "n_states": 3,
+   "max_n": 18,
+   "max_P": 3,
+   "us_per_state_sweep": {
+    "pallas": 0.63,
+    "xla_gpu": 16.71,
+    "xla_cpu12": 74.3
+   },
+   "xla_gpu_over_pallas": 26.4,
+   "cpu_over_pallas": 117.0,
+   "s_per_state_200k": {
+    "pallas": 0.127,
+    "xla_gpu": 3.36,
+    "cpu12": 14.9
+   },
+   "gpu_bytes_pallas": {
+    "argument_size_in_bytes": 559908,
+    "output_size_in_bytes": 598016,
+    "temp_size_in_bytes": 598016
+   }
+  },
+  "128": {
+   "n_states": 2,
+   "max_n": 21,
+   "max_P": 1,
+   "us_per_state_sweep": {
+    "pallas": 0.71,
+    "xla_gpu": 18.25,
+    "xla_cpu12": 125.9
+   },
+   "xla_gpu_over_pallas": 25.8,
+   "cpu_over_pallas": 178.0,
+   "s_per_state_200k": {
+    "pallas": 0.142,
+    "xla_gpu": 3.67,
+    "cpu12": 25.3
+   },
+   "gpu_bytes_pallas": {
+    "argument_size_in_bytes": 2158372,
+    "output_size_in_bytes": 1196032,
+    "temp_size_in_bytes": 1196032
+   }
+  },
+  "256": {
+   "n_states": 3,
+   "max_n": 52,
+   "max_P": 7,
+   "us_per_state_sweep": {
+    "pallas": 2.55,
+    "xla_gpu": 66.58,
+    "xla_cpu12": 492.4
+   },
+   "xla_gpu_over_pallas": 26.1,
+   "cpu_over_pallas": 193.0,
+   "s_per_state_200k": {
+    "pallas": 0.513,
+    "xla_gpu": 13.39,
+    "cpu12": 99.0
+   },
+   "gpu_bytes_pallas": {
+    "argument_size_in_bytes": 8501028,
+    "output_size_in_bytes": 2392064,
+    "temp_size_in_bytes": 2392064
+   }
+  },
+  "512": {
+   "n_states": 9,
+   "max_n": 112,
+   "max_P": 10,
+   "us_per_state_sweep": {
+    "pallas": 8.19,
+    "xla_gpu": 288.98,
+    "xla_cpu12": 1902.3
+   },
+   "xla_gpu_over_pallas": 35.3,
+   "cpu_over_pallas": 232.0,
+   "s_per_state_200k": {
+    "pallas": 1.648,
+    "xla_gpu": 58.09,
+    "cpu12": 382.4
+   },
+   "gpu_bytes_pallas": {
+    "argument_size_in_bytes": 33769252,
+    "output_size_in_bytes": 4784128,
+    "temp_size_in_bytes": 4784128
+   }
+  },
+  "1024": {
+   "n_states": 3,
+   "max_n": 230,
+   "max_P": 39,
+   "us_per_state_sweep": {
+    "pallas": 31.39,
+    "xla_gpu": 1117.74,
+    "xla_cpu12": 13150.7
+   },
+   "xla_gpu_over_pallas": 35.6,
+   "cpu_over_pallas": 419.0,
+   "s_per_state_200k": {
+    "pallas": 6.311,
+    "xla_gpu": 224.67,
+    "cpu12": 2643.3
+   },
+   "gpu_bytes_pallas": {
+    "argument_size_in_bytes": 134637348,
+    "output_size_in_bytes": 9568256,
+    "temp_size_in_bytes": 9568256
+   }
+  }
+ },
+ "mc_20_state_mean_s_per_state": {
+  "pallas_200k": 1.798,
+  "pallas_50k": 0.457,
+  "xla_gpu_200k": 62.72,
+  "cpu12_200k": 588.2,
+  "note": "bench mc_200k_full_buckets 1.67 (titrate API); Mp1024 (3 AB states) = 6.3 s/state dominates"
+ },
+ "compiles": {
+  "pallas": {
+   "n": 33,
+   "s": 127.6
+  },
+  "xla": {
+   "n": 44,
+   "s": 123.5
+  },
+  "cpu_per_process": {
+   "n": "20-28",
+   "s": "8.4-14.2"
+  }
+ },
+ "levers_ranked_ESTIMATES": [
+  {
+   "rank": 1,
+   "lever": "SOR kernel efficiency: Pallas half-sweep at 0.125 ns/lane-sweep-point is ~3.5-4x off the A40 bandwidth roof (each colour pass streams every point, updates half; code/phi neighbour loads not reused). Colour-compacted layout (red/black split arrays) or z-line tiling with neighbour reuse",
+   "gain_s_per_state": "1.5-2.5 of 4.16 (estimate)",
+   "parity": "sweep order unchanged -> bitwise expected; check"
+  },
+  {
+   "rank": 2,
+   "lever": "MC sweeps 200k -> 50k (Pallas MC 1.80 -> 0.46 s/state); bench shows 50k MAE vs teacher 0.010 vs 0.008 at 200k",
+   "gain_s_per_state": "1.3 (measured costs; label effect needs sign-off)",
+   "parity": "changes labels (accuracy decision)"
+  },
+  {
+   "rank": 3,
+   "lever": "maps: cell tables built per site (coarse cells 12.7% + focused 7.7% of maps) -> once per state/grid; focused reach_mask 16.6%",
+   "gain_s_per_state": "0.5-0.9 of 3.40 (estimate)",
+   "parity": "bitwise expected (same tables)"
+  },
+  {
+   "rank": 4,
+   "lever": "SOR lane packing: phase 2 fills only 24% of its 256 lanes and both phases have a long tail (mean 53/79 vs max 89/91 sweeps); run phase 2 of batch k with phase 1 of batch k+1 in one lane pool",
+   "gain_s_per_state": "0.4-1.0 (estimate; Pallas dead lanes are cheap, so the gain is the tail-occupancy, not the 3.5-4.7x launched waste)",
+   "parity": "bitwise (per-lane iteration unchanged)"
+  },
+  {
+   "rank": 5,
+   "lever": "specrad: device-side (or overlapped) float32 sequential sum; 0.455 s/state at 84% GPU idle",
+   "gain_s_per_state": "0.3-0.4",
+   "parity": "must reproduce the sequential f32 order (overlap with the previous batch's SOR keeps numpy order -> bitwise)"
+  },
+  {
+   "rank": 6,
+   "lever": "geometry: burial 57% + candidate gather 41% of geo_probes (1.87 s/state on AB/from-scratch states); FP32 burial (A40 only, ~1.5x, probe-count parity risk) or tighter candidate lists",
+   "gain_s_per_state": "0.3-0.7 (estimate)",
+   "parity": "FP32 changes probes -> label parity check"
+  },
+  {
+   "rank": 7,
+   "lever": "CPU only: B=4 site batches (maps temp 20 -> 5 GB, peak RSS 21-25 -> ~6 GB plus setup1 14 GB unless chunked) and chunked Coulomb BC in setup1",
+   "gain": "memory 4-5x lower, maps 18% faster per site; does not change the 142x CPU/A40 gap (maps 230x, SOR 170-200x)",
+   "parity": "bitwise expected (per-site programs vmapped)"
+  },
+  {
+   "rank": 8,
+   "lever": "XLA backend fallback is 4.7x slower on PB (SOR 10x) and 35x on MC at Mp512-1024: keep Pallas mandatory on GPUs",
+   "gain": "n/a"
+  }
+ ]
+}

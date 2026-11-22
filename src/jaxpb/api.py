@@ -152,7 +152,7 @@ class MemTrack:
 
     def __init__(self):
         self.ctx = "-"
-        self.last = gpu_mem()[1]
+        self.last = -1                 # initialize lazily at the first mark, never initialize JAX on import
         self.rows: Dict[tuple, dict] = {}
 
     def mark(self, stage, ctx=None):
@@ -437,7 +437,8 @@ def run(items: List[dict], out_dir: str, cfg: Config = Config(), cache: Optional
     log(dict(event="start", out=out_dir, n_items=len(items), n_shards=len(plan["shards"]), cfg_hash=chash, code_sha=csha,
              cache=cinfo, pb_backend=prov["pb_backend"], mc_backend=prov["mc_backend"]))
     summary = dict(out=out_dir, cfg_hash=chash, code_sha=csha, cache_open=cinfo, shards_skipped=[], shards_written=[],
-                   per_state=[], titration_batches=[], compiles_after_shard=[], shard_bytes=[])
+                   state_timing=dict(count=0, failed=0, totals={}, maxima={}),
+                   titration_batches=[], compiles_after_shard=[], shard_bytes=[])
     T0 = time.perf_counter()
     with CompileCounter() as cc:
         for k, shard in enumerate(plan["shards"]):
@@ -580,7 +581,14 @@ def _run_shard(k, shard, path, cfg, prov, log, cc, summary):
                   gpu_mem=dict(zip(("in_use", "peak", "limit"), gpu_mem())))
     write_shard(path, rows, prov, timing)
     summary["shard_bytes"].append(dict(shard=k, states=len(shard), bytes=os.path.getsize(path)))
-    summary["per_state"].extend(st_tim[i] for i in range(len(shard)))
+    agg = summary["state_timing"]
+    for row in st_tim.values():
+        agg["count"] += 1
+        agg["failed"] += int(row.get("failed", False))
+        for name, value in row.items():
+            if name.startswith("t_") and isinstance(value, (int, float)):
+                agg["totals"][name] = agg["totals"].get(name, 0.0) + value
+                agg["maxima"][name] = max(agg["maxima"].get(name, 0.0), value)
     log(dict(event="shard_written", shard=k, path=path, n=len(shard), t_shard=timing["t_shard"],
              status={s: sum(1 for r in rows if r["status"] == s) for s in {r["status"] for r in rows}},
              n_compiled=cc.n_compiled))

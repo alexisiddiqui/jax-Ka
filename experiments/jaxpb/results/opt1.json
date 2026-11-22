@@ -1,0 +1,3706 @@
+{
+  "phase": 1,
+  "status": "pass",
+  "compute_rules": {
+    "cluster": "Coulson-Chemistry",
+    "gpu_node": "comp1400",
+    "gpu": "a40:1",
+    "gpu_partition": "oc",
+    "cpu_partition": "amd96",
+    "cpus_per_job": 12,
+    "memory_per_cpu": "2G",
+    "baseline_cpu_memory_per_cpu": "4G",
+    "installs": 0,
+    "commits": 0
+  },
+  "timing_notes": [
+    "GPU: instrumented warm pass, production PB total.",
+    "CPU: one instrumented pass, compilation subtracted per stage; PB is sum of stages, excluding host overhead.",
+    "GPU allocator peaks are process-wide; host peaks include compilation and all measured stages."
+  ],
+  "runs": {
+    "A-all": {
+      "states": 20,
+      "passes": 1,
+      "passed": true,
+      "failed": [],
+      "exact_comparisons": 1456,
+      "legacy_reference_states": 20,
+      "legacy_reference_passed": true,
+      "seconds_per_state": {
+        "geometry": 2.000071630254388,
+        "maps": 3.408733141515404,
+        "setup": 0.20410466575995087,
+        "sor": 4.171635719155892,
+        "total_pb": 12.896562137594447,
+        "stages": {
+          "post": 0.07500894404947758,
+          "geometry": 2.000071630254388,
+          "site_probes": 0.21456049606204033,
+          "maps": 3.408733141515404,
+          "assembly": 0.046512354630976915,
+          "setup2": 0.12328862543217838,
+          "specrad": 0.41741961748339235,
+          "sor2": 1.746370176365599,
+          "sor1": 2.4252655427902936,
+          "setup1": 0.0808160403277725
+        }
+      },
+      "peak_host_rss_bytes": 4855693312,
+      "peak_host_rss_warm_bytes": 0,
+      "peak_host_rss_compiling_bytes": 0,
+      "peak_gpu_bytes": 16517359616,
+      "compiles": 35,
+      "compiles_per_pass": [
+        35
+      ],
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807586",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-A-20261121"
+      },
+      "code_sha": "ffbe477a6be9bf49",
+      "all_states": {
+        "states": 104,
+        "passes": 1,
+        "passed": true,
+        "failed": [],
+        "exact_comparisons": 1456,
+        "legacy_reference_states": 20,
+        "legacy_reference_passed": true,
+        "seconds_per_state": {
+          "geometry": 1.5501784124823574,
+          "maps": 2.7586137836602016,
+          "setup": 0.17780268096472496,
+          "sor": 3.600890640885784,
+          "total_pb": 9.755067139505767,
+          "stages": {
+            "post": 0.06287584586355549,
+            "geometry": 1.5501784124823574,
+            "site_probes": 0.18374188801345342,
+            "maps": 2.7586137836602016,
+            "assembly": 0.02965705920583927,
+            "setup2": 0.1073446108135753,
+            "specrad": 0.3343462015931996,
+            "sor2": 1.5129440055998902,
+            "sor1": 2.0879466352858937,
+            "setup1": 0.07045807015114966
+          }
+        },
+        "peak_host_rss_bytes": 4855693312,
+        "peak_host_rss_warm_bytes": 0,
+        "peak_host_rss_compiling_bytes": 0,
+        "peak_gpu_bytes": 16517359616,
+        "compiles": 35,
+        "compiles_per_pass": [
+          35
+        ],
+        "env": {
+          "host": "comp1400",
+          "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+          "affinity": 12,
+          "jax": "0.11.1",
+          "device": "cuda:0",
+          "backend": "gpu",
+          "job": "807586",
+          "xla_flags": null,
+          "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-A-20261121"
+        },
+        "code_sha": "ffbe477a6be9bf49"
+      }
+    },
+    "A-cpu": {
+      "states": 4,
+      "passes": 1,
+      "passed": false,
+      "failed": [],
+      "exact_comparisons": 0,
+      "legacy_reference_states": 4,
+      "legacy_reference_passed": true,
+      "seconds_per_state": {
+        "geometry": 28.75013341300655,
+        "maps": 213.26069836097304,
+        "setup": 9.709003048832528,
+        "sor": 231.9456933203037,
+        "total_pb": 488.5641165606794,
+        "stages": {
+          "post": 0.8448734458652325,
+          "geometry": 28.75013341300655,
+          "site_probes": 2.7005590273765847,
+          "maps": 213.26069836097304,
+          "assembly": 0.024922216427512467,
+          "setup2": 1.0217501329025254,
+          "specrad": 1.3531559443217702,
+          "sor2": 110.70717096107546,
+          "sor1": 121.23852235922823,
+          "setup1": 8.687252915930003
+        }
+      },
+      "peak_host_rss_bytes": 25882189824,
+      "peak_host_rss_warm_bytes": 25882189824,
+      "peak_host_rss_compiling_bytes": 21900500992,
+      "peak_gpu_bytes": -1,
+      "compiles": null,
+      "compiles_per_pass": [
+        null
+      ],
+      "env": {
+        "host": "comp0650",
+        "cpu_model": "AMD EPYC 9224 24-Core Processor",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cpu:0",
+        "backend": "cpu",
+        "job": "807603",
+        "xla_flags": "--xla_force_host_platform_device_count=1",
+        "code": "/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-A-20261121"
+      },
+      "code_sha": "ffbe477a6be9bf49",
+      "failure": {
+        "job": 807603,
+        "state": "OUT_OF_MEMORY",
+        "exit": "0:125",
+        "elapsed": "00:42:35",
+        "requested_cpus": 12,
+        "requested_memory_per_cpu": "2G",
+        "slurm_maxrss_kb": 25158044,
+        "completed_states": 4,
+        "missing_state": "70c9c3eaa126c736_AB",
+        "resolution": "Keep the compute limit. Intermediate A retains baseline dense maps/setup; B/C implement the memory fix."
+      },
+      "compiles_lower_bound": 28,
+      "posthoc_baseline_check": {
+        "passed": false,
+        "bitwise_passed": true,
+        "states": 4,
+        "expected_states": 5,
+        "fields": [
+          "W",
+          "esolvM",
+          "esolvM0",
+          "esolvS",
+          "g",
+          "maxchange",
+          "nst",
+          "occ",
+          "pairs",
+          "pkint",
+          "rho",
+          "sitpotM",
+          "start",
+          "sweeps"
+        ],
+        "differences": []
+      }
+    },
+    "A-pallas": {
+      "states": 20,
+      "passes": 2,
+      "passed": true,
+      "failed": [],
+      "exact_comparisons": 840,
+      "legacy_reference_states": 20,
+      "legacy_reference_passed": true,
+      "seconds_per_state": {
+        "geometry": 2.05281720678322,
+        "maps": 3.397093905461952,
+        "setup": 0.20085765845142306,
+        "sor": 4.1464801706373695,
+        "total_pb": 10.540456411149353,
+        "stages": {
+          "post": 0.07152160159312189,
+          "geometry": 2.05281720678322,
+          "site_probes": 0.19878937075845898,
+          "maps": 3.397093905461952,
+          "assembly": 0.029008811339735985,
+          "setup2": 0.12105632037855685,
+          "specrad": 0.38455740925855936,
+          "sor2": 1.7337042305618524,
+          "sor1": 2.412775940075517,
+          "setup1": 0.0798013380728662
+        }
+      },
+      "peak_host_rss_bytes": 4735754240,
+      "peak_host_rss_warm_bytes": 0,
+      "peak_host_rss_compiling_bytes": 0,
+      "peak_gpu_bytes": 16084831488,
+      "compiles": 33,
+      "compiles_per_pass": [
+        33,
+        0
+      ],
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807545",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-A-20261121"
+      },
+      "code_sha": "ffbe477a6be9bf49"
+    },
+    "A-xla": {
+      "states": 12,
+      "passes": 2,
+      "passed": true,
+      "failed": [],
+      "exact_comparisons": 504,
+      "legacy_reference_states": 0,
+      "legacy_reference_passed": true,
+      "seconds_per_state": {
+        "geometry": 1.5853408381032448,
+        "maps": 3.1092433113760003,
+        "setup": 0.19249530873882273,
+        "sor": 40.42449173253651,
+        "total_pb": 46.02733010573623,
+        "stages": {
+          "post": 0.06642716385734578,
+          "geometry": 1.5853408381032448,
+          "site_probes": 0.19968651863746345,
+          "maps": 3.1092433113760003,
+          "assembly": 0.028927002257357042,
+          "setup2": 0.11625180424501498,
+          "specrad": 0.34405663042950135,
+          "sor2": 19.15364671451971,
+          "sor1": 21.270845018016797,
+          "setup1": 0.07624350449380775
+        }
+      },
+      "peak_host_rss_bytes": 3844988928,
+      "peak_host_rss_warm_bytes": 0,
+      "peak_host_rss_compiling_bytes": 0,
+      "peak_gpu_bytes": 15906499072,
+      "compiles": 36,
+      "compiles_per_pass": [
+        36,
+        0
+      ],
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807546",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-A-20261121"
+      },
+      "code_sha": "ffbe477a6be9bf49"
+    },
+    "B6-all": {
+      "states": 20,
+      "passes": 1,
+      "passed": true,
+      "failed": [],
+      "exact_comparisons": 1456,
+      "legacy_reference_states": 20,
+      "legacy_reference_passed": true,
+      "seconds_per_state": {
+        "geometry": 1.9814117631409318,
+        "maps": 5.499051570845768,
+        "setup": 0.20181247908622027,
+        "sor": 4.133877020142972,
+        "total_pb": 15.887947939382865,
+        "stages": {
+          "post": 0.07329060779884458,
+          "geometry": 1.9814117631409318,
+          "site_probes": 0.2023809057660401,
+          "maps": 5.499051570845768,
+          "assembly": 0.033541949838399886,
+          "setup2": 0.12154298555105925,
+          "specrad": 0.36073276344686744,
+          "sor2": 1.730021032365039,
+          "sor1": 2.4038559877779333,
+          "setup1": 0.08026949353516102
+        }
+      },
+      "peak_host_rss_bytes": 5155250176,
+      "peak_host_rss_warm_bytes": 0,
+      "peak_host_rss_compiling_bytes": 0,
+      "peak_gpu_bytes": 8621234944,
+      "compiles": 35,
+      "compiles_per_pass": [
+        35
+      ],
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807633",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-B6-20261121"
+      },
+      "code_sha": "14af3a488472b655",
+      "all_states": {
+        "states": 104,
+        "passes": 1,
+        "passed": true,
+        "failed": [],
+        "exact_comparisons": 1456,
+        "legacy_reference_states": 20,
+        "legacy_reference_passed": true,
+        "seconds_per_state": {
+          "geometry": 1.5492923166065549,
+          "maps": 4.466582770530994,
+          "setup": 0.178841787426231,
+          "sor": 3.585111137963115,
+          "total_pb": 11.801905582157465,
+          "stages": {
+            "post": 0.062313027267989055,
+            "geometry": 1.5492923166065549,
+            "site_probes": 0.18128965981304646,
+            "maps": 4.466582770530994,
+            "assembly": 0.024925049000348035,
+            "setup2": 0.1068591774495032,
+            "specrad": 0.3147178975721964,
+            "sor2": 1.506895252628825,
+            "sor1": 2.07821588533429,
+            "setup1": 0.0719826099767278
+          }
+        },
+        "peak_host_rss_bytes": 5155250176,
+        "peak_host_rss_warm_bytes": 0,
+        "peak_host_rss_compiling_bytes": 0,
+        "peak_gpu_bytes": 8621234944,
+        "compiles": 35,
+        "compiles_per_pass": [
+          35
+        ],
+        "env": {
+          "host": "comp1400",
+          "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+          "affinity": 12,
+          "jax": "0.11.1",
+          "device": "cuda:0",
+          "backend": "gpu",
+          "job": "807633",
+          "xla_flags": null,
+          "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-B6-20261121"
+        },
+        "code_sha": "14af3a488472b655"
+      }
+    },
+    "B6-pallas": {
+      "states": 20,
+      "passes": 2,
+      "passed": true,
+      "failed": [],
+      "exact_comparisons": 840,
+      "legacy_reference_states": 20,
+      "legacy_reference_passed": true,
+      "seconds_per_state": {
+        "geometry": 2.067218723008409,
+        "maps": 5.527837462211028,
+        "setup": 0.20361394803039728,
+        "sor": 4.155824446165934,
+        "total_pb": 12.71512117641978,
+        "stages": {
+          "post": 0.07286947863176466,
+          "geometry": 2.067218723008409,
+          "site_probes": 0.2120314182713628,
+          "maps": 5.527837462211028,
+          "assembly": 0.035381580656394365,
+          "setup2": 0.12278357376344502,
+          "specrad": 0.36145075066015125,
+          "sor2": 1.7404888027813286,
+          "sor1": 2.415335643384606,
+          "setup1": 0.08083037426695228
+        }
+      },
+      "peak_host_rss_bytes": 5020905472,
+      "peak_host_rss_warm_bytes": 0,
+      "peak_host_rss_compiling_bytes": 0,
+      "peak_gpu_bytes": 8207222272,
+      "compiles": 33,
+      "compiles_per_pass": [
+        33,
+        0
+      ],
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807625",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-B6-20261121"
+      },
+      "code_sha": "14af3a488472b655"
+    },
+    "B6-xla": {
+      "states": 12,
+      "passes": 2,
+      "passed": true,
+      "failed": [],
+      "exact_comparisons": 504,
+      "legacy_reference_states": 0,
+      "legacy_reference_passed": true,
+      "seconds_per_state": {
+        "geometry": 1.5862950654700398,
+        "maps": 5.1599150146357715,
+        "setup": 0.19251674592184523,
+        "sor": 40.40329785676052,
+        "total_pb": 48.05654572028046,
+        "stages": {
+          "post": 0.06628454461072882,
+          "geometry": 1.5862950654700398,
+          "site_probes": 0.20032855604464808,
+          "maps": 5.1599150146357715,
+          "assembly": 0.028347435717781384,
+          "setup2": 0.11644212466975053,
+          "specrad": 0.33883253500486415,
+          "sor2": 19.134101582225412,
+          "sor1": 21.26919627453511,
+          "setup1": 0.0760746212520947
+        }
+      },
+      "peak_host_rss_bytes": 4066627584,
+      "peak_host_rss_warm_bytes": 0,
+      "peak_host_rss_compiling_bytes": 0,
+      "peak_gpu_bytes": 11075254784,
+      "compiles": 36,
+      "compiles_per_pass": [
+        36,
+        0
+      ],
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807626",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-B6-20261121"
+      },
+      "code_sha": "14af3a488472b655"
+    },
+    "B8-cpu": {
+      "states": 5,
+      "passes": 1,
+      "passed": true,
+      "failed": [],
+      "exact_comparisons": 0,
+      "legacy_reference_states": 4,
+      "legacy_reference_passed": true,
+      "seconds_per_state": {
+        "geometry": 48.119116603583095,
+        "maps": 378.57479290692135,
+        "setup": 13.289194999914617,
+        "sor": 388.5272319062613,
+        "total_pb": 833.9697541139554,
+        "stages": {
+          "post": 1.2444745596963913,
+          "geometry": 48.119116603583095,
+          "site_probes": 3.1985483910888433,
+          "maps": 378.57479290692135,
+          "assembly": 0.07966763442382216,
+          "setup2": 1.440523369098082,
+          "specrad": 1.0163947464898229,
+          "sor2": 177.66264655138366,
+          "sor1": 210.86458535487765,
+          "setup1": 11.848671630816535
+        }
+      },
+      "peak_host_rss_bytes": 21605806080,
+      "peak_host_rss_warm_bytes": 21605806080,
+      "peak_host_rss_compiling_bytes": 16829222912,
+      "peak_gpu_bytes": -1,
+      "compiles": 34,
+      "compiles_per_pass": [
+        34
+      ],
+      "env": {
+        "host": "comp0650",
+        "cpu_model": "AMD EPYC 9224 24-Core Processor",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cpu:0",
+        "backend": "cpu",
+        "job": "807669",
+        "xla_flags": "--xla_force_host_platform_device_count=1",
+        "code": "/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-B8-20261121"
+      },
+      "code_sha": "e7a893c400230a6a",
+      "posthoc_baseline_check": {
+        "passed": true,
+        "bitwise_passed": true,
+        "states": 5,
+        "expected_states": 5,
+        "fields": [
+          "W",
+          "esolvM",
+          "esolvM0",
+          "esolvS",
+          "g",
+          "maxchange",
+          "nst",
+          "occ",
+          "pairs",
+          "pkint",
+          "rho",
+          "sitpotM",
+          "start",
+          "sweeps"
+        ],
+        "differences": []
+      }
+    },
+    "B8-pallas": {
+      "states": 20,
+      "passes": 2,
+      "passed": true,
+      "failed": [],
+      "exact_comparisons": 840,
+      "legacy_reference_states": 20,
+      "legacy_reference_passed": true,
+      "seconds_per_state": {
+        "geometry": 2.071569847734645,
+        "maps": 5.718018323043362,
+        "setup": 0.2035566598176956,
+        "sor": 4.162657361058518,
+        "total_pb": 12.92450366616249,
+        "stages": {
+          "post": 0.07293602381832898,
+          "geometry": 2.071569847734645,
+          "site_probes": 0.21322226827032864,
+          "maps": 5.718018323043362,
+          "assembly": 0.0381690813228488,
+          "setup2": 0.12287526787258685,
+          "specrad": 0.36521031241863966,
+          "sor2": 1.7432290898635983,
+          "sor1": 2.4194282711949198,
+          "setup1": 0.08068139194510877
+        }
+      },
+      "peak_host_rss_bytes": 5389205504,
+      "peak_host_rss_warm_bytes": 0,
+      "peak_host_rss_compiling_bytes": 0,
+      "peak_gpu_bytes": 8207222272,
+      "compiles": 33,
+      "compiles_per_pass": [
+        33,
+        0
+      ],
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807667",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-B8-20261121"
+      },
+      "code_sha": "e7a893c400230a6a"
+    },
+    "B9-all": {
+      "states": 20,
+      "passes": 1,
+      "passed": true,
+      "failed": [],
+      "exact_comparisons": 1456,
+      "legacy_reference_states": 20,
+      "legacy_reference_passed": true,
+      "seconds_per_state": {
+        "geometry": 1.9924272874835878,
+        "maps": 5.758874247642234,
+        "setup": 0.2029780671466142,
+        "sor": 4.149186072358861,
+        "total_pb": 17.602615055954082,
+        "stages": {
+          "post": 0.07415623627603055,
+          "geometry": 1.9924272874835878,
+          "site_probes": 0.2086312753148377,
+          "maps": 5.758874247642234,
+          "assembly": 0.041827128874137996,
+          "setup2": 0.12240392942912877,
+          "specrad": 0.3984267750289291,
+          "sor2": 1.7372708624228834,
+          "sor1": 2.411915209935978,
+          "setup1": 0.08057413771748542
+        }
+      },
+      "peak_host_rss_bytes": 5468524544,
+      "peak_host_rss_warm_bytes": 0,
+      "peak_host_rss_compiling_bytes": 0,
+      "peak_gpu_bytes": 8621234944,
+      "compiles": 35,
+      "compiles_per_pass": [
+        35
+      ],
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807698",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-B9-20261121"
+      },
+      "code_sha": "691e71ecb57e083e",
+      "all_states": {
+        "states": 104,
+        "passes": 1,
+        "passed": true,
+        "failed": [],
+        "exact_comparisons": 1456,
+        "legacy_reference_states": 20,
+        "legacy_reference_passed": true,
+        "seconds_per_state": {
+          "geometry": 1.5537497870659887,
+          "maps": 4.620770898540146,
+          "setup": 0.17815694133213794,
+          "sor": 3.5950054246753167,
+          "total_pb": 12.581241064507944,
+          "stages": {
+            "post": 0.06280356076940034,
+            "geometry": 1.5537497870659887,
+            "site_probes": 0.18571964488364756,
+            "maps": 4.620770898540146,
+            "assembly": 0.03022598839687327,
+            "setup2": 0.1074705570578002,
+            "specrad": 0.33546662386148596,
+            "sor2": 1.5114450694617028,
+            "sor1": 2.083560355213614,
+            "setup1": 0.07068638427433772
+          }
+        },
+        "peak_host_rss_bytes": 5468524544,
+        "peak_host_rss_warm_bytes": 0,
+        "peak_host_rss_compiling_bytes": 0,
+        "peak_gpu_bytes": 8621234944,
+        "compiles": 35,
+        "compiles_per_pass": [
+          35
+        ],
+        "env": {
+          "host": "comp1400",
+          "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+          "affinity": 12,
+          "jax": "0.11.1",
+          "device": "cuda:0",
+          "backend": "gpu",
+          "job": "807698",
+          "xla_flags": null,
+          "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-B9-20261121"
+        },
+        "code_sha": "691e71ecb57e083e"
+      }
+    },
+    "B9-pallas": {
+      "states": 20,
+      "passes": 2,
+      "passed": true,
+      "failed": [],
+      "exact_comparisons": 840,
+      "legacy_reference_states": 20,
+      "legacy_reference_passed": true,
+      "seconds_per_state": {
+        "geometry": 2.065643984545022,
+        "maps": 5.739033873425797,
+        "setup": 0.20286104758270085,
+        "sor": 4.154035694617778,
+        "total_pb": 12.92464699903503,
+        "stages": {
+          "post": 0.0723978470545262,
+          "geometry": 2.065643984545022,
+          "site_probes": 0.20903374571353198,
+          "maps": 5.739033873425797,
+          "assembly": 0.03589675887487829,
+          "setup2": 0.12241887683048844,
+          "specrad": 0.37096848380751907,
+          "sor2": 1.7383637175429612,
+          "sor1": 2.4156719770748167,
+          "setup1": 0.08044217075221241
+        }
+      },
+      "peak_host_rss_bytes": 5374898176,
+      "peak_host_rss_warm_bytes": 0,
+      "peak_host_rss_compiling_bytes": 0,
+      "peak_gpu_bytes": 8207222272,
+      "compiles": 33,
+      "compiles_per_pass": [
+        33,
+        0
+      ],
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807692",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-B9-20261121"
+      },
+      "code_sha": "691e71ecb57e083e"
+    },
+    "B9-xla": {
+      "states": 12,
+      "passes": 2,
+      "passed": true,
+      "failed": [],
+      "exact_comparisons": 504,
+      "legacy_reference_states": 0,
+      "legacy_reference_passed": true,
+      "seconds_per_state": {
+        "geometry": 1.5915811161976308,
+        "maps": 5.323353843064979,
+        "setup": 0.19327084828789037,
+        "sor": 40.42171556890632,
+        "total_pb": 48.255802810114496,
+        "stages": {
+          "post": 0.06671087839640677,
+          "geometry": 1.5915811161976308,
+          "site_probes": 0.20149930768335858,
+          "maps": 5.323353843064979,
+          "assembly": 0.029589572533344228,
+          "setup2": 0.11679355031810701,
+          "specrad": 0.3474482852810373,
+          "sor2": 19.147111968370155,
+          "sor1": 21.274603600536164,
+          "setup1": 0.07647729796978335
+        }
+      },
+      "peak_host_rss_bytes": 4306735104,
+      "peak_host_rss_warm_bytes": 0,
+      "peak_host_rss_compiling_bytes": 0,
+      "peak_gpu_bytes": 11075254784,
+      "compiles": 36,
+      "compiles_per_pass": [
+        36,
+        0
+      ],
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807693",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-B9-20261121"
+      },
+      "code_sha": "691e71ecb57e083e"
+    },
+    "C2-smoke": {
+      "states": 5,
+      "passes": 1,
+      "passed": true,
+      "failed": [],
+      "exact_comparisons": 0,
+      "legacy_reference_states": 5,
+      "legacy_reference_passed": true,
+      "seconds_per_state": {
+        "geometry": 1.537314584851265,
+        "maps": 5.030368430353701,
+        "setup": 0.05778194721788168,
+        "sor": 1.9977715777233243,
+        "total_pb": 24.647515106387438,
+        "stages": {
+          "post": 0.04796889703720808,
+          "geometry": 1.537314584851265,
+          "site_probes": 0.1271837355569005,
+          "maps": 5.030368430353701,
+          "assembly": 0.040106131695210934,
+          "setup2": 0.02424178421497345,
+          "specrad": 0.26207429971545937,
+          "sor2": 0.8352018920704722,
+          "sor1": 1.162569685652852,
+          "setup1": 0.03354016300290823
+        }
+      },
+      "peak_host_rss_bytes": 3185745920,
+      "peak_host_rss_warm_bytes": 0,
+      "peak_host_rss_compiling_bytes": 0,
+      "peak_gpu_bytes": 3736875008,
+      "compiles": 24,
+      "compiles_per_pass": [
+        24
+      ],
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807577",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-C2-20261121"
+      },
+      "code_sha": "7302b1afff1540b7"
+    },
+    "C6-fresh": {
+      "states": 20,
+      "passes": 1,
+      "passed": true,
+      "failed": [],
+      "exact_comparisons": 2912,
+      "legacy_reference_states": 20,
+      "legacy_reference_passed": true,
+      "seconds_per_state": {
+        "geometry": 2.0012439901474863,
+        "maps": 5.560712146479636,
+        "setup": 0.09920448642224074,
+        "sor": 4.1485129508189855,
+        "total_pb": 16.66723130228929,
+        "stages": {
+          "post": 0.07454430721700192,
+          "geometry": 2.0012439901474863,
+          "site_probes": 0.2159215052612126,
+          "maps": 5.560712146479636,
+          "assembly": 0.04417483215220273,
+          "setup2": 0.041436630254611376,
+          "specrad": 0.3905185071285814,
+          "sor2": 1.7379530458711088,
+          "sor1": 2.4105599049478768,
+          "setup1": 0.05776785616762936
+        }
+      },
+      "peak_host_rss_bytes": 5021581312,
+      "peak_host_rss_warm_bytes": 0,
+      "peak_host_rss_compiling_bytes": 0,
+      "peak_gpu_bytes": 4354646784,
+      "compiles": 35,
+      "compiles_per_pass": [
+        35
+      ],
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807634",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-C6-20261121"
+      },
+      "code_sha": "e37f8ea9377a2d23",
+      "all_states": {
+        "states": 104,
+        "passes": 1,
+        "passed": true,
+        "failed": [],
+        "exact_comparisons": 2912,
+        "legacy_reference_states": 20,
+        "legacy_reference_passed": true,
+        "seconds_per_state": {
+          "geometry": 1.5514328402664082,
+          "maps": 4.467790699617651,
+          "setup": 0.08541373629122972,
+          "sor": 3.5851104430890137,
+          "total_pb": 11.889165782432359,
+          "stages": {
+            "post": 0.06254010417391188,
+            "geometry": 1.5514328402664082,
+            "site_probes": 0.18639701715885446,
+            "maps": 4.467790699617651,
+            "assembly": 0.029923647266024582,
+            "setup2": 0.035681040482953764,
+            "specrad": 0.3184165217412206,
+            "sor2": 1.50530958834749,
+            "sor1": 2.079800854741524,
+            "setup1": 0.04973269580827596
+          }
+        },
+        "peak_host_rss_bytes": 5021581312,
+        "peak_host_rss_warm_bytes": 0,
+        "peak_host_rss_compiling_bytes": 0,
+        "peak_gpu_bytes": 4354646784,
+        "compiles": 35,
+        "compiles_per_pass": [
+          35
+        ],
+        "env": {
+          "host": "comp1400",
+          "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+          "affinity": 12,
+          "jax": "0.11.1",
+          "device": "cuda:0",
+          "backend": "gpu",
+          "job": "807634",
+          "xla_flags": null,
+          "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-C6-20261121"
+        },
+        "code_sha": "e37f8ea9377a2d23"
+      }
+    },
+    "C6-pallas": {
+      "states": 20,
+      "passes": 2,
+      "passed": true,
+      "failed": [],
+      "exact_comparisons": 4368,
+      "legacy_reference_states": 20,
+      "legacy_reference_passed": true,
+      "seconds_per_state": {
+        "geometry": 1.9863699913956225,
+        "maps": 5.480996398441493,
+        "setup": 0.09430412603542208,
+        "sor": 4.12818368296139,
+        "total_pb": 12.40207027583383,
+        "stages": {
+          "post": 0.07138766804710031,
+          "geometry": 1.9863699913956225,
+          "site_probes": 0.20566090350039304,
+          "maps": 5.480996398441493,
+          "assembly": 0.03368066838011145,
+          "setup2": 0.03910700394771993,
+          "specrad": 0.3361973930615932,
+          "sor2": 1.7274886953178794,
+          "sor1": 2.40069498764351,
+          "setup1": 0.05519712208770215
+        }
+      },
+      "peak_host_rss_bytes": 5108875264,
+      "peak_host_rss_warm_bytes": 0,
+      "peak_host_rss_compiling_bytes": 0,
+      "peak_gpu_bytes": 4354646784,
+      "compiles": 35,
+      "compiles_per_pass": [
+        35,
+        0
+      ],
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807629",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-C6-20261121"
+      },
+      "code_sha": "e37f8ea9377a2d23",
+      "all_states": {
+        "states": 104,
+        "passes": 2,
+        "passed": true,
+        "failed": [],
+        "exact_comparisons": 4368,
+        "legacy_reference_states": 20,
+        "legacy_reference_passed": true,
+        "seconds_per_state": {
+          "geometry": 1.5434867735199918,
+          "maps": 4.443651388067967,
+          "setup": 0.08247834923139846,
+          "sor": 3.569890973722347,
+          "total_pb": 10.27499694585836,
+          "stages": {
+            "post": 0.06118171037031481,
+            "geometry": 1.5434867735199918,
+            "site_probes": 0.18038384761446372,
+            "maps": 4.443651388067967,
+            "assembly": 0.02593223475672018,
+            "setup2": 0.03420787672691334,
+            "specrad": 0.2975644993667419,
+            "sor2": 1.4979687301585307,
+            "sor1": 2.0719222435638165,
+            "setup1": 0.048270472504485115
+          }
+        },
+        "peak_host_rss_bytes": 5108875264,
+        "peak_host_rss_warm_bytes": 0,
+        "peak_host_rss_compiling_bytes": 0,
+        "peak_gpu_bytes": 4354646784,
+        "compiles": 35,
+        "compiles_per_pass": [
+          35,
+          0
+        ],
+        "env": {
+          "host": "comp1400",
+          "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+          "affinity": 12,
+          "jax": "0.11.1",
+          "device": "cuda:0",
+          "backend": "gpu",
+          "job": "807629",
+          "xla_flags": null,
+          "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-C6-20261121"
+        },
+        "code_sha": "e37f8ea9377a2d23"
+      }
+    },
+    "C6-xla": {
+      "states": 12,
+      "passes": 2,
+      "passed": true,
+      "failed": [],
+      "exact_comparisons": 504,
+      "legacy_reference_states": 0,
+      "legacy_reference_passed": true,
+      "seconds_per_state": {
+        "geometry": 1.585233619902283,
+        "maps": 5.159889218164608,
+        "setup": 0.10310010371419291,
+        "sor": 40.45311754196882,
+        "total_pb": 48.01559598689588,
+        "stages": {
+          "post": 0.06636113145699103,
+          "geometry": 1.585233619902283,
+          "site_probes": 0.20038852142170072,
+          "maps": 5.159889218164608,
+          "assembly": 0.02814067496607701,
+          "setup2": 0.0455323977706333,
+          "specrad": 0.3396630974796911,
+          "sor2": 19.158470106699195,
+          "sor1": 21.294647435269628,
+          "setup1": 0.05756770594355961
+        }
+      },
+      "peak_host_rss_bytes": 4089249792,
+      "peak_host_rss_warm_bytes": 0,
+      "peak_host_rss_compiling_bytes": 0,
+      "peak_gpu_bytes": 8677909504,
+      "compiles": 36,
+      "compiles_per_pass": [
+        36,
+        0
+      ],
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807630",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-C6-20261121"
+      },
+      "code_sha": "e37f8ea9377a2d23"
+    },
+    "C8-cpu": {
+      "states": 5,
+      "passes": 1,
+      "passed": true,
+      "failed": [],
+      "exact_comparisons": 0,
+      "legacy_reference_states": 4,
+      "legacy_reference_passed": true,
+      "seconds_per_state": {
+        "geometry": 47.665973368985576,
+        "maps": 375.8877569032367,
+        "setup": 1.5517138589639217,
+        "sor": 378.04985301760024,
+        "total_pb": 808.608478205558,
+        "stages": {
+          "post": 1.198137601930648,
+          "geometry": 47.665973368985576,
+          "site_probes": 3.280148665839806,
+          "maps": 375.8877569032367,
+          "assembly": 0.0841064516454935,
+          "setup2": 0.33568642833270135,
+          "specrad": 0.9748947890009731,
+          "sor2": 174.43350019389763,
+          "sor1": 203.6163528237026,
+          "setup1": 1.2160274306312204
+        }
+      },
+      "peak_host_rss_bytes": 14078894080,
+      "peak_host_rss_warm_bytes": 14078894080,
+      "peak_host_rss_compiling_bytes": 12951977984,
+      "peak_gpu_bytes": -1,
+      "compiles": 34,
+      "compiles_per_pass": [
+        34
+      ],
+      "env": {
+        "host": "comp0650",
+        "cpu_model": "AMD EPYC 9224 24-Core Processor",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cpu:0",
+        "backend": "cpu",
+        "job": "807670",
+        "xla_flags": "--xla_force_host_platform_device_count=1",
+        "code": "/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-C8-20261121"
+      },
+      "code_sha": "dcd5d796a2be9ab6",
+      "posthoc_baseline_check": {
+        "passed": true,
+        "bitwise_passed": true,
+        "states": 5,
+        "expected_states": 5,
+        "fields": [
+          "W",
+          "esolvM",
+          "esolvM0",
+          "esolvS",
+          "g",
+          "maxchange",
+          "nst",
+          "occ",
+          "pairs",
+          "pkint",
+          "rho",
+          "sitpotM",
+          "start",
+          "sweeps"
+        ],
+        "differences": []
+      }
+    },
+    "C9-fresh": {
+      "states": 20,
+      "passes": 1,
+      "passed": true,
+      "failed": [],
+      "exact_comparisons": 2912,
+      "legacy_reference_states": 20,
+      "legacy_reference_passed": true,
+      "seconds_per_state": {
+        "geometry": 2.0039188045542686,
+        "maps": 5.7763597335666415,
+        "setup": 0.09897271948866546,
+        "sor": 4.153397159092128,
+        "total_pb": 17.557123353425414,
+        "stages": {
+          "post": 0.07456282279454171,
+          "geometry": 2.0039188045542686,
+          "site_probes": 0.21583968312479557,
+          "maps": 5.7763597335666415,
+          "assembly": 0.04368809228762984,
+          "setup2": 0.041350421402603386,
+          "specrad": 0.39197395769879223,
+          "sor2": 1.7395915538538247,
+          "sor1": 2.4138056052383035,
+          "setup1": 0.057622298086062076
+        }
+      },
+      "peak_host_rss_bytes": 5376884736,
+      "peak_host_rss_warm_bytes": 0,
+      "peak_host_rss_compiling_bytes": 0,
+      "peak_gpu_bytes": 4354646784,
+      "compiles": 35,
+      "compiles_per_pass": [
+        35
+      ],
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807699",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-C9-20261121"
+      },
+      "code_sha": "b358a0a65f8b2257",
+      "all_states": {
+        "states": 104,
+        "passes": 1,
+        "passed": true,
+        "failed": [],
+        "exact_comparisons": 2912,
+        "legacy_reference_states": 20,
+        "legacy_reference_passed": true,
+        "seconds_per_state": {
+          "geometry": 1.5591939207829104,
+          "maps": 4.61753936828329,
+          "setup": 0.085918188533889,
+          "sor": 3.5891413941370467,
+          "total_pb": 12.449455636419142,
+          "stages": {
+            "post": 0.06283210452574377,
+            "geometry": 1.5591939207829104,
+            "site_probes": 0.1875949880699269,
+            "maps": 4.61753936828329,
+            "assembly": 0.031307569570624486,
+            "setup2": 0.03585161670791702,
+            "specrad": 0.32563865767756045,
+            "sor2": 1.5071652558668016,
+            "sor1": 2.081976138270245,
+            "setup1": 0.05006657182597197
+          }
+        },
+        "peak_host_rss_bytes": 5376884736,
+        "peak_host_rss_warm_bytes": 0,
+        "peak_host_rss_compiling_bytes": 0,
+        "peak_gpu_bytes": 4354646784,
+        "compiles": 35,
+        "compiles_per_pass": [
+          35
+        ],
+        "env": {
+          "host": "comp1400",
+          "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+          "affinity": 12,
+          "jax": "0.11.1",
+          "device": "cuda:0",
+          "backend": "gpu",
+          "job": "807699",
+          "xla_flags": null,
+          "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-C9-20261121"
+        },
+        "code_sha": "b358a0a65f8b2257"
+      }
+    },
+    "C9-pallas": {
+      "states": 20,
+      "passes": 2,
+      "passed": true,
+      "failed": [],
+      "exact_comparisons": 4368,
+      "legacy_reference_states": 20,
+      "legacy_reference_passed": true,
+      "seconds_per_state": {
+        "geometry": 1.9957317996770143,
+        "maps": 5.733350481744855,
+        "setup": 0.09775648391805589,
+        "sor": 4.1566173551604155,
+        "total_pb": 12.744865907775239,
+        "stages": {
+          "post": 0.07245074841193855,
+          "geometry": 1.9957317996770143,
+          "site_probes": 0.21403148099780084,
+          "maps": 5.733350481744855,
+          "assembly": 0.03805975597351789,
+          "setup2": 0.0408525456674397,
+          "specrad": 0.35861064163036643,
+          "sor2": 1.7418622947763651,
+          "sor1": 2.41475506038405,
+          "setup1": 0.056903938250616196
+        }
+      },
+      "peak_host_rss_bytes": 5461446656,
+      "peak_host_rss_warm_bytes": 0,
+      "peak_host_rss_compiling_bytes": 0,
+      "peak_gpu_bytes": 4354646784,
+      "compiles": 35,
+      "compiles_per_pass": [
+        35,
+        0
+      ],
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807694",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-C9-20261121"
+      },
+      "code_sha": "b358a0a65f8b2257",
+      "all_states": {
+        "states": 104,
+        "passes": 2,
+        "passed": true,
+        "failed": [],
+        "exact_comparisons": 4368,
+        "legacy_reference_states": 20,
+        "legacy_reference_passed": true,
+        "seconds_per_state": {
+          "geometry": 1.54710739696076,
+          "maps": 4.590646970936527,
+          "setup": 0.08395601856486443,
+          "sor": 3.586450163686935,
+          "total_pb": 10.470383118936578,
+          "stages": {
+            "post": 0.06164589531433124,
+            "geometry": 1.54710739696076,
+            "site_probes": 0.1838075191481039,
+            "maps": 4.590646970936527,
+            "assembly": 0.02836170491690819,
+            "setup2": 0.03495698860094238,
+            "specrad": 0.31268301546179617,
+            "sor2": 1.5058587770998622,
+            "sor1": 2.0805913865870727,
+            "setup1": 0.04899902996392204
+          }
+        },
+        "peak_host_rss_bytes": 5461446656,
+        "peak_host_rss_warm_bytes": 0,
+        "peak_host_rss_compiling_bytes": 0,
+        "peak_gpu_bytes": 4354646784,
+        "compiles": 35,
+        "compiles_per_pass": [
+          35,
+          0
+        ],
+        "env": {
+          "host": "comp1400",
+          "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+          "affinity": 12,
+          "jax": "0.11.1",
+          "device": "cuda:0",
+          "backend": "gpu",
+          "job": "807694",
+          "xla_flags": null,
+          "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-C9-20261121"
+        },
+        "code_sha": "b358a0a65f8b2257"
+      }
+    },
+    "C9-xla": {
+      "states": 12,
+      "passes": 2,
+      "passed": true,
+      "failed": [],
+      "exact_comparisons": 504,
+      "legacy_reference_states": 0,
+      "legacy_reference_passed": true,
+      "seconds_per_state": {
+        "geometry": 1.5943127867455285,
+        "maps": 5.314467425380523,
+        "setup": 0.10351040509218971,
+        "sor": 40.395229737584785,
+        "total_pb": 48.127313669072464,
+        "stages": {
+          "post": 0.06654018489643931,
+          "geometry": 1.5943127867455285,
+          "site_probes": 0.20105299811499813,
+          "maps": 5.314467425380523,
+          "assembly": 0.03021540050394833,
+          "setup2": 0.04571688602057596,
+          "specrad": 0.3434273841169973,
+          "sor2": 19.132498580108706,
+          "sor1": 21.262731157476082,
+          "setup1": 0.05779351907161375
+        }
+      },
+      "peak_host_rss_bytes": 4346048512,
+      "peak_host_rss_warm_bytes": 0,
+      "peak_host_rss_compiling_bytes": 0,
+      "peak_gpu_bytes": 8677909504,
+      "compiles": 36,
+      "compiles_per_pass": [
+        36,
+        0
+      ],
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807695",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-C9-20261121"
+      },
+      "code_sha": "b358a0a65f8b2257"
+    },
+    "baseline-cpu": {
+      "states": 5,
+      "passes": 1,
+      "passed": true,
+      "failed": [],
+      "exact_comparisons": 0,
+      "legacy_reference_states": 4,
+      "legacy_reference_passed": true,
+      "seconds_per_state": {
+        "geometry": 45.75083543360233,
+        "maps": 363.74542515813374,
+        "setup": 13.656740561546759,
+        "sor": 397.2448091846891,
+        "total_pb": 826.2339122720994,
+        "stages": {
+          "post": 1.2195796437561512,
+          "geometry": 45.75083543360233,
+          "site_probes": 3.545374989742413,
+          "maps": 363.74542515813374,
+          "assembly": 0.08284398550167679,
+          "setup2": 1.4451592115219682,
+          "specrad": 1.0711473006289451,
+          "sor2": 185.32343770102597,
+          "sor1": 211.9213714836631,
+          "setup1": 12.21158135002479
+        }
+      },
+      "peak_host_rss_bytes": 25971662848,
+      "peak_host_rss_warm_bytes": 25971662848,
+      "peak_host_rss_compiling_bytes": 21890371584,
+      "peak_gpu_bytes": -1,
+      "compiles": 34,
+      "compiles_per_pass": [
+        34
+      ],
+      "env": {
+        "host": "comp0650",
+        "cpu_model": "AMD EPYC 9224 24-Core Processor",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cpu:0",
+        "backend": "cpu",
+        "job": "807544",
+        "xla_flags": "--xla_force_host_platform_device_count=1",
+        "code": "/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-baseline-20261121"
+      },
+      "code_sha": "a643867c9c3db9c8"
+    },
+    "baseline-pallas": {
+      "states": 20,
+      "passes": 1,
+      "passed": true,
+      "failed": [],
+      "exact_comparisons": 0,
+      "legacy_reference_states": 20,
+      "legacy_reference_passed": true,
+      "seconds_per_state": {
+        "geometry": 2.0027800926938655,
+        "maps": 3.4114716830663383,
+        "setup": 0.20360930380411446,
+        "sor": 4.167166771087795,
+        "total_pb": 12.932255820557476,
+        "stages": {
+          "post": 0.07533400189131498,
+          "geometry": 2.0027800926938655,
+          "site_probes": 0.21677141007967293,
+          "maps": 3.4114716830663383,
+          "assembly": 0.04608101537451148,
+          "setup2": 0.12369483057409525,
+          "specrad": 0.40665652076713743,
+          "sor2": 1.7454114253167063,
+          "sor1": 2.421755345771089,
+          "setup1": 0.07991447323001921
+        }
+      },
+      "peak_host_rss_bytes": 4817145856,
+      "peak_host_rss_warm_bytes": 0,
+      "peak_host_rss_compiling_bytes": 0,
+      "peak_gpu_bytes": 16517359616,
+      "compiles": 35,
+      "compiles_per_pass": [
+        35
+      ],
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807542",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-baseline-20261121"
+      },
+      "code_sha": "a643867c9c3db9c8",
+      "all_states": {
+        "states": 104,
+        "passes": 1,
+        "passed": true,
+        "failed": [],
+        "exact_comparisons": 0,
+        "legacy_reference_states": 20,
+        "legacy_reference_passed": true,
+        "seconds_per_state": {
+          "geometry": 1.5685548241286038,
+          "maps": 2.7623285848486168,
+          "setup": 0.17782275417210677,
+          "sor": 3.601299026273549,
+          "total_pb": 9.79578920710796,
+          "stages": {
+            "post": 0.06343684560404374,
+            "geometry": 1.5685548241286038,
+            "site_probes": 0.18857408031964532,
+            "maps": 2.7623285848486168,
+            "assembly": 0.03242246349915289,
+            "setup2": 0.10798802910050234,
+            "specrad": 0.3323081917881679,
+            "sor2": 1.5145311831639936,
+            "sor1": 2.0867678431095555,
+            "setup1": 0.06983472507160443
+          }
+        },
+        "peak_host_rss_bytes": 4817145856,
+        "peak_host_rss_warm_bytes": 0,
+        "peak_host_rss_compiling_bytes": 0,
+        "peak_gpu_bytes": 16517359616,
+        "compiles": 35,
+        "compiles_per_pass": [
+          35
+        ],
+        "env": {
+          "host": "comp1400",
+          "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+          "affinity": 12,
+          "jax": "0.11.1",
+          "device": "cuda:0",
+          "backend": "gpu",
+          "job": "807542",
+          "xla_flags": null,
+          "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-baseline-20261121"
+        },
+        "code_sha": "a643867c9c3db9c8"
+      }
+    },
+    "baseline-xla": {
+      "states": 12,
+      "passes": 1,
+      "passed": true,
+      "failed": [],
+      "exact_comparisons": 0,
+      "legacy_reference_states": 0,
+      "legacy_reference_passed": true,
+      "seconds_per_state": {
+        "geometry": 1.7561512424144894,
+        "maps": 3.1598618269587555,
+        "setup": 0.1945694915484637,
+        "sor": 40.4803392290293,
+        "total_pb": 53.04577082077352,
+        "stages": {
+          "post": 0.07167005934752524,
+          "geometry": 1.7561512424144894,
+          "site_probes": 0.20588586549274623,
+          "maps": 3.1598618269587555,
+          "assembly": 0.03529579766715566,
+          "setup2": 0.11793925939127803,
+          "specrad": 0.39083570373865467,
+          "sor2": 19.175452722236514,
+          "sor1": 21.30488650679278,
+          "setup1": 0.07663023215718567
+        }
+      },
+      "peak_host_rss_bytes": 3814928384,
+      "peak_host_rss_warm_bytes": 0,
+      "peak_host_rss_compiling_bytes": 0,
+      "peak_gpu_bytes": 15906499072,
+      "compiles": 36,
+      "compiles_per_pass": [
+        36
+      ],
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807543",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-baseline-20261121"
+      },
+      "code_sha": "a643867c9c3db9c8"
+    }
+  },
+  "A-cpu-oom": {
+    "job": 807603,
+    "state": "OUT_OF_MEMORY",
+    "exit": "0:125",
+    "elapsed": "00:42:35",
+    "requested_cpus": 12,
+    "requested_memory_per_cpu": "2G",
+    "slurm_maxrss_kb": 25158044,
+    "completed_states": 4,
+    "missing_state": "70c9c3eaa126c736_AB",
+    "resolution": "Keep the compute limit. Intermediate A retains baseline dense maps/setup; B/C implement the memory fix."
+  },
+  "partial_or_superseded": {
+    "B3-xla": {
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807580",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-B3-20261121"
+      },
+      "completed_passes": 0,
+      "current_states": 6,
+      "current_checks_passed": true
+    },
+    "B4-pallas": {
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807592",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-B4-20261121"
+      },
+      "completed_passes": 0,
+      "current_states": 13,
+      "current_checks_passed": true
+    },
+    "B4-xla": {
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807593",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-B4-20261121"
+      },
+      "completed_passes": 0,
+      "current_states": 6,
+      "current_checks_passed": true
+    },
+    "B5-cpu": {
+      "env": {
+        "host": "comp0650",
+        "cpu_model": "AMD EPYC 9224 24-Core Processor",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cpu:0",
+        "backend": "cpu",
+        "job": "807610",
+        "xla_flags": "--xla_force_host_platform_device_count=1",
+        "code": "/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-B5-20261121"
+      },
+      "completed_passes": 0,
+      "current_states": 3,
+      "current_checks_passed": true
+    },
+    "B5-pallas": {
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807608",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-B5-20261121"
+      },
+      "completed_passes": 1,
+      "current_states": 19,
+      "current_checks_passed": true
+    },
+    "B5-xla": {
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807609",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-B5-20261121"
+      },
+      "completed_passes": 0,
+      "current_states": 11,
+      "current_checks_passed": true
+    },
+    "B6-cpu": {
+      "env": {
+        "host": "comp0650",
+        "cpu_model": "AMD EPYC 9224 24-Core Processor",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cpu:0",
+        "backend": "cpu",
+        "job": "807627",
+        "xla_flags": "--xla_force_host_platform_device_count=1",
+        "code": "/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-B6-20261121"
+      },
+      "completed_passes": 0,
+      "current_states": 1,
+      "current_checks_passed": false
+    },
+    "B7-cpu": {
+      "env": {
+        "host": "comp0650",
+        "cpu_model": "AMD EPYC 9224 24-Core Processor",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cpu:0",
+        "backend": "cpu",
+        "job": "807638",
+        "xla_flags": "--xla_force_host_platform_device_count=1",
+        "code": "/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-B7-20261121"
+      },
+      "completed_passes": 0,
+      "current_states": 4,
+      "current_checks_passed": true
+    },
+    "B8-all": {
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807676",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-B8-20261121"
+      },
+      "completed_passes": 0,
+      "current_states": 31,
+      "current_checks_passed": true
+    },
+    "B8-xla": {
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807668",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-B8-20261121"
+      },
+      "completed_passes": 1,
+      "current_states": 11,
+      "current_checks_passed": true
+    },
+    "C3-xla": {
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807584",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-C3-20261121"
+      },
+      "completed_passes": 0,
+      "current_states": 6,
+      "current_checks_passed": true
+    },
+    "C5-cpu": {
+      "env": {
+        "host": "comp0650",
+        "cpu_model": "AMD EPYC 9224 24-Core Processor",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cpu:0",
+        "backend": "cpu",
+        "job": "807611",
+        "xla_flags": "--xla_force_host_platform_device_count=1",
+        "code": "/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-C5-20261121"
+      },
+      "completed_passes": 0,
+      "current_states": 3,
+      "current_checks_passed": true
+    },
+    "C5-pallas": {
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807612",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-C5-20261121"
+      },
+      "completed_passes": 0,
+      "current_states": 27,
+      "current_checks_passed": true
+    },
+    "C6-cpu": {
+      "env": {
+        "host": "comp0650",
+        "cpu_model": "AMD EPYC 9224 24-Core Processor",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cpu:0",
+        "backend": "cpu",
+        "job": "807628",
+        "xla_flags": "--xla_force_host_platform_device_count=1",
+        "code": "/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-C6-20261121"
+      },
+      "completed_passes": 0,
+      "current_states": 2,
+      "current_checks_passed": false
+    },
+    "C7-cpu": {
+      "env": {
+        "host": "comp0650",
+        "cpu_model": "AMD EPYC 9224 24-Core Processor",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cpu:0",
+        "backend": "cpu",
+        "job": "807639",
+        "xla_flags": "--xla_force_host_platform_device_count=1",
+        "code": "/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-C7-20261121"
+      },
+      "completed_passes": 0,
+      "current_states": 4,
+      "current_checks_passed": true
+    },
+    "C8-pallas": {
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807671",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-C8-20261121"
+      },
+      "completed_passes": 1,
+      "current_states": 3,
+      "current_checks_passed": true
+    },
+    "C8-xla": {
+      "env": {
+        "host": "comp1400",
+        "cpu_model": "INTEL(R) XEON(R) GOLD 6542Y",
+        "affinity": 12,
+        "jax": "0.11.1",
+        "device": "cuda:0",
+        "backend": "gpu",
+        "job": "807672",
+        "xla_flags": null,
+        "code": "/u/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt1-C8-20261121"
+      },
+      "completed_passes": 1,
+      "current_states": 11,
+      "current_checks_passed": true
+    }
+  },
+  "compute-audit": {
+    "passed": true,
+    "jobs_checked": 89,
+    "cpus_per_job_max": 12,
+    "regular_memory": "24G (12 x 2G)",
+    "baseline_exception": {
+      "job": 807544,
+      "memory": "48G (12 x 4G)"
+    },
+    "gpu_partition": "oc",
+    "gpu_node": "comp1400",
+    "gpu_per_job": 1,
+    "cpu_partition": "amd96",
+    "final_job_states": {
+      "807545": "COMPLETED",
+      "807586": "COMPLETED",
+      "807546": "COMPLETED",
+      "807692": "COMPLETED",
+      "807698": "COMPLETED",
+      "807693": "COMPLETED",
+      "807669": "COMPLETED",
+      "807694": "COMPLETED",
+      "807695": "COMPLETED",
+      "807670": "COMPLETED",
+      "807699": "COMPLETED",
+      "807705": "COMPLETED",
+      "807697": "COMPLETED"
+    }
+  },
+  "cpu-final-source-equivalence": {
+    "passed": true,
+    "platform": "cpu",
+    "jax_enable_x64": false,
+    "tags": [
+      "C8",
+      "C9"
+    ],
+    "variants": [
+      {
+        "size_class": 0,
+        "xl": false,
+        "hashes": [
+          "b3b773f256fb5cc59be7710197b6d053158cf20e734e028f7eaac770d56be2ef",
+          "b3b773f256fb5cc59be7710197b6d053158cf20e734e028f7eaac770d56be2ef"
+        ],
+        "identical": true
+      },
+      {
+        "size_class": 0,
+        "xl": true,
+        "hashes": [
+          "d7eee25f1a2685febd87442673cf71f0cb79e59d913faf9dbd62ae605c90b8b5",
+          "d7eee25f1a2685febd87442673cf71f0cb79e59d913faf9dbd62ae605c90b8b5"
+        ],
+        "identical": true
+      },
+      {
+        "size_class": 1,
+        "xl": false,
+        "hashes": [
+          "9eafd15d48586155816168dc5570eb576da9910baf8ecd39dc84e0c42633f4aa",
+          "9eafd15d48586155816168dc5570eb576da9910baf8ecd39dc84e0c42633f4aa"
+        ],
+        "identical": true
+      },
+      {
+        "size_class": 1,
+        "xl": true,
+        "hashes": [
+          "dc182209ea4f85bb8483275d90099c0607a734614826a5b3e90a7451d234727d",
+          "dc182209ea4f85bb8483275d90099c0607a734614826a5b3e90a7451d234727d"
+        ],
+        "identical": true
+      },
+      {
+        "size_class": 2,
+        "xl": false,
+        "hashes": [
+          "3b1b59b80851845fa2e0b46418960c28aae455ff7f309463f0e76b85fe6aa5ec",
+          "3b1b59b80851845fa2e0b46418960c28aae455ff7f309463f0e76b85fe6aa5ec"
+        ],
+        "identical": true
+      },
+      {
+        "size_class": 2,
+        "xl": true,
+        "hashes": [
+          "588341455559c9860722298c9b08f582ddf3d65825d3ee97e402e200a07215de",
+          "588341455559c9860722298c9b08f582ddf3d65825d3ee97e402e200a07215de"
+        ],
+        "identical": true
+      },
+      {
+        "size_class": 3,
+        "xl": false,
+        "hashes": [
+          "6bceb366335a5eeeb1a933825dff5aa996dacf7d54b5d726ffc57a6d75d35751",
+          "6bceb366335a5eeeb1a933825dff5aa996dacf7d54b5d726ffc57a6d75d35751"
+        ],
+        "identical": true
+      },
+      {
+        "size_class": 3,
+        "xl": true,
+        "hashes": [
+          "56c60ce7d877dadf83d49fabb0ba33475312fc6cbc72ab625e997c833bcb5e2d",
+          "56c60ce7d877dadf83d49fabb0ba33475312fc6cbc72ab625e997c833bcb5e2d"
+        ],
+        "identical": true
+      },
+      {
+        "size_class": 4,
+        "xl": false,
+        "hashes": [
+          "eefde8bdb26e54837a258476bfbe8fccc8cee3bdbfddd79351484a75964426f4",
+          "eefde8bdb26e54837a258476bfbe8fccc8cee3bdbfddd79351484a75964426f4"
+        ],
+        "identical": true
+      },
+      {
+        "size_class": 4,
+        "xl": true,
+        "hashes": [
+          "95ee8e6313f495e977e1abce3fbc5bd0814fb9e993d74fd9f33a599ebd45dc1d",
+          "95ee8e6313f495e977e1abce3fbc5bd0814fb9e993d74fd9f33a599ebd45dc1d"
+        ],
+        "identical": true
+      }
+    ],
+    "other_solver_sources_identical": {
+      "pb.py": true,
+      "prep_pypka.py": true,
+      "records.py": true,
+      "compile_budget.py": true,
+      "__init__.py": true,
+      "titrate.py": true,
+      "assemble.py": true,
+      "api.py": true,
+      "geometry.py": true,
+      "sor.py": true
+    },
+    "B_variant_sources_identical": {
+      "pb.py": true,
+      "prep_pypka.py": true,
+      "records.py": true,
+      "compile_budget.py": true,
+      "__init__.py": true,
+      "titrate.py": true,
+      "assemble.py": true,
+      "api.py": true,
+      "geometry.py": true,
+      "sor.py": true,
+      "shared_old_map": true,
+      "shared_new_map": true
+    },
+    "job": "807705"
+  },
+  "cpu-map-localization": {
+    "state": "4066edfcdb3ea8e3_AB",
+    "comparisons_vs_C5": {
+      "C6": {
+        "coarse": {
+          "bidx": {
+            "different": 0
+          },
+          "ex": {
+            "different": 0
+          },
+          "ey": {
+            "different": 0
+          },
+          "ez": {
+            "different": 0
+          },
+          "ion": {
+            "different": 0
+          },
+          "surf": {
+            "different": 0,
+            "max_abs": 0.0,
+            "examples": []
+          }
+        },
+        "focused": {
+          "bidx": {
+            "different": 0
+          },
+          "ex": {
+            "different": 0
+          },
+          "ey": {
+            "different": 0
+          },
+          "ez": {
+            "different": 0
+          },
+          "ion": {
+            "different": 0
+          },
+          "surf": {
+            "different": 0,
+            "max_abs": 0.0,
+            "examples": []
+          }
+        },
+        "model": {
+          "bidx": {
+            "different": 0
+          },
+          "ex": {
+            "different": 0
+          },
+          "ey": {
+            "different": 0
+          },
+          "ez": {
+            "different": 0
+          },
+          "ion": {
+            "different": 0
+          },
+          "surf": {
+            "different": 0,
+            "max_abs": 0.0,
+            "examples": []
+          }
+        }
+      },
+      "C7": {
+        "coarse": {
+          "bidx": {
+            "different": 0
+          },
+          "ex": {
+            "different": 0
+          },
+          "ey": {
+            "different": 0
+          },
+          "ez": {
+            "different": 0
+          },
+          "ion": {
+            "different": 0
+          },
+          "surf": {
+            "different": 0,
+            "max_abs": 0.0,
+            "examples": []
+          }
+        },
+        "focused": {
+          "bidx": {
+            "different": 0
+          },
+          "ex": {
+            "different": 0
+          },
+          "ey": {
+            "different": 0
+          },
+          "ez": {
+            "different": 0
+          },
+          "ion": {
+            "different": 0
+          },
+          "surf": {
+            "different": 0,
+            "max_abs": 0.0,
+            "examples": []
+          }
+        },
+        "model": {
+          "bidx": {
+            "different": 0
+          },
+          "ex": {
+            "different": 0
+          },
+          "ey": {
+            "different": 0
+          },
+          "ez": {
+            "different": 0
+          },
+          "ion": {
+            "different": 0
+          },
+          "surf": {
+            "different": 0,
+            "max_abs": 0.0,
+            "examples": []
+          }
+        }
+      }
+    },
+    "job": "807644"
+  },
+  "cpu-tail-localization": {
+    "state": "4066edfcdb3ea8e3_AB",
+    "sites": [
+      16,
+      17
+    ],
+    "comparisons_vs_C5": {
+      "C6": {
+        "coarse": {
+          "bidx": {
+            "different": 0
+          },
+          "ex": {
+            "different": 1062880
+          },
+          "ey": {
+            "different": 1062880
+          },
+          "ez": {
+            "different": 1062880
+          },
+          "ion": {
+            "different": 2
+          },
+          "surf": {
+            "different": 288000,
+            "max_abs": 154.5205841064453,
+            "examples": [
+              {
+                "index": [
+                  2,
+                  0,
+                  0
+                ],
+                "old": 152.95802307128906,
+                "new": 0.0
+              },
+              {
+                "index": [
+                  2,
+                  0,
+                  1
+                ],
+                "old": 154.5205841064453,
+                "new": 0.0
+              },
+              {
+                "index": [
+                  2,
+                  0,
+                  2
+                ],
+                "old": 107.64974975585938,
+                "new": 0.0
+              },
+              {
+                "index": [
+                  2,
+                  1,
+                  0
+                ],
+                "old": 152.95802307128906,
+                "new": 0.0
+              },
+              {
+                "index": [
+                  2,
+                  1,
+                  1
+                ],
+                "old": 154.5205841064453,
+                "new": 0.0
+              }
+            ]
+          }
+        },
+        "focused": {
+          "bidx": {
+            "different": 0
+          },
+          "ex": {
+            "different": 1062880
+          },
+          "ey": {
+            "different": 1062880
+          },
+          "ez": {
+            "different": 1062880
+          },
+          "ion": {
+            "different": 2
+          },
+          "surf": {
+            "different": 240000,
+            "max_abs": 154.5205841064453,
+            "examples": [
+              {
+                "index": [
+                  2,
+                  0,
+                  0
+                ],
+                "old": 152.95802307128906,
+                "new": 0.0
+              },
+              {
+                "index": [
+                  2,
+                  0,
+                  1
+                ],
+                "old": 154.5205841064453,
+                "new": 0.0
+              },
+              {
+                "index": [
+                  2,
+                  0,
+                  2
+                ],
+                "old": 107.64974975585938,
+                "new": 0.0
+              },
+              {
+                "index": [
+                  2,
+                  1,
+                  0
+                ],
+                "old": 152.95802307128906,
+                "new": 0.0
+              },
+              {
+                "index": [
+                  2,
+                  1,
+                  1
+                ],
+                "old": 154.5205841064453,
+                "new": 0.0
+              }
+            ]
+          }
+        },
+        "model": {
+          "bidx": {
+            "different": 0
+          },
+          "ex": {
+            "different": 1062880
+          },
+          "ey": {
+            "different": 1062880
+          },
+          "ez": {
+            "different": 1062880
+          },
+          "ion": {
+            "different": 2
+          },
+          "surf": {
+            "different": 24005,
+            "max_abs": 10000.0,
+            "examples": [
+              {
+                "index": [
+                  0,
+                  245,
+                  2
+                ],
+                "old": 108.45396423339844,
+                "new": 108.4539566040039
+              },
+              {
+                "index": [
+                  0,
+                  1082,
+                  0
+                ],
+                "old": 156.58584594726562,
+                "new": 156.5858612060547
+              },
+              {
+                "index": [
+                  1,
+                  274,
+                  2
+                ],
+                "old": 106.83938598632812,
+                "new": 106.83939361572266
+              },
+              {
+                "index": [
+                  1,
+                  378,
+                  2
+                ],
+                "old": 107.05079650878906,
+                "new": 107.05078887939453
+              },
+              {
+                "index": [
+                  1,
+                  475,
+                  0
+                ],
+                "old": 154.52938842773438,
+                "new": 154.52940368652344
+              }
+            ]
+          }
+        }
+      },
+      "C7": {
+        "coarse": {
+          "bidx": {
+            "different": 0
+          },
+          "ex": {
+            "different": 0
+          },
+          "ey": {
+            "different": 0
+          },
+          "ez": {
+            "different": 0
+          },
+          "ion": {
+            "different": 0
+          },
+          "surf": {
+            "different": 0,
+            "max_abs": 0.0,
+            "examples": []
+          }
+        },
+        "focused": {
+          "bidx": {
+            "different": 0
+          },
+          "ex": {
+            "different": 0
+          },
+          "ey": {
+            "different": 0
+          },
+          "ez": {
+            "different": 0
+          },
+          "ion": {
+            "different": 0
+          },
+          "surf": {
+            "different": 0,
+            "max_abs": 0.0,
+            "examples": []
+          }
+        },
+        "model": {
+          "bidx": {
+            "different": 0
+          },
+          "ex": {
+            "different": 0
+          },
+          "ey": {
+            "different": 0
+          },
+          "ez": {
+            "different": 0
+          },
+          "ion": {
+            "different": 0
+          },
+          "surf": {
+            "different": 0,
+            "max_abs": 0.0,
+            "examples": []
+          }
+        }
+      }
+    },
+    "job": "807648"
+  },
+  "edge-tests": {
+    "passed": true,
+    "checks": [
+      "CSR tie and overflow",
+      "byte budget",
+      "face setup parity",
+      "last class overflow",
+      "lazy import",
+      "bounded driver summary"
+    ]
+  },
+  "gpu-source-equivalence": {
+    "passed": true,
+    "variants": [
+      {
+        "size_class": 0,
+        "xl": false,
+        "hashes": [
+          "d335779decde88b6303e602e823295a168e1ef158e23a64ebf288de04d82c961",
+          "d335779decde88b6303e602e823295a168e1ef158e23a64ebf288de04d82c961"
+        ],
+        "identical": true
+      },
+      {
+        "size_class": 0,
+        "xl": true,
+        "hashes": [
+          "65c76f75be41d5af4f75f1afeb604062c5f587aa492e7f796243f2315b3080f5",
+          "65c76f75be41d5af4f75f1afeb604062c5f587aa492e7f796243f2315b3080f5"
+        ],
+        "identical": true
+      },
+      {
+        "size_class": 1,
+        "xl": false,
+        "hashes": [
+          "b62b26b63c83632fc62d61befc8aa96eb3de24d64ce418ba8d1462f210835dca",
+          "b62b26b63c83632fc62d61befc8aa96eb3de24d64ce418ba8d1462f210835dca"
+        ],
+        "identical": true
+      },
+      {
+        "size_class": 1,
+        "xl": true,
+        "hashes": [
+          "36d74bccc53e23f01187ce76843dc9a7dac9cd4790b68b9a434804d8c67c9931",
+          "36d74bccc53e23f01187ce76843dc9a7dac9cd4790b68b9a434804d8c67c9931"
+        ],
+        "identical": true
+      },
+      {
+        "size_class": 2,
+        "xl": false,
+        "hashes": [
+          "82352bf132a1be6c2fda00ba043e068a62f482d10b4a92818ac4fd302997a0b9",
+          "82352bf132a1be6c2fda00ba043e068a62f482d10b4a92818ac4fd302997a0b9"
+        ],
+        "identical": true
+      },
+      {
+        "size_class": 2,
+        "xl": true,
+        "hashes": [
+          "a4787b3c08e2caabbdfc80a974467421710282ab4723f6557914a3205eddcc55",
+          "a4787b3c08e2caabbdfc80a974467421710282ab4723f6557914a3205eddcc55"
+        ],
+        "identical": true
+      },
+      {
+        "size_class": 3,
+        "xl": false,
+        "hashes": [
+          "a5e8744180abb537bb1618113f2e6e474edbe2dcbea05bd6de007a27d342baef",
+          "a5e8744180abb537bb1618113f2e6e474edbe2dcbea05bd6de007a27d342baef"
+        ],
+        "identical": true
+      },
+      {
+        "size_class": 3,
+        "xl": true,
+        "hashes": [
+          "cc52b26e157d193ca6d55aaf3d7e62b36c48f189a63c9c7686b9209cc77f6478",
+          "cc52b26e157d193ca6d55aaf3d7e62b36c48f189a63c9c7686b9209cc77f6478"
+        ],
+        "identical": true
+      },
+      {
+        "size_class": 4,
+        "xl": false,
+        "hashes": [
+          "c8c76adf58a339e1f476d0416892cd1969d4fb43555d52d42406175815cc8eab",
+          "c8c76adf58a339e1f476d0416892cd1969d4fb43555d52d42406175815cc8eab"
+        ],
+        "identical": true
+      },
+      {
+        "size_class": 4,
+        "xl": true,
+        "hashes": [
+          "83dc88393f63a1569fdb6cc62163e74a79ebd790c60bed98b93d4147bfa9a3b8",
+          "83dc88393f63a1569fdb6cc62163e74a79ebd790c60bed98b93d4147bfa9a3b8"
+        ],
+        "identical": true
+      }
+    ],
+    "job": "807641",
+    "meaning": "CPU-only branches changed; identical GPU StableHLO including constants at all 5 classes and normal/XL sizes."
+  },
+  "job-ledger": {
+    "jobs": {
+      "baseline-pallas": 807542,
+      "baseline-xla": 807543,
+      "baseline-cpu": 807544,
+      "A-pallas": 807545,
+      "A-xla": 807546,
+      "A-cpu": 807547,
+      "B-pallas-superseded": 807549,
+      "B-xla-superseded": 807550,
+      "B-cpu-superseded": 807551,
+      "C-pallas-superseded": 807552,
+      "C-xla-superseded": 807553,
+      "C-cpu-superseded": 807554,
+      "unit-tests": 807555,
+      "edge-tests": 807556,
+      "B2-pallas": 807557,
+      "B2-xla": 807558,
+      "B2-cpu": 807559,
+      "C2-cpu": 807560,
+      "C2-pallas": 807561,
+      "C2-xla": 807562,
+      "edge-tests-2": 807563,
+      "C2-fresh": 807564,
+      "C2-smoke": 807577,
+      "B3-pallas": 807578,
+      "B3-xla": 807580,
+      "B3-cpu": 807581,
+      "C3-cpu": 807582,
+      "C3-pallas": 807583,
+      "C3-xla": 807584,
+      "C3-fresh": 807585,
+      "A-all": 807586,
+      "B3-all": 807587,
+      "B4-pallas": 807592,
+      "B4-xla": 807593,
+      "B4-cpu-pending": 807594,
+      "C4-cpu-pending": 807595,
+      "C4-pallas": 807596,
+      "C4-xla": 807597,
+      "edge-tests-4": 807598,
+      "B4-all": 807599,
+      "C4-fresh": 807600,
+      "A-cpu-independent": 807603,
+      "B4-cpu-independent": 807604,
+      "C4-cpu-independent": 807605,
+      "B5-pallas": 807608,
+      "B5-xla": 807609,
+      "B5-cpu": 807610,
+      "C5-cpu": 807611,
+      "C5-pallas": 807612,
+      "C5-xla": 807613,
+      "edge-tests-5": 807614,
+      "B5-all": 807615,
+      "C5-fresh": 807616,
+      "B6-pallas": 807625,
+      "B6-xla": 807626,
+      "B6-cpu-rejected": 807627,
+      "C6-cpu-rejected": 807628,
+      "C6-pallas": 807629,
+      "C6-xla": 807630,
+      "finaledge": 807631,
+      "finalunit": 807632,
+      "B6-all": 807633,
+      "C6-fresh": 807634,
+      "B7-cpu": 807638,
+      "C7-cpu": 807639,
+      "audit-cpu": 807640,
+      "gpu-equivalence": 807641,
+      "cpu-map-localization": 807644,
+      "tail-localization": 807648,
+      "B8-pallas": 807667,
+      "B8-xla": 807668,
+      "B8-cpu": 807669,
+      "C8-cpu": 807670,
+      "C8-pallas": 807671,
+      "C8-xla": 807672,
+      "edge-tests-8": 807674,
+      "unit-tests-8": 807675,
+      "B8-all": 807676,
+      "C8-fresh": 807677,
+      "summary-reader-test": 807687,
+      "B9-pallas": 807692,
+      "B9-xla": 807693,
+      "C9-pallas": 807694,
+      "C9-xla": 807695,
+      "cpu-final-equivalence": 807696,
+      "final-tests-9": 807697,
+      "B9-all": 807698,
+      "C9-fresh": 807699,
+      "final-float32-source-certificate": 807705
+    },
+    "frozen_root": "~/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/",
+    "frozen_folders": [
+      "opt1-baseline-20261121",
+      "opt1-A-20261121",
+      "opt1-B-20261121",
+      "opt1-C-20261121",
+      "opt1-checks-20261121",
+      "opt1-B2-20261121",
+      "opt1-C2-20261121",
+      "opt1-B3-20261121",
+      "opt1-C3-20261121",
+      "opt1-B4-20261121",
+      "opt1-C4-20261121",
+      "opt1-B5-20261121",
+      "opt1-C5-20261121",
+      "opt1-B6-20261121",
+      "opt1-C6-20261121",
+      "opt1-finalchecks-20261121",
+      "opt1-B7-20261121",
+      "opt1-C7-20261121",
+      "opt1-audit-20261121",
+      "opt1-cpu-diag-20261121",
+      "opt1-cpu-tail-diag-20261121",
+      "opt1-B8-20261121",
+      "opt1-C8-20261121",
+      "opt1-checks8-20261121",
+      "opt1-B9-20261121",
+      "opt1-C9-20261121",
+      "opt1-finaltests9-20261121",
+      "opt1-readers-20261121",
+      "opt1-final-cert-20261121"
+    ],
+    "canceled_before_execution": [
+      807549,
+      807550,
+      807551,
+      807552,
+      807553,
+      807554
+    ],
+    "superseded": {
+      "reason": "Padding/culling and conservative GPU tile tuning; code folders never changed.",
+      "jobs": [
+        807549,
+        807550,
+        807551,
+        807552,
+        807553,
+        807554,
+        807557,
+        807558,
+        807559,
+        807560,
+        807561,
+        807562,
+        807564,
+        807578,
+        807580,
+        807581,
+        807582,
+        807583,
+        807584,
+        807585,
+        807587,
+        807592,
+        807593,
+        807594,
+        807595,
+        807596,
+        807597,
+        807599,
+        807600,
+        807604,
+        807605,
+        807608,
+        807609,
+        807610,
+        807611,
+        807612,
+        807613,
+        807615,
+        807616,
+        807638,
+        807639,
+        807667,
+        807668,
+        807671,
+        807672,
+        807676,
+        807677
+      ],
+      "cpu_dependency_replaced_by_independent_hash_comparison": [
+        807547,
+        807594,
+        807595
+      ]
+    },
+    "rejected_variant": {
+      "cpu_single_site_tail": {
+        "jobs": [
+          807627,
+          807628
+        ],
+        "different_fields": [
+          "esolvS",
+          "g",
+          "pkint"
+        ],
+        "unchanged_fields": [
+          "esolvM",
+          "esolvM0",
+          "sitpotM",
+          "sweeps",
+          "maxchange",
+          "rho"
+        ],
+        "resolution": "CPU B=4 projection retained; query/reach padding skipped inside group"
+      }
+    },
+    "final_matrix": {
+      "A": {
+        "pallas20": 807545,
+        "pallas104": 807586,
+        "xla12": 807546,
+        "cpu4_oom": 807603
+      },
+      "B": {
+        "pallas20": 807692,
+        "pallas104": 807698,
+        "xla12": 807693,
+        "cpu5_identical_program": 807669
+      },
+      "C": {
+        "pallas104_twice": 807694,
+        "xla12_twice": 807695,
+        "cpu5_identical_program": 807670,
+        "fresh104": 807699
+      },
+      "cpu_source_equivalence": 807705,
+      "tests": 807697
+    },
+    "notes": [
+      "C7 CPU/GPU source equivalence was certified; C8 final gates directly run both platforms.",
+      "A-only CPU OOM was kept at 2G/CPU; no higher-memory retry of optimized code.",
+      "Final C9 GPU tile caps do not change CPU StableHLO: all normal/XL classes and other solver files certified identical to C8; retain its five-state CPU runs."
+    ]
+  },
+  "source-audit": {
+    "passed": true,
+    "frozen": "opt1-C9-20261121",
+    "source_code_sha": "b358a0a65f8b2257",
+    "files": {
+      "src/jaxpb/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "src/jaxpb/api.py": "5b1283995fa6b73fbbee208cd5885d9f3d8f2dfa780a03c351aa64572d8c5aab",
+      "src/jaxpb/assemble.py": "84f84ff509ec6491fc50a42ac1f9f9db31003093d64793ecab503b0bcd50a73a",
+      "src/jaxpb/compile_budget.py": "459497eb4761f768adf15361633b8ebdd4d8a003893db0f83940a25eeef7b2c0",
+      "src/jaxpb/geometry.py": "4fee99baaa07922e4a71ed5cff9894e422993ca45efa083a45af084b078616a6",
+      "src/jaxpb/maps.py": "fde05210bf93c71803547f2173c13b5d2cbb75f04bc806f582f0cd90ef107b10",
+      "src/jaxpb/pb.py": "b5c703b4e3bbf7480850ff42ede5a2a835ee63f67130e3274f0340b7e11cdfdf",
+      "src/jaxpb/prep_pypka.py": "19111345d0622e626382291f814e54069b9d5489be29e3fc99167eb8981828c4",
+      "src/jaxpb/records.py": "4037f21d655abb2c3f5b72669c812ce97179294c81d356f9a64482282f942c8c",
+      "src/jaxpb/sor.py": "c4d2796a5907d218a587cf46531bfa04ede2d63228c64327851d45cadf56b99c",
+      "src/jaxpb/titrate.py": "84070647a7060777856c35d879d14f72ebff72dbc9fd2d623874e0b3b99a1598"
+    }
+  },
+  "summary-reader-tests": {
+    "passed": true,
+    "states": 12,
+    "old_new_throughput_equal": true,
+    "resume_written_shards_only": true,
+    "job": "807697"
+  },
+  "unit-tests": {
+    "passed": true,
+    "modes": [
+      "test_api",
+      "test_assemble local",
+      "test_titrate local",
+      "test_records"
+    ]
+  },
+  "required_runs": [
+    "baseline-pallas",
+    "baseline-xla",
+    "baseline-cpu",
+    "A-pallas",
+    "A-xla",
+    "A-cpu",
+    "A-all",
+    "B9-pallas",
+    "B9-xla",
+    "B8-cpu",
+    "B9-all",
+    "C9-pallas",
+    "C9-xla",
+    "C8-cpu",
+    "C9-fresh"
+  ],
+  "pending_runs": [],
+  "historical_compile_reference": {
+    "build_opt1": {
+      "xla": 40,
+      "pallas": 33
+    },
+    "profile2": {
+      "xla": 44,
+      "pallas": 33
+    },
+    "note": "Coverage differs: current matched XLA gate uses 12 states; Pallas full gate uses 104."
+  },
+  "gates": {
+    "pallas_104": true,
+    "pallas_bench20": true,
+    "xla_12": true,
+    "cpu_5": true,
+    "warm_compile_flat": true,
+    "determinism": true,
+    "cpu_unit_tests": true,
+    "edge_tests": true,
+    "final_source_consistent": true,
+    "compute_policy": true,
+    "source_audit": true,
+    "summary_reader_tests": true
+  },
+  "final_source": {
+    "frozen": "opt1-C9-20261121",
+    "cpu_runs": [
+      "B8-cpu",
+      "C8-cpu"
+    ],
+    "gpu_runs": "C9/B9: direct numerical gates on the final source",
+    "cpu_proof": "C8/C9 identical StableHLO for all normal/XL classes; all other solver sources byte-identical"
+  },
+  "intermediate_A_cpu_oom_resolved": true,
+  "changes": {
+    "A": {
+      "functions": [
+        "pb._solve_state",
+        "api.MemTrack",
+        "api._run_shard"
+      ],
+      "changes": [
+        "bounded class promotion",
+        "streamed downstream timing readers",
+        "host spectral radii",
+        "timing-only barriers",
+        "lazy memory tracker",
+        "bounded state timing aggregates"
+      ],
+      "runs": [
+        "A-pallas",
+        "A-xla",
+        "A-cpu",
+        "A-all"
+      ]
+    },
+    "B": {
+      "functions": [
+        "maps.build_cells",
+        "maps._q_one",
+        "maps.maps_batch",
+        "maps.reach_mask_b",
+        "pb._site_layout"
+      ],
+      "changes": [
+        "site-specific CSR ranges",
+        "occupied 32-slot slabs with original candidate ranks",
+        "byte budgets including site groups",
+        "fixed CPU group of 4",
+        "empty padding and skipped cell setup"
+      ],
+      "runs": [
+        "B9-pallas",
+        "B9-xla",
+        "B8-cpu",
+        "B9-all"
+      ]
+    },
+    "cumulative": {
+      "functions": [
+        "pb.coulomb_bc",
+        "pb.face_points",
+        "pb.setup1",
+        "pb.setup2",
+        "pb._solve_state"
+      ],
+      "changes": [
+        "38402 face points",
+        "point-only Coulomb tiles; charge reduction unchanged",
+        "face-only focused interpolation",
+        "finite backend setup variants",
+        "release consumed buffers"
+      ],
+      "runs": [
+        "C9-pallas",
+        "C9-xla",
+        "C8-cpu",
+        "C9-fresh"
+      ]
+    }
+  },
+  "tile_budgets_bytes": {
+    "cpu_query": 67108864,
+    "cpu_reach": 33554432,
+    "gpu_query": 536870912,
+    "gpu_reach": 268435456,
+    "query_estimate_per_candidate": 48,
+    "reach_estimate_per_candidate": 64,
+    "max_query_rows": {
+      "atom": 4096,
+      "probe": 1024,
+      "brute": 65536
+    }
+  },
+  "profile2_baseline": {
+    "tables": {
+      "A40_pallas_20_states": {
+        "prep_load": {
+          "s": 0.0179,
+          "share": 0.0014
+        },
+        "geometry": {
+          "s": 2.0818,
+          "share": 0.1649
+        },
+        "site_probes": {
+          "s": 0.2175,
+          "share": 0.0172
+        },
+        "maps_batch": {
+          "s": 3.4018,
+          "share": 0.2695
+        },
+        "specrad_estimate": {
+          "s": 0.455,
+          "share": 0.036
+        },
+        "solve_setup (setup1+setup2)": {
+          "s": 0.203,
+          "share": 0.0161
+        },
+        "SOR (phase1 coarse+model)": {
+          "s": 2.4236,
+          "share": 0.192
+        },
+        "SOR (phase2 focused)": {
+          "s": 1.7478,
+          "share": 0.1385
+        },
+        "post": {
+          "s": 0.0735,
+          "share": 0.0058
+        },
+        "pb_host_other (layout, dispatch)": {
+          "s": 0.1575,
+          "share": 0.0125
+        },
+        "assembly": {
+          "s": 0.0455,
+          "share": 0.0036
+        },
+        "mc_200k": {
+          "s": 1.7982,
+          "share": 0.1425
+        },
+        "total_with_mc200k": 12.623,
+        "mc_50k_alternative": 0.4569
+      },
+      "A40_pallas_production_split_20_states": {
+        "t_geometry": 2.0676,
+        "t_maps": 3.6243,
+        "t_solves": 4.3603,
+        "t_sor": 4.159,
+        "t_post": 0.1078,
+        "t_total": 10.6084,
+        "t_other": 0.4485,
+        "t_asm": 0.0403,
+        "t_pb": 10.6092
+      },
+      "A40_xla_production_split_20_states": {
+        "t_geometry": 2.0692,
+        "t_maps": 3.6212,
+        "t_solves": 43.2304,
+        "t_sor": 43.0283,
+        "t_post": 0.1125,
+        "t_total": 49.5164,
+        "t_other": 0.4831,
+        "t_asm": 0.0434,
+        "t_pb": 49.5173
+      },
+      "A40_xla_fine_12_states": {
+        "prep_load": {
+          "s": 0.0179,
+          "share": 0.0002
+        },
+        "geometry": {
+          "s": 1.6008,
+          "share": 0.0145
+        },
+        "site_probes": {
+          "s": 0.2044,
+          "share": 0.0019
+        },
+        "maps_batch": {
+          "s": 3.1178,
+          "share": 0.0283
+        },
+        "specrad_estimate": {
+          "s": 0.4362,
+          "share": 0.004
+        },
+        "solve_setup (setup1+setup2)": {
+          "s": 0.1923,
+          "share": 0.0017
+        },
+        "SOR (phase1 coarse+model)": {
+          "s": 21.3295,
+          "share": 0.1934
+        },
+        "SOR (phase2 focused)": {
+          "s": 19.1987,
+          "share": 0.1741
+        },
+        "post": {
+          "s": 0.0669,
+          "share": 0.0006
+        },
+        "pb_host_other (layout, dispatch)": {
+          "s": 0.1591,
+          "share": 0.0014
+        },
+        "assembly": {
+          "s": 0.0355,
+          "share": 0.0003
+        },
+        "mc_200k": {
+          "s": 63.9117,
+          "share": 0.5796
+        },
+        "total_with_mc200k": 110.271,
+        "mc_50k_alternative": 16.2199
+      },
+      "A40_pallas_fine_same_12_states": {
+        "prep_load": {
+          "s": 0.0179,
+          "share": 0.0016
+        },
+        "geometry": {
+          "s": 1.6021,
+          "share": 0.1389
+        },
+        "site_probes": {
+          "s": 0.2057,
+          "share": 0.0178
+        },
+        "maps_batch": {
+          "s": 3.1248,
+          "share": 0.2709
+        },
+        "specrad_estimate": {
+          "s": 0.4302,
+          "share": 0.0373
+        },
+        "solve_setup (setup1+setup2)": {
+          "s": 0.192,
+          "share": 0.0166
+        },
+        "SOR (phase1 coarse+model)": {
+          "s": 2.253,
+          "share": 0.1953
+        },
+        "SOR (phase2 focused)": {
+          "s": 1.6242,
+          "share": 0.1408
+        },
+        "post": {
+          "s": 0.0687,
+          "share": 0.006
+        },
+        "pb_host_other (layout, dispatch)": {
+          "s": 0.1578,
+          "share": 0.0137
+        },
+        "assembly": {
+          "s": 0.0357,
+          "share": 0.0031
+        },
+        "mc_200k": {
+          "s": 1.8246,
+          "share": 0.1582
+        },
+        "total_with_mc200k": 11.537,
+        "mc_50k_alternative": 0.4636
+      },
+      "cpu12_xla_fine_5_states": {
+        "prep_load": {
+          "s": 0.0179,
+          "share": 0.0
+        },
+        "geometry": {
+          "s": 45.5415,
+          "share": 0.0469
+        },
+        "site_probes": {
+          "s": 3.7454,
+          "share": 0.0039
+        },
+        "maps_batch": {
+          "s": 370.0767,
+          "share": 0.3811
+        },
+        "specrad_estimate": {
+          "s": 1.1695,
+          "share": 0.0012
+        },
+        "solve_setup (setup1+setup2)": {
+          "s": 12.8318,
+          "share": 0.0132
+        },
+        "SOR (phase1 coarse+model)": {
+          "s": 202.5449,
+          "share": 0.2086
+        },
+        "SOR (phase2 focused)": {
+          "s": 170.7258,
+          "share": 0.1758
+        },
+        "post": {
+          "s": 1.2759,
+          "share": 0.0013
+        },
+        "pb_host_other (layout, dispatch)": {
+          "s": 1.1047,
+          "share": 0.0011
+        },
+        "assembly": {
+          "s": 0.0826,
+          "share": 0.0001
+        },
+        "mc_200k": {
+          "s": 161.8995,
+          "share": 0.1667
+        },
+        "total_with_mc200k": 971.016,
+        "mc_50k_alternative": 41.079
+      },
+      "A40_pallas_fine_same_5_states": {
+        "prep_load": {
+          "s": 0.0179,
+          "share": 0.0028
+        },
+        "geometry": {
+          "s": 1.3971,
+          "share": 0.2157
+        },
+        "site_probes": {
+          "s": 0.1186,
+          "share": 0.0183
+        },
+        "maps_batch": {
+          "s": 1.6054,
+          "share": 0.2478
+        },
+        "specrad_estimate": {
+          "s": 0.2509,
+          "share": 0.0387
+        },
+        "solve_setup (setup1+setup2)": {
+          "s": 0.1098,
+          "share": 0.0169
+        },
+        "SOR (phase1 coarse+model)": {
+          "s": 1.1857,
+          "share": 0.183
+        },
+        "SOR (phase2 focused)": {
+          "s": 0.8532,
+          "share": 0.1317
+        },
+        "post": {
+          "s": 0.0384,
+          "share": 0.0059
+        },
+        "pb_host_other (layout, dispatch)": {
+          "s": 0.136,
+          "share": 0.021
+        },
+        "assembly": {
+          "s": 0.0296,
+          "share": 0.0046
+        },
+        "mc_200k": {
+          "s": 0.7354,
+          "share": 0.1135
+        },
+        "total_with_mc200k": 6.478,
+        "mc_50k_alternative": 0.187
+      },
+      "note": "prep_load = StateRecord load from the shard (prep_pypka.py CPU prep 18 s/state is upstream, see bench.json); mc_200k = full-occupancy (S=32) bucket cost of each state's Mp bucket"
+    },
+    "memory": {
+      "gpu_compiled_bytes_per_program_GB": {
+        "maps_batch": {
+          "temp": "11.25 (c0) - 11.43 (c3)",
+          "out": 0.13
+        },
+        "geometry_sites": {
+          "temp": 3.69
+        },
+        "sor_solve": {
+          "args": 1.11,
+          "out": 0.54,
+          "temp": 1.12
+        },
+        "setup1": {
+          "out": 1.38,
+          "temp": 0.37
+        },
+        "setup2": {
+          "args": 0.58,
+          "out": 1.38,
+          "temp": 0.68
+        },
+        "post": {
+          "args": 1.11,
+          "temp": 0.84
+        },
+        "geo_probes": {
+          "temp": 0.82
+        },
+        "geo_probes_reuse": {
+          "temp": 0.09
+        },
+        "relfac_terms": {
+          "temp": 0.14
+        },
+        "mc_pallas_Mp1024": {
+          "args": 0.135,
+          "temp": 0.01
+        }
+      },
+      "gpu_stage": {
+        "live_between_stages_GB": 4.5,
+        "process_peak_GB": 16.15,
+        "peak_set_by": "maps (MemTrack: maps raises the peak in c0/c2/c3 to 15.4/15.8/16.15 GB = ~4.5 live + 11.3-11.4 maps temp); setup1/2 +1.4 GB live, SOR +0.5 GB"
+      },
+      "cpu_per_stage_peak_rss_GB": {
+        "maps": "21.2-25.1",
+        "setup1": "16.7-20.6",
+        "sor": "5.8-15.2",
+        "site_probes": "10.0-14.0",
+        "post": "7.0-7.2",
+        "geometry": "1.9-3.9",
+        "specrad": "5.5-5.8 (21 when no free between)",
+        "assembly": "1.6-2.4"
+      },
+      "cpu_compiled_temp_GB": {
+        "maps_batch_B16": 19.99,
+        "setup1": 13.98,
+        "geometry_sites": 8.52,
+        "geo_probes": 2.3,
+        "post": 1.67,
+        "sor_block": 0.51
+      },
+      "cpu_btest_4066_A": {
+        "B4": {
+          "maps_temp_GB": 5.0,
+          "peak_rss_GB": 5.84,
+          "wall_s": 14.2
+        },
+        "B8": {
+          "maps_temp_GB": 9.99,
+          "peak_rss_GB": 11.03,
+          "wall_s": 29.2
+        },
+        "B16": {
+          "maps_temp_GB": 19.99,
+          "peak_rss_GB": 21.0,
+          "wall_s": 69.8
+        }
+      },
+      "cpu_reading": "the 21-25 GB is the maps_batch XLA-CPU temp buffer: 1.25 GB per site, linear in B (5/10/20 GB at B 4/8/16; RSS = temp + ~1 GB), not the fine grids or compile; second is setup1 (14 GB temp on CPU vs 0.37 GB on the A40: the Coulomb boundary [n^3 x QM] per item is not fused on CPU). B=4 is also faster per site on CPU (3.6 vs 4.4 s/site)"
+    }
+  },
+  "comparisons": {
+    "pallas": {
+      "profile2_seconds_per_state": {
+        "geometry": 2.0818,
+        "maps": 3.4018,
+        "setup": 0.203,
+        "sor": 4.1714,
+        "total_pb": 10.7615
+      },
+      "changes": {
+        "A": {
+          "run": "A-pallas",
+          "states": 20,
+          "cumulative_seconds_per_state": {
+            "geometry": 2.05281720678322,
+            "maps": 3.397093905461952,
+            "setup": 0.20085765845142306,
+            "sor": 4.1464801706373695,
+            "total_pb": 10.540456411149353
+          },
+          "incremental_delta_seconds": {
+            "geometry": -0.02898279321677988,
+            "maps": -0.004706094538048156,
+            "setup": -0.0021423415485769537,
+            "sor": -0.024919829362630708,
+            "total_pb": -0.22104358885064634
+          },
+          "delta_vs_profile2_seconds": {
+            "geometry": -0.02898279321677988,
+            "maps": -0.004706094538048156,
+            "setup": -0.0021423415485769537,
+            "sor": -0.024919829362630708,
+            "total_pb": -0.22104358885064634
+          },
+          "ratio_vs_profile2": {
+            "geometry": 0.9860780126732732,
+            "maps": 0.9986165869427809,
+            "setup": 0.9894465933567638,
+            "sor": 0.9940260273858583,
+            "total_pb": 0.9794597789480419
+          }
+        },
+        "B": {
+          "run": "B9-pallas",
+          "states": 20,
+          "cumulative_seconds_per_state": {
+            "geometry": 2.065643984545022,
+            "maps": 5.739033873425797,
+            "setup": 0.20286104758270085,
+            "sor": 4.154035694617778,
+            "total_pb": 12.92464699903503
+          },
+          "incremental_delta_seconds": {
+            "geometry": 0.012826777761802077,
+            "maps": 2.3419399679638446,
+            "setup": 0.0020033891312777885,
+            "sor": 0.007555523980408374,
+            "total_pb": 2.3841905878856764
+          },
+          "delta_vs_profile2_seconds": {
+            "geometry": -0.0161560154549778,
+            "maps": 2.3372338734257965,
+            "setup": -0.0001389524172991652,
+            "sor": -0.017364305382222334,
+            "total_pb": 2.16314699903503
+          },
+          "ratio_vs_profile2": {
+            "geometry": 0.9922394007805851,
+            "maps": 1.6870579908947605,
+            "setup": 0.9993155053335017,
+            "sor": 0.9958372955405326,
+            "total_pb": 1.2010079448994126
+          }
+        },
+        "C": {
+          "run": "C9-pallas",
+          "states": 20,
+          "cumulative_seconds_per_state": {
+            "geometry": 1.9957317996770143,
+            "maps": 5.733350481744855,
+            "setup": 0.09775648391805589,
+            "sor": 4.1566173551604155,
+            "total_pb": 12.744865907775239
+          },
+          "incremental_delta_seconds": {
+            "geometry": -0.06991218486800777,
+            "maps": -0.005683391680941341,
+            "setup": -0.10510456366464496,
+            "sor": 0.0025816605426376427,
+            "total_pb": -0.17978109125979103
+          },
+          "delta_vs_profile2_seconds": {
+            "geometry": -0.08606820032298557,
+            "maps": 2.331550481744855,
+            "setup": -0.10524351608194413,
+            "sor": -0.014782644839584691,
+            "total_pb": 1.983365907775239
+          },
+          "ratio_vs_profile2": {
+            "geometry": 0.9586568352757299,
+            "maps": 1.6853872895951716,
+            "setup": 0.481559034079093,
+            "sor": 0.9964561910055174,
+            "total_pb": 1.1843019939390642
+          }
+        }
+      },
+      "production_reference": {
+        "total_pb": 10.6092,
+        "ratio": 1.2013031998430832
+      }
+    },
+    "xla": {
+      "profile2_seconds_per_state": {
+        "geometry": 1.6008,
+        "maps": 3.1178,
+        "setup": 0.1923,
+        "sor": 40.5282,
+        "total_pb": 46.3057
+      },
+      "changes": {
+        "A": {
+          "run": "A-xla",
+          "states": 12,
+          "cumulative_seconds_per_state": {
+            "geometry": 1.5853408381032448,
+            "maps": 3.1092433113760003,
+            "setup": 0.19249530873882273,
+            "sor": 40.42449173253651,
+            "total_pb": 46.02733010573623
+          },
+          "incremental_delta_seconds": {
+            "geometry": -0.015459161896755225,
+            "maps": -0.008556688623999609,
+            "setup": 0.00019530873882273037,
+            "sor": -0.10370826746348882,
+            "total_pb": -0.27836989426376846
+          },
+          "delta_vs_profile2_seconds": {
+            "geometry": -0.015459161896755225,
+            "maps": -0.008556688623999609,
+            "setup": 0.00019530873882273037,
+            "sor": -0.10370826746348882,
+            "total_pb": -0.27836989426376846
+          },
+          "ratio_vs_profile2": {
+            "geometry": 0.9903428523883339,
+            "maps": 0.9972555363961769,
+            "setup": 1.0010156460677209,
+            "sor": 0.9974410838018098,
+            "total_pb": 0.993988431353726
+          }
+        },
+        "B": {
+          "run": "B9-xla",
+          "states": 12,
+          "cumulative_seconds_per_state": {
+            "geometry": 1.5915811161976308,
+            "maps": 5.323353843064979,
+            "setup": 0.19327084828789037,
+            "sor": 40.42171556890632,
+            "total_pb": 48.255802810114496
+          },
+          "incremental_delta_seconds": {
+            "geometry": 0.006240278094385987,
+            "maps": 2.2141105316889784,
+            "setup": 0.0007755395490676442,
+            "sor": -0.0027761636301875114,
+            "total_pb": 2.2284727043782624
+          },
+          "delta_vs_profile2_seconds": {
+            "geometry": -0.009218883802369238,
+            "maps": 2.205553843064979,
+            "setup": 0.0009708482878903746,
+            "sor": -0.10648443109367633,
+            "total_pb": 1.950102810114494
+          },
+          "ratio_vs_profile2": {
+            "geometry": 0.9942410770849768,
+            "maps": 1.7074070957293537,
+            "setup": 1.0050486130415517,
+            "sor": 0.9973725842476676,
+            "total_pb": 1.0421136665705193
+          }
+        },
+        "C": {
+          "run": "C9-xla",
+          "states": 12,
+          "cumulative_seconds_per_state": {
+            "geometry": 1.5943127867455285,
+            "maps": 5.314467425380523,
+            "setup": 0.10351040509218971,
+            "sor": 40.395229737584785,
+            "total_pb": 48.127313669072464
+          },
+          "incremental_delta_seconds": {
+            "geometry": 0.002731670547897691,
+            "maps": -0.008886417684455417,
+            "setup": -0.08976044319570066,
+            "sor": -0.026485831321537034,
+            "total_pb": -0.12848914104203146
+          },
+          "delta_vs_profile2_seconds": {
+            "geometry": -0.006487213254471547,
+            "maps": 2.1966674253805234,
+            "setup": -0.08878959490781028,
+            "sor": -0.13297026241521337,
+            "total_pb": 1.8216136690724625
+          },
+          "ratio_vs_profile2": {
+            "geometry": 0.9959475179569768,
+            "maps": 1.7045568751621412,
+            "setup": 0.5382756375048867,
+            "sor": 0.996719068144768,
+            "total_pb": 1.0393388647417587
+          }
+        }
+      }
+    },
+    "cpu": {
+      "profile2_seconds_per_state": {
+        "geometry": 45.5415,
+        "maps": 370.0767,
+        "setup": 12.8318,
+        "sor": 373.27070000000003,
+        "total_pb": 807.9115
+      },
+      "changes": {
+        "A": {
+          "run": "A-cpu",
+          "states": 4,
+          "cumulative_seconds_per_state": {
+            "geometry": 28.75013341300655,
+            "maps": 213.26069836097304,
+            "setup": 9.709003048832528,
+            "sor": 231.9456933203037,
+            "total_pb": 488.5641165606794
+          },
+          "incremental_delta_seconds": null,
+          "delta_vs_profile2_seconds": null,
+          "ratio_vs_profile2": null
+        },
+        "B": {
+          "run": "B8-cpu",
+          "states": 5,
+          "cumulative_seconds_per_state": {
+            "geometry": 48.119116603583095,
+            "maps": 378.57479290692135,
+            "setup": 13.289194999914617,
+            "sor": 388.5272319062613,
+            "total_pb": 833.9697541139554
+          },
+          "incremental_delta_seconds": null,
+          "delta_vs_profile2_seconds": {
+            "geometry": 2.5776166035830954,
+            "maps": 8.498092906921329,
+            "setup": 0.45739499991461763,
+            "sor": 15.256531906261273,
+            "total_pb": 26.0582541139554
+          },
+          "ratio_vs_profile2": {
+            "geometry": 1.0565992908354598,
+            "maps": 1.0229630584873928,
+            "setup": 1.0356454277587415,
+            "sor": 1.0408725675662764,
+            "total_pb": 1.0322538472517786
+          }
+        },
+        "C": {
+          "run": "C8-cpu",
+          "states": 5,
+          "cumulative_seconds_per_state": {
+            "geometry": 47.665973368985576,
+            "maps": 375.8877569032367,
+            "setup": 1.5517138589639217,
+            "sor": 378.04985301760024,
+            "total_pb": 808.608478205558
+          },
+          "incremental_delta_seconds": {
+            "geometry": -0.45314323459751904,
+            "maps": -2.687036003684625,
+            "setup": -11.737481140950695,
+            "sor": -10.477378888661065,
+            "total_pb": -25.361275908397488
+          },
+          "delta_vs_profile2_seconds": {
+            "geometry": 2.1244733689855764,
+            "maps": 5.811056903236704,
+            "setup": -11.280086141036078,
+            "sor": 4.779153017600208,
+            "total_pb": 0.6969782055579117
+          },
+          "ratio_vs_profile2": {
+            "geometry": 1.0466491742473476,
+            "maps": 1.0157023041527249,
+            "setup": 0.12092721667762292,
+            "sor": 1.0128034507332084,
+            "total_pb": 1.0008626912793763
+          }
+        }
+      }
+    }
+  },
+  "reverted": [
+    "CPU one-site tail map changed esolvS; retain B=4 arithmetic and skip padding inside query/reach loops."
+  ],
+  "superseded_tuning": [
+    "Conservative GPU query/reach tiles; replaced by fixed 512/256 MiB budgets.",
+    "Unstreamed CSR probe slots; replaced by occupied 32-slot slabs with original candidate ranks."
+  ],
+  "cpu_memory_target": {
+    "target_bytes": 12000000000,
+    "peak": 14078894080,
+    "warm_peak": 14078894080,
+    "full_peak_under_target": false,
+    "warm_peak_under_target": false
+  },
+  "phase2_first": "Colour-compressed XLA SOR; preserve the floating-point addition order and ten-sweep stopping checks.",
+  "per_change_gates": {
+    "A": {
+      "pallas_104": true,
+      "pallas_bench20": true,
+      "xla_12": true,
+      "cpu_5": false,
+      "warm_compile_flat": true
+    },
+    "B": {
+      "pallas_104": true,
+      "pallas_bench20": true,
+      "xla_12": true,
+      "cpu_5": true,
+      "warm_compile_flat": true
+    },
+    "cumulative": {
+      "pallas_104": true,
+      "pallas_bench20": true,
+      "xla_12": true,
+      "cpu_5": true,
+      "warm_compile_flat": true
+    }
+  },
+  "completed_utc": "2026-11-22T00:20:19.202062+00:00",
+  "evidence_archive": {
+    "path": "results/opt1-evidence.tar.gz",
+    "bytes": 1670176,
+    "sha256": "6fe0be34177f805e80a1f340cff56e282092e355d637092182b112c2ba675901"
+  }
+}
