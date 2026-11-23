@@ -244,7 +244,7 @@ def alt_ok(record):
     return bool(np.asarray(np.zeros(2, bool) if ok is None else ok).astype(bool).any())
 
 
-def free_branch(graph, record, n_real, capacity, rsa=True):
+def free_branch(graph, record, n_real, capacity, rsa=True, *, biological_side=None):
     """(paired graph with branch 1 rebuilt from the alt record, None) or (unchanged graph, fallback reason). graph: one
     complex's loader graph (arrays (2, ...) padded to capacity = (n, k, q, s, sk)); node columns = 24 node features
     [+ the 14 backbone-v1 columns when the loader appends the table]."""
@@ -262,10 +262,18 @@ def free_branch(graph, record, n_real, capacity, rsa=True):
     free["neighbors"] = _pad(record["neighbors"], (n, k)).astype(graph["neighbors"].dtype)
     free["edge"] = _pad(record["edge"], (n, k, record["edge"].shape[-1])).astype(graph["edge"].dtype)
     same = record["edge"][..., SAME_CHAIN] > 0.5
+    if biological_side is not None:
+        side=np.asarray(biological_side,np.int8)
+        if side.shape!=(n_real,) or not set(side.tolist())<={0,1}:raise ValueError('Invalid native biological-side map for augmentation')
+        same=side[record['neighbors']]==side[:,None]
     free["edge_mask"] = _pad(record["edge_mask"].astype(bool) & same, (n, k)).astype(graph["edge_mask"].dtype)
     free["switch"] = _pad(record["switch"], (n, k)).astype(graph["switch"].dtype)
     if all(f in record for f in ALT_SITE_FIELDS) and record["site_residue"].shape[0] <= s and record["site_neighbors"].shape[1] <= sk:
         for f in ALT_SITE_FIELDS: free[f] = _pad(record[f], graph[f].shape[1:]).astype(graph[f].dtype)
+        if biological_side is not None:
+            site_side=side[record['site_residue']]
+            site_free=record['site_edge_mask'].astype(bool)&(site_side[record['site_neighbors']]==site_side[:,None])
+            free['site_edge_mask']=_pad(site_free,(s,sk)).astype(graph['site_edge_mask'].dtype)
     rsa_alt = _first(record, RSA_FIELDS)
     if rsa and "rsa_residue" in free and rsa_alt is not None:  # anm-edge-v1 E: rsa=False keeps the crystal RSA
         rsa = np.full(free["rsa_residue"].shape, -1.0, np.float32); rsa[:n_real] = np.nan_to_num(rsa_alt.astype(np.float32), nan=-1.0)
@@ -273,7 +281,7 @@ def free_branch(graph, record, n_real, capacity, rsa=True):
     return {name: np.stack((bound[name], free[name])) for name in graph}, None
 
 
-def attach_alt(graph, config, cid, n_real, capacity):
+def attach_alt(graph, config, cid, n_real, capacity, *, role_guard=None, biological_side=None):
     """Loader hook: choose the free branch for this visit; adds use_alt (2,) and, with config.keep_crystal, the crystal
     free branch's XTAL_FIELDS as xtal_<field> (no branch axis)."""
     use = False; used = -1
@@ -285,7 +293,9 @@ def attach_alt(graph, config, cid, n_real, capacity):
                 idx = (first + j) % m; store, suffix, label = config.entries[idx]; record = lookup(store, cid, suffix)
                 if record is None: why = "no_record"
                 elif not alt_ok(record): why = "not_ok"
-                else: graph, why = free_branch(graph, record, n_real, capacity, getattr(config, "alt_rsa", True))
+                else:
+                    why=role_guard(label,cid,suffix,record) if role_guard is not None else None
+                    if why is None:graph,why=free_branch(graph,record,n_real,capacity,getattr(config,"alt_rsa",True),biological_side=biological_side)
                 if j == 0: reason = why; config.count_source(label, "chosen")
                 if why is None:
                     use = True; used = idx; config.count_source(label, "used" if j == 0 else "used_as_fallback")

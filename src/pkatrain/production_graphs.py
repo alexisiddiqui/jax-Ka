@@ -321,9 +321,9 @@ def build_one(root, dataset, cid, split):
 ZSTD_LEVEL = 3
 
 
-def encode(arrays, fields):
+def encode(arrays, fields, *, level=None):
     import zstandard
-    return zstandard.ZstdCompressor(level=ZSTD_LEVEL).compress(b"".join(np.ascontiguousarray(arrays[f]).tobytes() for f in fields))
+    return zstandard.ZstdCompressor(level=ZSTD_LEVEL if level is None else level).compress(b"".join(np.ascontiguousarray(arrays[f]).tobytes() for f in fields))
 
 
 def decode(blob, fields, dtypes, dims):
@@ -375,11 +375,12 @@ def build_shard(root, dataset, task, tasks):
 
 
 # ---------------------------------------------------------------- packed store
-def _write_store(out, dataset, records, dtypes, blobs, skipped, workers):
+def _write_store(out, dataset, records, dtypes, blobs, skipped, workers, *, fields=None, data_kind=None, zstd_level=None):
     """records in final order; blobs yields each record's compressed bytes in that order. Writes store-v2 into a
     pending directory, verifies every record (decompress + arrays_sha256) in parallel, then installs it."""
     from concurrent.futures import ThreadPoolExecutor
-    fields = FIELDS[dataset]; destination = out / "store-v2"
+    fields = FIELDS[dataset] if fields is None else tuple(fields); destination = out / "store-v2"
+    level = ZSTD_LEVEL if zstd_level is None else zstd_level
     pending = out / f".store-v2.pending-{os.getpid()}"; pending.mkdir()
     offsets = np.zeros(len(records) + 1, np.int64)
     with open(pending / "records.bin", "wb") as handle:
@@ -390,12 +391,12 @@ def _write_store(out, dataset, records, dtypes, blobs, skipped, workers):
     np.savez(pending / "index.npz", ids=np.asarray([r["id"] for r in records]),
              dims=np.asarray([[r[d] for d in DIMS] for r in records], np.int32), offsets=offsets)
     atomic_json(pending / "records.json", [{k: v for k, v in r.items() if k != "blob"} for r in records])
-    atomic_json(pending / "metadata.json", {"version": VERSION, "format": "zstd-records-v1", "zstd_level": ZSTD_LEVEL,
+    atomic_json(pending / "metadata.json", {"version": VERSION, "format": "zstd-records-v1", "zstd_level": level,
         "dataset": dataset, "fields": list(fields), "dtypes": dtypes, "dims": list(DIMS), "structures": len(records),
         "skipped": sorted(skipped.values(), key=lambda r: r["id"]), "ids_sha256": digest(out / "ids.json"),
         "sites": int(sum(r["q"] for r in records)), "raw_bytes": int(sum(sum(int(np.prod(shape(f, *(r[d] for d in DIMS)))) * np.dtype(dtypes[f]).itemsize
                                                                             for f in fields) for r in records)),
-        "compressed_bytes": int(offsets[-1])})
+        "compressed_bytes": int(offsets[-1]), **({'data_kind': data_kind} if data_kind is not None else {})})
     store = ProductionStore(pending, verify=False)
     def check(record):
         return None if arrays_digest(store.raw(record["id"]), fields) == record["arrays_sha256"] else record["id"]

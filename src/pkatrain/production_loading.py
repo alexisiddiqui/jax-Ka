@@ -57,13 +57,45 @@ def _pool(root, dataset):
     with open(path) as handle: return {row["id"]: row for row in csv.DictReader(handle, delimiter="\t")}, path
 
 
-def build_manifest(root, dataset, policy=PRODUCTION, workers=8):
-    root = Path(root); out = output(root, dataset); store_path = out / "store-v2"; store = ProductionStore(store_path)
-    pool, pool_path = _pool(root, dataset) if dataset != "benchmark-val" else ({}, None); records = []
+def manifest_kind(manifest):
+    """Tensor capability is separate from catalogue/source identity."""
+    kind = manifest.get('data_kind')
+    if kind is None:
+        kind = {'pinder': 'paired', 'pkpdb': 'site_only', 'benchmark-val': 'site_only'}.get(manifest['dataset'])
+    if kind not in {'paired', 'site_only'}:
+        raise ValueError('Source must declare paired or site_only data_kind: ' + manifest['dataset'])
+    return kind
+
+
+def build_manifest(root, dataset, policy=PRODUCTION, workers=8, *, pool_path=None, data_kind=None, record_provenance=None):
+    root = Path(root); out = output(root, dataset); store_path = out / "store-v2"
+    aware = data_kind is not None or record_provenance is not None or pool_path is not None
+    kind = manifest_kind(dict(dataset=dataset, **({'data_kind': data_kind} if data_kind is not None else {})))
+    if aware and (pool_path is None or record_provenance is None):
+        raise ValueError('Source-aware manifests require an explicit pool and record provenance')
+    store = ProductionStore(store_path)
+    if aware and store.metadata.get('dataset') != dataset:
+        store.close(); raise ValueError('Store catalogue identity differs from requested manifest source')
+    if aware and store.metadata.get('data_kind') != kind:
+        store.close(); raise ValueError('Store tensor capability differs from requested manifest')
+    if pool_path is not None:
+        pool_path = Path(pool_path)
+        with pool_path.open() as handle: pool_rows = list(csv.DictReader(handle, delimiter='\t'))
+        pool = {r['id']: r for r in pool_rows}
+        if len(pool) != len(pool_rows):
+            store.close(); raise ValueError('Duplicate training IDs in source-aware pool')
+        train_ids = {r['id'] for r in read(store_path / 'records.json') if r['split'] == 'train'}
+        if set(pool) != train_ids:
+            store.close(); raise ValueError('Source-aware pool must cover exactly the training records')
+        if any(not np.isfinite(float(r['min_fraction'])) or not 0 <= float(r['min_fraction']) <= 1 for r in pool_rows):
+            store.close(); raise ValueError('Invalid nested training-pool fraction')
+    else:
+        pool, pool_path = _pool(root, dataset) if dataset != "benchmark-val" else ({}, None)
+    records = []
     def weights(cid):
         raw = store.raw(cid); return float(np.mean(raw["w_burial"])), float(np.mean(raw["w_interface"]))
     means = {}
-    if dataset == "pinder":
+    if kind == "paired":
         ids = [cid for cid in store.ids]
         with ThreadPoolExecutor(workers) as executor: means = dict(zip(ids, executor.map(weights, ids)))
     for row in read(store_path / "records.json"):
@@ -72,14 +104,33 @@ def build_manifest(root, dataset, policy=PRODUCTION, workers=8):
         if row["split"] == "train":
             if row["id"] not in pool: raise AssertionError((row["id"], f"training record not in {pool_path.name}"))
             record["min_fraction"] = float(pool[row["id"]]["min_fraction"])
-        if dataset == "pinder": record["w_burial_mean"], record["w_interface_mean"] = means[row["id"]]
+        if kind == "paired": record["w_burial_mean"], record["w_interface_mean"] = means[row["id"]]
         else: record["train_sites"], record["eval_sites"] = row.get("train_sites"), row.get("eval_sites")
+        if aware:
+            if row['id'] not in record_provenance:
+                store.close(); raise ValueError('Missing source record provenance: ' + row['id'])
+            provenance = record_provenance[row['id']]
+            required = {'source', 'source_native_id', 'native_source_split', 'native_component', 'operational_role', 'input_scope_id'}
+            if not required <= provenance.keys() or provenance['source'] != dataset:
+                store.close(); raise ValueError('Missing or inconsistent source provenance')
+            if dataset == 'sabdab' and {'train': 'train', 'test': 'validation'}.get(provenance['native_source_split']) != provenance['operational_role']:
+                store.close(); raise ValueError('SAbDab operational role contradicts its published split')
+            expected = {'train': 'train', 'validation': 'val'}.get(provenance['operational_role'])
+            if expected != row['split']:
+                store.close(); raise ValueError('Store split differs from operational role')
+            if set(provenance) & set(record):
+                store.close(); raise ValueError('Provenance must not overwrite graph dimensions, split or sampling fields')
+            record.update(provenance)
         records.append(record)
     store.close()
     manifest = {"version": VERSION, "dataset": dataset, "store": str(store_path),
                 "store_verification_sha256": digest(store_path / "verification.json"), "pool": str(pool_path) if pool_path else None,
                 "pool_sha256": digest(pool_path) if pool_path else None, "bucket_policy": policy.to_json(), "capacities": policy.capacities(records),
                 "records": records, "test_data_included": False}
+    if aware:
+        if set(record_provenance) != {r['id'] for r in records}:
+            raise ValueError('Source provenance does not cover exactly the store records')
+        manifest.update(source_manifest_schema=1, data_kind=kind)
     atomic_json(out / MANIFEST, manifest)
     return manifest
 
@@ -151,7 +202,20 @@ class _Source:
         self.policy = BucketPolicy.from_json(manifest["bucket_policy"])
         self.store = ProductionStore(store_path or os.environ.get(f"PKATRAIN_{manifest['dataset'].upper().replace('-', '_')}_STORE") or manifest["store"])
         if digest(self.store.path / "verification.json") != manifest["store_verification_sha256"]: raise AssertionError("store differs from manifest")
+        if 'data_kind' in manifest:
+            if self.store.metadata.get('dataset') != manifest['dataset']:
+                self.store.close(); raise ValueError('Store source identity differs from manifest')
+            from .production_native import declared_store_kind
+            if declared_store_kind(manifest,self.store) != manifest_kind(manifest):
+                self.store.close(); raise ValueError('Store tensor capability differs from manifest')
+            if manifest_kind(manifest) == 'paired':
+                from .production_graphs import FIELDS
+                if set(self.store.fields) != set(FIELDS['pinder']):
+                    self.store.close(); raise ValueError('Paired source has incompatible graph fields')
         self.by_id = {row["id"]: row for row in manifest["records"]}
+        if manifest.get('record_overrides'):
+            from .production_native import PatchedStore
+            self.store=PatchedStore(self.store,manifest['record_overrides'],self.by_id,manifest['dataset'])
         self.pool = ThreadPoolExecutor(max_workers=self.config.workers, thread_name_prefix=f"{manifest['dataset']}-assembly")
 
     def _bucket(self, ids):
@@ -194,7 +258,10 @@ class _Source:
     def _alt(self, graph, cid, capacity):
         if getattr(self, "alt", None) is None: return graph
         from .production_alt import attach_alt
-        return attach_alt(graph, self.alt, cid, self.by_id[cid]["n"], capacity)
+        from .production_native import augmentation_guard
+        return attach_alt(graph, self.alt, cid, self.by_id[cid]["n"], capacity,
+            role_guard=augmentation_guard(self.manifest,self.by_id[cid]),
+            biological_side=self.by_id[cid].get('residue_side') if 'augmentation_role_policy' in self.manifest else None)
 
     def _spread(self, graph):
         if not self.spread: return graph
@@ -210,7 +277,8 @@ class _Source:
     def provenance(self):
         return {"source": self.__class__.__name__, "store": str(self.store.path),
                 "workers": self.config.workers, "buckets": self.policy.to_json(), "spread_padding": self.spread,
-                **({"sidechains_verification_sha256": self.sidechains.verification_sha256} if self.sidechains is not None else {})}
+                **({"sidechains_verification_sha256": self.sidechains.verification_sha256} if self.sidechains is not None else {}),
+                **({'dataset': self.manifest['dataset'], 'data_kind': manifest_kind(self.manifest)} if 'data_kind' in self.manifest else {})}
 
 
 class PinderSource(_Source):
@@ -228,6 +296,14 @@ class PinderSource(_Source):
         items = list(self.pool.map(one, rows))
         # clear: targets(1), mask(2), burial(3), interface(4); graphs/metadata stay as copies of a real structure
         return _stack(items, self.policy.batch_size(bucket), clear=(1, 2, 3, 4))
+
+
+class PairedSource(PinderSource):
+    """The existing paired tensor loader with an explicit native source identity."""
+    def __init__(self, manifest, *args, **kwargs):
+        if manifest_kind(manifest) != 'paired':
+            raise ValueError('PairedSource requires paired data')
+        super().__init__(manifest, *args, **kwargs)
 
 
 class AuxPinderSource(PinderSource):
@@ -280,6 +356,14 @@ class PkpdbSource(_Source):
         rows, bucket, capacity = self._bucket(ids)
         items = list(self.pool.map(lambda row: self._one(row, capacity), rows))
         return _stack(items, self.policy.batch_size(bucket), clear=(1, 2, 3) if self.weights else (1, 2))
+
+
+def source_from_manifest(manifest, **kwargs):
+    """Build a source without encoding SAbDab/VHH records as PINDER entries."""
+    if manifest_kind(manifest) == 'paired':
+        cls = PinderSource if manifest['dataset'] == 'pinder' else PairedSource
+        return cls(manifest, **kwargs)
+    return PkpdbSource(manifest, **kwargs)
 
 
 # ---------------------------------------------------------------- checks
