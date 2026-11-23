@@ -158,6 +158,16 @@ def export_native(runtime,item,path,*,surface_policy=None):
             source_chain_label=labels[item['chain_index']]['chain']
             if item.get('source_chain_label',source_chain_label)!=source_chain_label:
                 raise ValueError('pKPDB source chain label differs from pinned cohort')
+    elif item['dataset']=='sabdab':
+        from pkabench.sabdab_units import load_prepared
+        topology,metadata=load_prepared(item['prepared_unit'])
+        canonical=np.asarray([i for i,k in enumerate(topology.keys)
+            if item['state']=='AB' or metadata['side_by_chain'][k.chain]==item['state']],np.int32)
+        if canonical.tolist()!=item['canonical_residue_ids'] or not len(canonical):
+            raise ValueError('SAbDab biological-partner residue map changed')
+        bb=topology.backbone[canonical];chain=topology.chain_index[canonical];identity=topology.native_index[canonical]
+        atoms=[{str(a.atom_name):a.coord for a in topology.residue(int(i))
+            if str(a.element).upper() not in ('H','D')} for i in canonical]
     else:
         from jaxpropka.topology import load_topology
         from biotite.structure.io import pdbx
@@ -303,6 +313,7 @@ def main():
     p.add_argument('--v5-antibody-root',type=Path,help='v5 pool root: mandatory Ab/Ag partner assemblies, no per-chain expansion')
     p.add_argument('--pkpdb-abag-inventory',type=Path,help='pinned pKPDB Ab/Ag assembly inventory; all chains of each partner stay together')
     p.add_argument('--native-unit-inventory',type=Path,help='source-pinned pKPDB recovery units, including intact antibody-only assemblies')
+    p.add_argument('--sabdab-native-inventory',type=Path,help='pinned native SAbDab assemblies; joint Ab, joint Ag and bound surfaces')
     p.add_argument('--runtime',type=Path,required=True);p.add_argument('--masif',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True);p.add_argument('--workers',type=int,default=8);p.add_argument('--smoke',action='store_true')
     p.add_argument('--checkpoint',type=Path,required=True,help='validated TensorFlow checkpoint prefix')
@@ -310,7 +321,7 @@ def main():
     p.add_argument('--paper-runtime',type=Path);p.add_argument('--matlab',type=Path,default=Path(os.environ.get('MATLAB_BIN','/usr/local/MATLAB/R2021b/bin/matlab')))
     p.add_argument('--batch-size',type=int,default=16);p.add_argument('--resume',action='store_true');p.add_argument('--full',action='store_true')
     p.add_argument('--external-command-timeout',type=int,default=1800,help='seconds per external tool; larger values require a dedicated resource allocation')
-    p.add_argument('--dataset',choices=['all','pkpdb','pinder'],default='all');p.add_argument('--split',choices=['all','train','val'],default='all')
+    p.add_argument('--dataset',choices=['all','pkpdb','pinder','sabdab'],default='all');p.add_argument('--split',choices=['all','train','val'],default='all')
     p.add_argument('--separate-chains',action='store_true');p.add_argument('--whole-assemblies',dest='separate_chains',action='store_false')
     p.add_argument('--include-bound',action='store_true');p.add_argument('--shards',type=int,default=1);p.add_argument('--shard-index',type=int,default=0)
     p.add_argument('--gpu-python',type=Path,help='launch one local persistent GPU consumer using this Python')
@@ -323,8 +334,10 @@ def main():
     args=p.parse_args();cpus=int(os.environ['SLURM_CPUS_PER_TASK']);require_compute(threads=cpus,allow_comp1400=True)
     from masif_surface_quality import SURFACE_POLICY
     args.surface_policy=SURFACE_POLICY if args.preprocessing=='paper' else None
-    if sum(bool(x) for x in [args.coordinates,args.v5_antibody_root,args.pkpdb_abag_inventory,args.native_unit_inventory])!=1:
+    if sum(bool(x) for x in [args.coordinates,args.v5_antibody_root,args.pkpdb_abag_inventory,args.native_unit_inventory,args.sabdab_native_inventory])!=1:
         raise ValueError('choose coordinate inventory, v5 PINDER antibody pool, or pKPDB Ab/Ag inventory')
+    if args.sabdab_native_inventory and (args.dataset not in ('all','sabdab') or args.separate_chains or args.cohort_file or args.preprocessing!='paper'):
+        raise ValueError('SAbDab native inventory requires paper preprocessing and complete biological assemblies')
     if (args.v5_antibody_root or args.pkpdb_abag_inventory) and (args.separate_chains or args.include_bound or args.cohort_file):
         raise ValueError('v5 antibody annotations require complete separate Ab/Ag partner assemblies')
     if args.v5_antibody_root and args.dataset=='pkpdb' or args.pkpdb_abag_inventory and args.dataset=='pinder':
@@ -347,7 +360,12 @@ def main():
         verify(args.paper_runtime,args.checkpoint);args.paper_runtime_sha256=digest(args.paper_runtime/'manifest.json')
         backend=paper_worker;profile=PROFILE
     args.output.mkdir(parents=True,exist_ok=args.resume);started=time.monotonic()
-    if args.native_unit_inventory:
+    if args.sabdab_native_inventory:
+        from pkabench.sabdab_units import surface_inventory
+        units,manifest=surface_inventory(args.sabdab_native_inventory)
+        units=[u for u in units if args.split=='all' or u['split']==args.split]
+        coordinate_sha=manifest['inventory_sha256']
+    elif args.native_unit_inventory:
         from masif_pkpdb_recovery import load_inventory
         units,manifest=load_inventory(args.native_unit_inventory,args.runtime,args.split)
         coordinate_sha=manifest['inventory_sha256']
@@ -380,7 +398,7 @@ def main():
     sample_metadata=dict(parents=sample,population=dict(Counter(r['family'] for r in units)),
         coordinate_manifest_sha256=coordinate_sha,source=manifest.get('source',f'native {args.dataset}, split={args.split}'),
         unit_policy=manifest.get('unit_policy','coordinate-inventory-v1'),surface_policy=args.surface_policy,
-        source_inventory=manifest if args.v5_antibody_root or args.pkpdb_abag_inventory or args.native_unit_inventory else None,
+        source_inventory=manifest if args.v5_antibody_root or args.pkpdb_abag_inventory or args.native_unit_inventory or args.sabdab_native_inventory else None,
         checkpoint_sha256=args.checkpoint_sha256,preprocessing_profile=profile,
         paper_runtime_sha256=getattr(args,'paper_runtime_sha256',None),workers=args.workers,batch_size=args.batch_size,
         builder_sha256={name:digest(Path(__file__).with_name(name)) for name in
