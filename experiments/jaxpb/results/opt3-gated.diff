@@ -1,0 +1,293 @@
+diff --git a/src/jaxpb/api.py b/src/jaxpb/api.py
+index a3cb24e..a668ee1 100644
+--- a/src/jaxpb/api.py
++++ b/src/jaxpb/api.py
+@@ -73,7 +73,7 @@ TAIL = dict(pairs=(2,), curves=(RC.NPH,), sweeps=(3,), maxchange=(3,), rho=(2,))
+ @dataclass(frozen=True)
+ class Config:
+     pb_mode: str = "delphi"              # only "delphi" has ground truth (M7 adds "converged")
+-    backend: str = "auto"                # SOR + MC kernels: "auto" (Pallas on a Triton GPU, else XLA) | "pallas" | "xla"
++    backend: str = "auto"                # PB auto/Pallas/XLA; auto MC uses gated CPU or GPU kernels; explicit XLA keeps ref MC
+     mc_sweeps: int = 200_000
+     ph_grid: tuple = tuple(T.PH)         # PyPKA's 73 points -2..16 (fixed: titrate's pH table)
+     seed: int = 1
+@@ -119,7 +119,7 @@ def pb_backend(cfg: Config) -> str:
+ 
+ def mc_backend(cfg: Config) -> str:
+     if cfg.backend == "auto":
+-        return "pallas" if T.pallas_available() else "ref"
++        return T.resolve_backend()
+     return "pallas" if cfg.backend == "pallas" else "ref"
+ 
+ 
+diff --git a/src/jaxpb/titrate.py b/src/jaxpb/titrate.py
+index 9acb690..840afcf 100644
+--- a/src/jaxpb/titrate.py
++++ b/src/jaxpb/titrate.py
+@@ -12,8 +12,9 @@ BLOCK sweeps, counter-hash RNG). Changes are outside the chain function only:
+   * the number of MC blocks is a per-state ARGUMENT (meta[:,2]), so one executable per Mp serves every sweep count;
+   * u = ln10*pH*occ + g is formed inside the jit from a host-computed f32 pH table (bitwise equal to v2's numpy u:
+     the product with occ in {0,1} is exact, so FMA contraction cannot change it).
+-Two backends with identical RNG streams: "ref" (pure XLA, vmapped, lockstep) and "pallas" (one Triton kernel, one
+-program per chain). Counts are bitwise reproducible across buckets (padding adds exact zeros only).
++Three backends with identical RNG streams: "ref" (pure XLA, vmapped, lockstep), "pallas" (one Triton kernel, one
++program per chain), and "cpu" (scalar XLA chains on bounded host threads). The CPU fast path is gated against the
++reference; unvalidated buckets, site cardinalities and runtimes retain mc_ref.
+ 
+ Pure functions: every jitted function is module level; shapes come from the arguments (bucket tables), no closures over
+ arrays. Host-side helpers are numpy.
+@@ -21,6 +22,7 @@ arrays. Host-side helpers are numpy.
+ from __future__ import annotations
+ 
+ import itertools
++from functools import lru_cache
+ import math
+ import time
+ 
+@@ -186,6 +188,151 @@ def chain(acc, key, Mp, Np, mcblocks):
+     return cnt
+ 
+ 
++# ------------------------------------------------------------------ scalar CPU MC
++@lru_cache(maxsize=1)
++def cpu_available():
++    """The scalar ref-tree lowering has been gated on this CPU/XLA runtime.
++
++    Other runtimes retain mc_ref, rather than assuming its floating reduction
++    tree is portable. No probe compilation or per-state executable is needed.
++    """
++    import os
++    import platform
++    from pathlib import Path
++
++    if jax.__version__ != '0.11.1' or platform.system() != 'Linux' or platform.machine() != 'x86_64':
++        return False
++    if any(x in os.environ.get('XLA_FLAGS', '') for x in ('xla_cpu_prefer_vector_width', 'xla_cpu_enable_fast_math')):
++        return False
++    try:
++        return 'avx2' in Path('/proc/cpuinfo').read_text().split()
++    except OSError:
++        return False
++
++
++def _cpu_pair_energy(E, na, oa, nb, ob):
++    """Prune the validated CPU ref tree for two sites of at most eight states.
++
++    On the validated CPU runtime, each SIMD lane sees at most two nonzeros
++    from sites of <=8 microstates, so its accumulation reduces to one add.
++    Halves folding visits leaves in bit-reversed index order. Sorting four
++    leaves by that order and their common prefixes recovers its three-add
++    tree, including missing (zero) subtrees. A scalar jnp.sum lowers to a
++    different tree on CPU and can flip rare acceptances at 200k sweeps.
++    Same-site proposals cancel inside their original cell before reduction.
++    """
++    zero = jnp.float32(0)
++    values = jnp.stack((jnp.where(na == oa, zero, E[na]), jnp.where(na == oa, zero, -E[oa]),
++                        jnp.where(nb == ob, zero, E[nb]), jnp.where(nb == ob, zero, -E[ob])))
++    rank = jnp.stack((na, oa, nb, ob)).astype(jnp.uint32)
++    for shift, mask in ((1, 0x55555555), (2, 0x33333333), (4, 0x0f0f0f0f), (8, 0x00ff00ff)):
++        rank = ((rank >> shift) & jnp.uint32(mask)) | ((rank & jnp.uint32(mask)) << shift)
++    rank = (rank >> 16) | (rank << 16)
++    def swap(ka, va, kb, vb):
++        flip = ka > kb
++        return jnp.where(flip, kb, ka), jnp.where(flip, vb, va), jnp.where(flip, ka, kb), jnp.where(flip, va, vb)
++    k0, k1, k2, k3 = rank[0], rank[1], rank[2], rank[3]
++    a, b, c, d = values[0], values[1], values[2], values[3]
++    k0, a, k1, b = swap(k0, a, k1, b)
++    k2, c, k3, d = swap(k2, c, k3, d)
++    k0, a, k2, c = swap(k0, a, k2, c)
++    k1, b, k3, d = swap(k1, b, k3, d)
++    k1, b, k2, c = swap(k1, b, k2, c)
++    ab = lax.optimization_barrier(a + b)
++    bc = lax.optimization_barrier(b + c)
++    cd = lax.optimization_barrier(c + d)
++    l01 = lax.clz(k0 ^ k1); l12 = lax.clz(k1 ^ k2); l23 = lax.clz(k2 ^ k3)
++
++    def first(_):
++        tail = lax.cond(l12 < l23, lambda _: lax.optimization_barrier(b + cd),
++                        lambda _: lax.optimization_barrier(bc + d), None)
++        return a + tail
++
++    def last(_):
++        head = lax.cond(l01 < l12, lambda _: lax.optimization_barrier(a + bc),
++                        lambda _: lax.optimization_barrier(ab + c), None)
++        return head + d
++
++    return lax.cond(l12 < jnp.minimum(l01, l23), lambda _: ab + cd,
++                    lambda _: lax.cond(l01 < l23, first, last, None), None)
++
++def _chain_cpu(acc, key, Mp, Np, mcblocks):
++    """Scalar CPU chain; reproduce the reference pair tree and f32 update order.
++
++    Site and pair loops stop at the real n/P. Row updates stay bucket-sized for
++    SIMD and a fixed executable shape; padded entries remain exact zeros.
++    This function must never be vmapped: rejection must skip the row updates.
++    """
++    idx = lax.broadcasted_iota(jnp.int32, (Mp,), 0)
++    n, P = acc['n'], acc['P']
++    one, zero = jnp.float32(1.0), jnp.float32(0.0)
++
++    def onehot(m):
++        return jnp.where(idx == m, one, zero)
++
++    def cur_of(curv, i):
++        return curv[i]
++
++    def rebuild(curv):
++        def body(i, c):
++            E, X = c
++            ci = cur_of(curv, i)
++            return E + acc['row'](ci), X + onehot(ci)
++        return lax.fori_loop(0, n, body, (acc['u'], jnp.zeros((Mp,), jnp.float32)))
++
++    def site_move(i, c):
++        E, X, curv, ctr = c
++        st = acc['start'](i); k = acc['nst'](i)
++        oc = cur_of(curv, i)
++        r1 = urand(key, ctr); r2 = urand(key, ctr + jnp.uint32(1))
++        nw = st + jnp.minimum((r1 * k.astype(jnp.float32)).astype(jnp.int32), k - 1)
++        dU = E[nw] - E[oc]
++        ok = accept(dU, r2) & (nw != oc)
++
++        def upd(c2):
++            E, X, curv = c2
++            return E + (acc['row'](nw) - acc['row'](oc)), X + (onehot(nw) - onehot(oc)), curv.at[i].set(nw)
++        E, X, curv = lax.cond(ok, upd, lambda c2: c2, (E, X, curv))
++        return E, X, curv, ctr + jnp.uint32(2)
++
++    def pair_move(p, c):
++        E, X, curv, ctr = c
++        a = acc['pa'](p); b = acc['pb'](p)
++        oa = cur_of(curv, a); ob = cur_of(curv, b)
++        r1 = urand(key, ctr); r2 = urand(key, ctr + jnp.uint32(1)); r3 = urand(key, ctr + jnp.uint32(2))
++        ka = acc['nst'](a); kb = acc['nst'](b)
++        na = acc['start'](a) + jnp.minimum((r1 * ka.astype(jnp.float32)).astype(jnp.int32), ka - 1)
++        nb = acc['start'](b) + jnp.minimum((r2 * kb.astype(jnp.float32)).astype(jnp.int32), kb - 1)
++        dU = _cpu_pair_energy(E, na, oa, nb, ob)
++        dU = dU + acc['w'](na, nb) - acc['w'](na, ob) - acc['w'](oa, nb) + acc['w'](oa, ob)
++        ok = accept(dU, r3) & ((na != oa) | (nb != ob))
++
++        def upd(c2):
++            E, X, curv = c2
++            E = E + ((acc['row'](na) - acc['row'](oa)) + (acc['row'](nb) - acc['row'](ob)))
++            X = X + ((onehot(na) - onehot(oa)) + (onehot(nb) - onehot(ob)))
++            curv = curv.at[a].set(na).at[b].set(nb)
++            return E, X, curv
++        E, X, curv = lax.cond(ok, upd, lambda c2: c2, (E, X, curv))
++        return E, X, curv, ctr + jnp.uint32(3)
++
++    def block(b, c):
++        curv, cnt, ctr = c
++        E, X = rebuild(curv)
++        flag = jnp.where(b > 0, one, zero)
++
++        def sweep(t, c3):
++            E, X, curv, cnt, ctr = c3
++            E, X, curv, ctr = lax.fori_loop(0, n, site_move, (E, X, curv, ctr))
++            E, X, curv, ctr = lax.fori_loop(0, P, pair_move, (E, X, curv, ctr))
++            return E, X, curv, cnt + flag * X, ctr
++        E, X, curv, cnt, ctr = lax.fori_loop(0, BLOCK, sweep, (E, X, curv, cnt, ctr))
++        return curv, cnt, ctr
++    curv0 = acc['start_vec']
++    _, cnt, _ = lax.fori_loop(0, 1 + mcblocks, block, (curv0, jnp.zeros((Mp,), jnp.float32), jnp.uint32(0)))
++    return cnt
++
++
+ # ------------------------------------------------------------------ jitted MC entry points (module level, argument-pure)
+ def _u(ph_term, g, occ):
+     """u[s, j, m] = ln10*pH_j*occ + g (f32; exact product since occ in {0,1})."""
+@@ -207,6 +354,53 @@ def mc_ref(ph_term, g, occ, W, start, nst, pa, pb, meta, keys):
+     return f(W, u, start, nst, pa, pb, meta, keys)
+ 
+ 
++@jax.jit
++def _mc_cpu_chain(ph_term, g, occ, W, start, nst, pa, pb, meta, key):
++    """One pH chain, one fixed Mp/Np/Pp executable; all loop bounds are data."""
++    acc = dict(row=lambda r: W[r], w=lambda a, b: W[a, b], start=lambda i: start[i], nst=lambda i: nst[i],
++               pa=lambda p: pa[p], pb=lambda p: pb[p], u=ph_term * occ + g, start_vec=start, n=meta[0], P=meta[1])
++    return _chain_cpu(acc, key.astype(jnp.uint32), g.shape[0], start.shape[0], meta[2])
++
++
++def mc_cpu(ph_term, g, occ, W, start, nst, pa, pb, meta, keys):
++    """Run independent scalar chains on bounded host threads, sharing each state's W.
++
++    No per-state shapes, broadcast W copies, or padded-chain execution. At most
++    12 workers and S*73 output rows are live. The first chain compiles before
++    threads start, avoiding concurrent compilation of the same bucket.
++    """
++    import os
++    from concurrent.futures import ThreadPoolExecutor
++
++    if jax.default_backend() != 'cpu':
++        raise ValueError("backend='cpu' requires the CPU JAX platform")
++    ph, meta, keys = np.asarray(ph_term), np.asarray(meta), np.asarray(keys)
++    arrays = [np.asarray(x) for x in (g, occ, W, start, nst, pa, pb)]
++    tasks = [(i, j) for i in range(len(g)) if meta[i, 2] >= 0 for j in range(len(ph))]
++    out = np.zeros((len(g), len(ph), W.shape[-1]), np.float32)
++    if not tasks:
++        return out
++    # Preserve reference arithmetic outside the measured sparse-tree domain.
++    # These branches select between fixed bucket executables, not state shapes.
++    if (W.shape[-1] not in (64, 128, 256, 512, 1024) or len(ph) != NPH
++            or np.max(arrays[4], initial=0) > 8 or not cpu_available()):
++        return np.asarray(mc_ref(ph_term, g, occ, W, start, nst, pa, pb, meta, keys))
++    shared = {i: tuple(jax.device_put(x[i]) for x in arrays) + (jax.device_put(meta[i]),)
++              for i in range(len(g)) if meta[i, 2] >= 0}
++
++    def run(ij):
++        i, j = ij
++        return i, j, np.asarray(_mc_cpu_chain(ph[j], *shared[i], keys[i, j]))
++
++    i, j, cnt = run(tasks[0])
++    out[i, j] = cnt
++    workers = min(12, len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else os.cpu_count() or 1)
++    with ThreadPoolExecutor(max_workers=workers) as pool:
++        for i, j, cnt in pool.map(run, tasks[1:]):
++            out[i, j] = cnt
++    return out
++
++
+ def _triton_params(num_warps):
+     from jax.experimental.pallas import triton as pltriton
+     cls = getattr(pltriton, 'CompilerParams', None) or getattr(pltriton, 'TritonCompilerParams')
+@@ -259,6 +453,15 @@ def pallas_available():
+         return False
+ 
+ 
++def resolve_backend(backend='auto'):
++    """Select only runtime-gated fast paths; explicit reference selection stays available."""
++    if backend != 'auto':
++        return backend
++    if pallas_available():
++        return 'pallas'
++    return 'cpu' if jax.default_backend() == 'cpu' and cpu_available() else 'ref'
++
++
+ # ------------------------------------------------------------------ bucketing (host)
+ def fit_bucket(M, n, P, buckets=MP_BUCKETS):
+     """Smallest bucket Mp with M <= Mp, n <= Np, P <= Pp; None if none fits. Second value: promoted (did not fit the
+@@ -474,13 +677,12 @@ def cluster_mf(state, ph=PH, tol=1e-10, report_tol=MF_TOL, max_iter=20000, cap=C
+ def titrate(states, *, mc_sweeps=200_000, seed=1, chain_ids=None, backend='auto', buckets=MP_BUCKETS, S=S_BATCH,
+             fallback='cmf', on_batch=None):
+     """Titrate a list of TitrationState. chain_ids[k]: stable integer id of state k (default k); chain c of state k at
+-    pH index j uses key chain_keys(seed, chain_ids[k]*73 + j) (v2 convention). backend: 'pallas' | 'ref' | 'auto' |
++    pH index j uses key chain_keys(seed, chain_ids[k]*73 + j) (v2 convention). backend: 'pallas' | 'cpu' | 'ref' | 'auto' |
+     'cmf' (cluster MF only). States that fit no bucket go to `fallback` ('cmf' or None -> flagged, no result).
+     Returns list of dicts: method, Mp, promoted, prot/tot [73,n] int64 (MC), curves [73,n] f64, pka [n] f64 (nan = None),
+     plus per-bucket timing in titrate.last_timing."""
+     assert mc_sweeps % BLOCK == 0 and 0 < mc_sweeps < (1 << 24), 'sweeps: multiple of 1000, below 2^24 (exact f32 counts)'
+-    if backend == 'auto':
+-        backend = 'pallas' if pallas_available() else 'ref'
++    backend = resolve_backend(backend)
+     chain_ids = np.arange(len(states)) if chain_ids is None else np.asarray(chain_ids)
+     out = [None] * len(states)
+     timing = []
+@@ -499,7 +701,7 @@ def titrate(states, *, mc_sweeps=200_000, seed=1, chain_ids=None, backend='auto'
+                           curves=r['curve'], pka=curves_to_pka(r['curve']), cmf=r)
+             continue
+         groups.setdefault(Mp, []).append((k, promoted))
+-    fn = mc_pallas if backend == 'pallas' else mc_ref
++    fn = mc_pallas if backend == 'pallas' else mc_cpu if backend == 'cpu' else mc_ref
+     ph_term = jax.device_put(PH_TERM)   # not jnp.asarray: JAX 0.11 compiles a jit(stage) program for host->device asarray
+     mcb = mc_sweeps // BLOCK
+     for Mp in sorted(groups):

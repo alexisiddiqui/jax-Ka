@@ -73,7 +73,7 @@ TAIL = dict(pairs=(2,), curves=(RC.NPH,), sweeps=(3,), maxchange=(3,), rho=(2,))
 @dataclass(frozen=True)
 class Config:
     pb_mode: str = "delphi"              # only "delphi" has ground truth (M7 adds "converged")
-    backend: str = "auto"                # SOR + MC kernels: "auto" (Pallas on a Triton GPU, else XLA) | "pallas" | "xla"
+    backend: str = "auto"                # PB auto/Pallas/XLA; auto MC uses CPU chains or supported GPU kernels; explicit XLA keeps ref MC
     mc_sweeps: int = 200_000
     ph_grid: tuple = tuple(T.PH)         # PyPKA's 73 points -2..16 (fixed: titrate's pH table)
     seed: int = 1
@@ -119,7 +119,7 @@ def pb_backend(cfg: Config) -> str:
 
 def mc_backend(cfg: Config) -> str:
     if cfg.backend == "auto":
-        return "pallas" if T.pallas_available() else "ref"
+        return T.resolve_backend()
     return "pallas" if cfg.backend == "pallas" else "ref"
 
 
