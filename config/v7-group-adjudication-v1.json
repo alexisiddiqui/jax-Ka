@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "status": "inactive_counterfactuals_only",
+  "authority_policy": "v7-sabdab-train-validation-external-hard-test-v2",
+  "profiles": [
+    {"policy_id": "cf1-staged-removal", "mapped_family_mode": "retain", "anchor_propagation": false, "antigen_reference_scope": "resolved", "preferred_removal_source": "pinder"},
+    {"policy_id": "cf2-published-mapped-records", "mapped_family_mode": "published_components", "anchor_propagation": false, "antigen_reference_scope": "resolved", "preferred_removal_source": "pinder"},
+    {"policy_id": "cf3-agreeing-family-anchors", "mapped_family_mode": "published_components", "anchor_propagation": true, "antigen_reference_scope": "resolved", "preferred_removal_source": "pinder"},
+    {"policy_id": "cf4-reference-scope-sensitivity", "mapped_family_mode": "published_components", "anchor_propagation": true, "antigen_reference_scope": "resolved_expected_union", "preferred_removal_source": "pinder"}
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "policy_id": "v7-pkpdb-sabdab-pinder-v1",
+  "source_precedence": ["pkpdb", "sabdab", "pinder"],
+  "evaluation_policy": "protect_official_sabdab_test",
+  "validation_policy": "legacy_plus_published_components",
+  "preparation_policy": "full_observed_source_chains",
+  "duplicate_policy": "identical_prepared_context_only",
+  "sampling_policy": "preserve_existing_min_fraction",
+  "apo_policy": "existing_augmentation_no_new_pkai"
+}

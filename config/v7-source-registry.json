@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {"source_id": "pkpdb", "first_party": true, "data_kind": "site_only", "native_split_field": "original_role", "component_field": "source_groups", "input_scope_id": "v6c-source-sequence-inventory", "adapter": "pkpdb_inventory"},
+    {"source_id": "sabdab", "first_party": true, "data_kind": "paired", "native_split_field": "ab_ag_split", "component_field": "ab_ag_cluster", "input_scope_id": "sabdab-ml-v0.3.0-published-variable-and-resolved-antigen", "adapter": "sabdab_ml_metadata"},
+    {"source_id": "pinder", "first_party": true, "data_kind": "paired", "native_split_field": "original_role", "component_field": "source_groups", "input_scope_id": "v6c-source-sequence-inventory", "adapter": "pinder_inventory"}
+  ]
+}

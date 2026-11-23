@@ -1,0 +1,60 @@
+{
+  "schema_version": 2,
+  "policy_id": "v7-sabdab-train-validation-external-hard-test-v2",
+  "status": "agreed_design_not_activated",
+  "authority": {
+    "source": "sabdab",
+    "release": "SAbDab2 ML v0.3.0",
+    "partition_field": "ab_ag_split",
+    "component_field": "ab_ag_cluster",
+    "operational_roles": {
+      "train": "train",
+      "test": "validation"
+    },
+    "preserve_original_source_labels": true,
+    "cohort": "retained_protein_or_peptide_antigen"
+  },
+  "source_precedence": ["pkpdb", "sabdab", "pinder"],
+  "precedence_scope": "eligible_proven_equivalent_prepared_units_not_split_authority",
+  "cross_source_assignment": {
+    "map_using": "published_antibody_and_antigen_components_at_declared_input_scope",
+    "training_component_only": "train",
+    "validation_component_only": "validation",
+    "bridges_training_and_validation": "quarantine_or_reprepare_nonbridging_units",
+    "unmapped_general_proteins": "retain_declared_family_group_split_after_holdout_checks",
+    "incomplete_mapping": "pending_not_assumed_clean",
+    "prefer_removing_conflicting_source": "pinder"
+  },
+  "legacy_cohorts": {
+    "use": "hard_test_candidates_or_labelled_diagnostics",
+    "automatic_training_veto": false,
+    "independent_experimental_claims": "only_for_explicit_references_verified_clean_under_final_roles"
+  },
+  "hard_test": {
+    "default_candidate_source": "external_to_authoritative_training_and_validation",
+    "novelty_profile": "versioned_stricter_sequence_CDR_antigen_and_interface_rules",
+    "check_against": ["train", "validation"],
+    "unassessed_is_eligible": false,
+    "freeze_before": "model_selection_or_performance_inspection",
+    "minimum_size_requires_feasibility_audit": true,
+    "relax_rules_to_fill_quota": false,
+    "overlapping_legacy_cases": "nonindependent_diagnostics",
+    "carve_from_sabdab_published_test": "requires_component_removal_from_validation_before_freeze"
+  },
+  "augmentation": {
+    "geometry_role_inherits": "native_unit_role",
+    "new_apo_pkai": false,
+    "prevent_heldout_donors_in_training": true
+  },
+  "representation": {
+    "scope_must_be_declared": true,
+    "changed_scope_requires_teacher_and_feature_compatibility_check": true,
+    "same_parent_PDB_proves_duplicate": false
+  },
+  "historical_experiments": {
+    "retain_actual_memberships_and_split_versions": true,
+    "retroactive_independence_claims": false,
+    "checkpoint_exposure_requires_actual_run_membership": true
+  },
+  "next_audit": "reassign_proposed_pools_and_measure_hard_test_feasibility_before_native_builds"
+}
