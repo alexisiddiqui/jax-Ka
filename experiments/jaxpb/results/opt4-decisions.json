@@ -1,0 +1,226 @@
+{
+  "profiles": {
+    "cpu1": "measure1",
+    "cpu12": "measure12-fixed"
+  },
+  "arm_evidence": "ab5",
+  "gates": {
+    "cpu12": "final12",
+    "cpu12_fresh": "fresh12",
+    "cpu1": "final1",
+    "a40_pallas": "pallas20",
+    "a40_xla": "xlagpu20",
+    "a40_pallas_fresh": "pallasfresh20",
+    "a40_xla_fresh": "xlagpufresh20"
+  },
+  "label_gate": "labels",
+  "unit_gate": "units-final",
+  "additional_passed": [
+    "workers12",
+    "matched12",
+    "baseline5-arrays"
+  ],
+  "additional_completed": [
+    "measure12-audit"
+  ],
+  "selected_frozen": "/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt4-candidate",
+  "maps_arms": {
+    "1": {
+      "samples": 9,
+      "paired_baseline_s": 1003.1559850217309,
+      "candidate_s": 975.4900707760826,
+      "speedup": 1.0283610413621513,
+      "bitwise": true,
+      "peak_hwm_kb": 4277352
+    },
+    "2": {
+      "samples": 9,
+      "paired_baseline_s": 1003.1559850217309,
+      "candidate_s": 1602.5700076450594,
+      "speedup": 0.6259670281087103,
+      "bitwise": true,
+      "peak_hwm_kb": 4682220
+    },
+    "3": {
+      "samples": 9,
+      "paired_baseline_s": 1003.1559850217309,
+      "candidate_s": 1315.6985167539679,
+      "speedup": 0.7624512547879678,
+      "bitwise": true,
+      "peak_hwm_kb": 4900876
+    },
+    "5": {
+      "samples": 15,
+      "paired_baseline_s": 2005.12383508333,
+      "candidate_s": 1420.533069365425,
+      "speedup": 1.4115291493911164,
+      "bitwise": true,
+      "peak_hwm_kb": 4765056
+    }
+  },
+  "geometry_arms": {
+    "1": {
+      "samples": 5,
+      "paired_baseline_s": 229.71612739004195,
+      "candidate_s": 146.54508114024065,
+      "speedup": 1.5675458064007506,
+      "bitwise": true,
+      "peak_hwm_kb": 4124216
+    },
+    "2": {
+      "samples": 5,
+      "paired_baseline_s": 229.71612739004195,
+      "candidate_s": 92.87349493266083,
+      "speedup": 2.473430417974479,
+      "bitwise": true,
+      "peak_hwm_kb": 3066896
+    },
+    "4": {
+      "samples": 5,
+      "paired_baseline_s": 229.71612739004195,
+      "candidate_s": 119.24099982529879,
+      "speedup": 1.9264860889006417,
+      "bitwise": true,
+      "peak_hwm_kb": 2450772
+    }
+  },
+  "model_site_tile_arms": {
+    "4096": {
+      "samples": 5,
+      "paired_baseline_s": 8.343875486170873,
+      "candidate_s": 12.132029499858618,
+      "speedup": 0.687755950994688,
+      "bitwise": true,
+      "peak_hwm_kb": 712836,
+      "temp_bytes": 39160544
+    },
+    "16384": {
+      "samples": 5,
+      "paired_baseline_s": 8.343875486170873,
+      "candidate_s": 6.9037844769191,
+      "speedup": 1.20859443310641,
+      "bitwise": true,
+      "peak_hwm_kb": 733456,
+      "temp_bytes": 61364960
+    },
+    "65536": {
+      "samples": 5,
+      "paired_baseline_s": 8.343875486170873,
+      "candidate_s": 5.4086596083361655,
+      "speedup": 1.542688224141665,
+      "bitwise": true,
+      "peak_hwm_kb": 822116,
+      "temp_bytes": 151558880
+    }
+  },
+  "map_slab_and_pruned_inverse_tuning": {
+    "5": {
+      "samples": 2,
+      "paired_baseline_s": 255.008857376175,
+      "candidate_s": 172.08468948304653,
+      "speedup": 1.4818799867799861,
+      "bitwise": true,
+      "peak_hwm_kb": 2847976
+    },
+    "6": {
+      "samples": 2,
+      "paired_baseline_s": 255.008857376175,
+      "candidate_s": 413.0197957602795,
+      "speedup": 0.6174252662799351,
+      "bitwise": true,
+      "peak_hwm_kb": 3256552
+    },
+    "7": {
+      "samples": 2,
+      "paired_baseline_s": 255.008857376175,
+      "candidate_s": 171.4656511109788,
+      "speedup": 1.4872299829376556,
+      "bitwise": true,
+      "peak_hwm_kb": 3251108
+    }
+  },
+  "kept": {
+    "maps": "Occupied CSR slots, original offset/slot order, strict float32 running minimum; slab 32, query chunk 8192/B capped 4096.",
+    "geometry": "Auxiliary 128-grid direct span table preserving original 1024-grid atom sort/clipping; original-search fallback outside; compact 128 candidates with full fallback; unchanged float64 burial.",
+    "geometry_sites": "Sequential site map and 65536-point tiles, preserving float64 arithmetic."
+  },
+  "reverted": {
+    "inverse_reach": "Both unpruned and cell-pruned exact early-exit midpoint queries were slower than original forward scatter. Original reach remains.",
+    "slab128": "No meaningful improvement over 32; retain smaller slab.",
+    "small_geometry_chunks": "Lower RSS but about 28% slower than direct spans + compact candidates at original chunk size.",
+    "model_tile4096": "Exact and memory bounded, but slower; 65536 selected.",
+    "two_pinned_workers": "Two 3-core workers: exact, warm 0.911-0.914x one 12-thread process; no >10% gain."
+  },
+  "deferred": {
+    "boundary_laplacian_and_setup_padding": "Step0: post ~1.25s and setup ~1.69s per state combined <0.7% of PB. No production changes; boundary prototype unit checked only."
+  },
+  "native_decision": {
+    "default_changed": false,
+    "backend_flag_added": false,
+    "reason": "Both contraction modes differ after 1/10/100 sweeps and full converged phi/g; no exact native backend.",
+    "gcc": "8.5.0",
+    "clang": null,
+    "ffi_headers_present": true,
+    "lanes": "16 saved real A40-generated PB operators/charges, identical arrays for CPU XLA and C.",
+    "timing_method": "100 forced sweeps, three C repeats, per-lane-sweep and thread-matched XLA reference. Converged check schedule remains 10 sweeps."
+  },
+  "methodology": {
+    "ab_threads": "5 physical cores; Slurm allocates 10 logical CPUs, requested 5 with threads-per-core=1, 10GiB. Gains paired within each state/batch.",
+    "maps_fixtures": "Saved real A40-generated probes; baseline/arm consume identical arrays. Final CPU gates use freshly generated CPU probes. Rejected map arms: 9 batches across all five states; selected arm: all 15.",
+    "model_tuning": "65536 tile measured on one full real batch from each CPU5 state; full selected-source gates cover complete states.",
+    "source_reference": "bdffc91 source, fresh frozen roots, original baseline hashes. Diagnostic split copies never reach production solver.",
+    "cpu1_memory": "CPU1 runs use a 12-CPU parent or 5-core allocation pinned to one CPU to accommodate measured memory; scientific affinity is one.",
+    "allocation_memory": "Original reference/profiling parent aggregate includes its held reference process. Selected CPU20 gates use separate <=12-CPU allocations without that held process.",
+    "baseline_checkpoint": "Original baseline held at19 durable states; original source diagnostic audit runs next. Parent is then cancelled intentionally, freeing checkpoint RAM. A standalone12CPU24GiB pristine baseline-rest job resumes19 fingerprints and computes final state; independent baseline array files retained. No paused timings used.",
+    "cpu12_allocation": "12 allowed CPUs with the original Slurm topology (no threads-per-core override); OS affinity 12. Measurements are described as CPUs/threads, not 12 distinct physical cores.",
+    "gate_scope": "CPU20 and both A40 backends: two complete passes plus a fresh complete process. CPU1: five OPT2 states against unchanged one-thread source.",
+    "cpu12_reference_comparison": "Both selected-source CPU20 captures run independently. Final assembly compares every saved fingerprint on all passes strictly with the pristine baseline20 and directly across the two processes. Original captures remain unmodified.",
+    "matched12": "All 15 saved real CPU5 maps batches, baseline and selected occupied32/wide tiles within the same 12-CPU allocation on idle amd96 comp0652 after the one-thread gate, to investigate the first concurrent full-PB large-state maps slowdown.",
+    "label_baseline": "Independent current bdffc91 arrays from baseline5-arrays-energies.npz, generated by pristine baseline-rest source and fingerprinted against completed baseline20 (all captured fields). Both arms write their own saved PB fields. Original base12 captured hashes only; no reconstructed baseline arrays.",
+    "cpu12_timing": "Use the fresh process on comp0652, second in-process pass of CPU5 (zero compiles), as the CPU12 benchmark. This is selected before timing is available to avoid the concurrent/fragmented core-group allocation of main capture 812833. The main capture still executes two full20 passes. Both jobs stay <=12CPUs.",
+    "label_candidate_snapshot": "Full first-pass20 candidate capture, strictly equal to baseline20 in every field, copied with SHA256 verification to immutable labels-input snapshot. MC runs in parallel with required second full20 and independent fresh-process gates; finalization still requires all gates."
+  },
+  "floor_and_phase5": {
+    "phase5": "Match XLA per-operation/per-colour FMA choices in native SOR while preserving split checks; retest exact phi/g and remaining atom/reach queries. No phase-5 work performed.",
+    "step0_sor_stage_floor_s_per_state": 164.8957
+  },
+  "known_nonproduction_differences": "Diagnostic maps decomposition into independently jitted operations can differ in the float32 surf field (masks/counters equal); it is measured and discarded. Original fused baseline maps feed all production reference solves. Details and maxima in CPU1 profile and 12-CPU audit.",
+  "posthoc_references": {
+    "cpu12": "baseline20",
+    "cpu12_fresh": "baseline20"
+  },
+  "label_helper_frozen": "/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt4-labels-real3",
+  "benchmark_cpu12_gate": "cpu12_fresh",
+  "matched_maps_cpu12": {
+    "samples": 15,
+    "completed": true,
+    "bitwise": true,
+    "speedup": 1.4648704966221842,
+    "env": {
+      "host": "comp0652",
+      "cpu_model": "AMD EPYC 9224 24-Core Processor",
+      "affinity": 12,
+      "jax": "0.11.1",
+      "device": "cpu:0",
+      "backend": "cpu",
+      "job": "812842",
+      "xla_flags": "--xla_force_host_platform_device_count=1",
+      "code": "/home/coulson/oc/lina4225/_runtime/jax-Ka/pkabench/tierB/jaxpb-pipeline/opt4-matched12"
+    }
+  },
+  "diagnostic_rounding_audit": {
+    "tag": "measure12-audit",
+    "states": 1,
+    "only_field": "surf",
+    "dtype": "float32",
+    "max_abs": 1.52587890625e-05,
+    "masks_and_counters_equal": true,
+    "production_uses_original_maps": true
+  },
+  "recovered_issues": [
+    {
+      "issue": "Initial base12 immutable gate captured hashes but did not save energy NPZ; found before queued MC execution.",
+      "resolution": "Cancelled only pending813007. Independent pristine baseline5 array capture813322, verified against baseline20, supplies MC input and PB arrays; replacement frozen label job requires this capture."
+    }
+  ]
+}

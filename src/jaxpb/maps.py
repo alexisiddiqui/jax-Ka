@@ -7,6 +7,10 @@ NS, NB, PB, n), atoms/probes arrive FAR-padded at class sizes, and nothing depen
 All arithmetic is float32 with x64 disabled (as in the prototypes).
 
 maps_batch(...)  -- one jitted, vmapped program per (class c, Sizes): coarse + focused + model maps for B sites.
+
+OPT4 CPU queries use occupied CSR slots in the original offset/slot order.
+The running minimum and float32 norms preserve first-min ties.
+GPU paths retain their original programs.
 """
 from __future__ import annotations
 
@@ -18,6 +22,7 @@ import jax
 import jax.numpy as jnp
 
 from . import records as RC
+from ._cpu_cells import _compact_slots
 
 RP = RC.RADPRB
 EXRAD = RC.EXRAD
@@ -69,7 +74,7 @@ def build_cells(P, w, lo, ncell, cell, K, batch_size=1):
     bounds = jnp.searchsorted(sc, jnp.arange(ncell ** 3 + 1, dtype=jnp.int32), side="left").astype(jnp.int32)
     start, stop = bounds[:-1], bounds[1:]
     table_budget = (16 if jax.default_backend() == "cpu" else 320) << 20
-    if batch_size * ncell ** 3 * K * 4 <= table_budget:
+    if batch_size * ncell ** 3 * K * 4 <= table_budget and not (jax.default_backend() == "cpu" and K <= 48):
         kk = start[:, None] + jnp.arange(K)
         table = jnp.where(kk < stop[:, None], order[jnp.minimum(kk, order.shape[0] - 1)], -1)
         return table, jnp.max(stop - start)
@@ -115,6 +120,8 @@ def _reach_bytes():
 
 
 def _q_chunk(reach, K, B=1):
+    if jax.default_backend() == "cpu" and K <= 48:
+        return min(4096, max(1, 8192 // B))
     if jax.default_backend() == "cpu":
         return min(1024 if K > 32 else 4096,
                    max(1, QUERY_BYTES // (B * (2 * reach + 1) ** 3 * min(K, CSR_SLAB) * 48)))
@@ -146,6 +153,8 @@ def _table_K(table):
 
 def _q_one(q, P, w, table, lo, ncell, cell, offs):
     """Reconstruct only this query tile, in the dense table's offset-major, slot-minor order."""
+    if jax.default_backend() == "cpu" and _table_K(table) <= 48:
+        return _compact_query(q, P, w, table, lo, ncell, cell, offs)
     c = jnp.floor((q - lo) / cell).astype(jnp.int32)
     cc = c[:, None, :] + offs[None]
     ok = jnp.all((cc >= 0) & (cc < ncell), axis=2)
@@ -657,3 +666,23 @@ def maps_batch_ref(pos_m, rad_m, probes, acent, spos, srad, sprb, sz: Sizes):
         return mc, mf, ms, jnp.stack([cc, cf, cs])
 
     return jax.vmap(one)(acent, spos, srad, sprb)
+
+
+def _compact_query(q,P,w,table,lo,ncell,cell,offs,slab=32):
+    c=jnp.floor((q-lo)/cell).astype(jnp.int32); cc=c[:,None]+offs[None]
+    ok=jnp.all((cc>=0)&(cc<ncell),axis=2); cid=jnp.where(ok,(cc[...,0]*ncell+cc[...,1])*ncell+cc[...,2],0)
+    if isinstance(table,tuple):
+        order,start,stop,slots=table; st=start[cid]; count=jnp.where(ok,jnp.minimum(stop[cid]-st,len(slots)),0)
+    else:
+        st=jnp.zeros_like(cid); count=jnp.where(ok,jnp.sum(table[cid]>=0,axis=2,dtype=jnp.int32),0)
+    init=(jnp.full(q.shape[0],jnp.inf,q.dtype),jnp.full(q.shape[0],-1,jnp.int32))
+    def body(k,best):
+        rank=jnp.broadcast_to(k*slab+jnp.arange(slab,dtype=jnp.int32),(q.shape[0],slab))
+        off,slot,valid=_compact_slots(count,rank)
+        if isinstance(table,tuple):
+            ii=jnp.take_along_axis(st,off,axis=1)+slot; idx=order[jnp.minimum(ii,len(order)-1)]
+        else: idx=table[jnp.take_along_axis(cid,off,axis=1),jnp.minimum(slot,table.shape[1]-1)]
+        idx=jnp.where(valid,idx,-1)
+        value,point=_pick(q,P,w,idx); take=value<best[0]
+        return jnp.where(take,value,best[0]),jnp.where(take,point,best[1])
+    return jax.lax.fori_loop(0,(jnp.max(jnp.sum(count,axis=1))+slab-1)//slab,body,init)

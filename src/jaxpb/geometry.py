@@ -12,6 +12,10 @@ list is built on the host (scipy cKDTree, as v1/v2) and padded to PAIRS_PER_ATOM
 GeoState.flags reports them (overflow -> caller retries in the next class / XL sizes).
 float64 is enabled only around these calls (x64() context, as v2): process-wide x64 would silently promote the f32
 map/PB code through weak-typed Python scalars and break parity with the f32 prototypes (see DEVIATIONS in pb.py).
+
+OPT4 CPU geometry adds direct cell spans, with the original hash lookup as an out-of-range fallback.
+Burial compacts candidates in their original order and keeps float64 arithmetic.
+CPU model-site burial uses 65536-point tiles and sequential site mapping to bound temporary storage.
 """
 from __future__ import annotations
 
@@ -24,6 +28,7 @@ import jax
 import jax.numpy as jnp
 
 from . import records as RC
+from ._cpu_cells import _compact_slots
 
 
 
@@ -112,6 +117,8 @@ def _hash_cells(P, valid, lo, cell):
 
 def _cand(pts, lo, cell, scid, order, K):
     """candidate atom indices (m, 27K) from the 27 neighbouring hashed cells, -1 padded; overflow count (max cell occ)."""
+    if isinstance(scid, tuple):
+        return _span_cand(pts, lo, cell, scid, order, K)
     c = _cell_of(pts, lo, cell)[:, None, :] + jnp.asarray(OFFS27)[None]
     okc = jnp.all((c >= 0) & (c < NCV), axis=2)
     cid = jnp.where(okc, (c[..., 0] * NCV + c[..., 1]) * NCV + c[..., 2], -1)
@@ -163,8 +170,11 @@ def _vertex_chunk(s, NV, P, Rj, valid, U, lo, cell, bound, scid, order, CH, nver
     g = s + jnp.arange(CH, dtype=jnp.int64)
     ok = g < NV
     pts, a, vv = _vertex_gen(g, P, Rj, U, nvert)
-    cand, occ = _cand(pts, lo, cell, scid, order, K)
-    b, ball = _burial(pts, jnp.stack([a, a], 1), cand, P, Rj, bound, knn)
+    if isinstance(scid, tuple):
+        b, ball, occ = _compact_burial(pts, jnp.stack([a, a], 1), lo, cell, scid, order, P, Rj, bound, K, knn)
+    else:
+        cand, occ = _cand(pts, lo, cell, scid, order, K)
+        b, ball = _burial(pts, jnp.stack([a, a], 1), cand, P, Rj, bound, knn)
     return _finish(pts, ok & valid[a], b, ball, occ, g)
 
 
@@ -172,8 +182,11 @@ def _arc_chunk(s, NA, Cum, Mm, Cen, Rho, E1, E2, Pi, Pj, P, Rj, lo, cell, bound,
     g = s + jnp.arange(CH, dtype=jnp.int64)
     ok = g < NA
     pts, p, k = _arc_gen(g, Cum, Mm, Cen, Rho, E1, E2)
-    cand, occ = _cand(pts, lo, cell, scid, order, K)
-    b, ball = _burial(pts, jnp.stack([Pi[p], Pj[p]], 1), cand, P, Rj, bound, knn)
+    if isinstance(scid, tuple):
+        b, ball, occ = _compact_burial(pts, jnp.stack([Pi[p], Pj[p]], 1), lo, cell, scid, order, P, Rj, bound, K, knn)
+    else:
+        cand, occ = _cand(pts, lo, cell, scid, order, K)
+        b, ball = _burial(pts, jnp.stack([Pi[p], Pj[p]], 1), cand, P, Rj, bound, knn)
     return _finish(pts, ok, b, ball, occ, g)
 
 
@@ -198,8 +211,11 @@ def _near_burial(pts, own, near, lo, cell, scid, order, P, Rj, bound, K, knn, SC
         sub = jax.lax.dynamic_slice_in_dim(idx, j * SC, SC)
         live = (j * SC + jnp.arange(SC)) < nn
         ps = pts[sub]
-        cand, oc = _cand(ps, lo, cell, scid, order, K)
-        b, ball = _burial(ps, own[sub], cand, P, Rj, bound, knn)
+        if isinstance(scid, tuple):
+            b, ball, oc = _compact_burial(ps, own[sub], lo, cell, scid, order, P, Rj, bound, K, knn)
+        else:
+            cand, oc = _cand(ps, lo, cell, scid, order, K)
+            b, ball = _burial(ps, own[sub], cand, P, Rj, bound, knn)
         tgt = jnp.where(live, sub, CH)
         return bk.at[tgt].set(b, mode="drop"), ba.at[tgt].set(ball, mode="drop"), jnp.maximum(occ, oc.astype(occ.dtype))
     z = jnp.zeros((), jnp.int64)
@@ -302,6 +318,8 @@ def geo_pack(buf, pts, off):
 
 @partial(jax.jit, static_argnames=("NP",))
 def _cell_hash(P, valid, lo, cell, NP=None):
+    if jax.default_backend() == "cpu":
+        return _span_hash(P, valid, lo, cell)
     return _hash_cells(P, valid, lo, cell)
 
 
@@ -460,7 +478,10 @@ def _site_probes(sp, sR, sv, U, nvert, MXs, OUT, knn, arc_step):
     aown = jnp.stack([jnp.repeat(i, MXs), jnp.repeat(j, MXs)], 1)
     pts = jnp.concatenate([vpts, apts]); valid = jnp.concatenate([vvalid, avalid])
     own = jnp.concatenate([jnp.stack([a, a], 1), aown])
-    b, ball = _burial(pts, own, jnp.broadcast_to(cand_all, (pts.shape[0], na)), sp, sR, bound, knn)
+    if jax.default_backend() == "cpu":
+        b, ball = _site_burial(pts, own, cand_all, sp, sR, bound, knn)
+    else:
+        b, ball = _burial(pts, own, jnp.broadcast_to(cand_all, (pts.shape[0], na)), sp, sR, bound, knn)
     keep = valid & ~b
     sel = jnp.nonzero(keep, size=OUT, fill_value=0)[0]
     n = jnp.sum(keep)
@@ -472,4 +493,67 @@ def _site_probes(sp, sR, sv, U, nvert, MXs, OUT, knn, arc_step):
 def geometry_sites(sp, sR, sv, U, nvert=RC.NVERT, MXs=MX, OUT=RC.MP_MODEL, knn=24, arc_step=RC.ARC_STEP):
     """Model-compound probe centres for a batch of B sites. sp [B,MA,3] f64, sR [B,MA] f64 (= r + 1.4), sv [B,MA] bool.
     Returns probes [B,OUT,3] f32 (FAR-padded), counts [B], max arc count [B] (overflow if > MXs), knn changes [B]."""
+    if jax.default_backend() == "cpu":
+        return jax.lax.map(lambda xs: _site_probes(*xs, U, nvert, MXs, OUT, knn, arc_step), (sp, sR, sv))
     return jax.vmap(lambda a, b, c: _site_probes(a, b, c, U, nvert, MXs, OUT, knn, arc_step))(sp, sR, sv)
+
+
+GEO_NCELL = 128
+
+
+def _span_hash(P,valid,lo,cell):
+    """Preserve the original 1024-grid sort; add a bounded direct span table.
+
+    States outside the auxiliary 128-grid retain the original hashed search path.
+    This avoids changing clipping or silently restricting supported coordinates.
+    """
+    scid,order=_hash_cells(P,valid,lo,cell)
+    c=_cell_of(P,lo,cell); fits=jnp.all((~valid)|jnp.all(c<GEO_NCELL,axis=1))
+    cid=(c[:,0]*GEO_NCELL+c[:,1])*GEO_NCELL+c[:,2]
+    cid=jnp.where(valid&jnp.all(c<GEO_NCELL,axis=1),cid,GEO_NCELL**3)
+    counts=jnp.zeros(GEO_NCELL**3+1,jnp.int32).at[cid].add(valid.astype(jnp.int32))
+    bounds=jnp.concatenate([jnp.zeros(1,jnp.int32),jnp.cumsum(counts[:-1],dtype=jnp.int32)])
+    return (scid,bounds,fits),order
+
+
+def _candidate_spans(pts,lo,cell,hashed,order,K):
+    scid,bounds,fits=hashed
+    c=_cell_of(pts,lo,cell)[:,None]+jnp.asarray(OFFS27)[None]
+    ok=jnp.all((c>=0)&(c<NCV),axis=2)
+    cid=jnp.where(ok,(c[...,0]*NCV+c[...,1])*NCV+c[...,2],-1)
+    def direct(_):
+        inaux=ok&jnp.all(c<GEO_NCELL,axis=2)
+        idx=jnp.where(inaux,(c[...,0]*GEO_NCELL+c[...,1])*GEO_NCELL+c[...,2],0).astype(jnp.int32)
+        return jnp.where(inaux,bounds[idx],0),jnp.where(inaux,bounds[idx+1],0)
+    st,en=jax.lax.cond(fits,direct,lambda _:(jnp.searchsorted(scid,cid,side='left').astype(jnp.int32),jnp.searchsorted(scid,cid,side='right').astype(jnp.int32)),None)
+    return st,jnp.where(ok,jnp.minimum(en-st,K),0),jnp.max(jnp.where(ok,en-st,0))
+
+
+def _span_cand(pts,lo,cell,hashed,order,K):
+    st,count,occ=_candidate_spans(pts,lo,cell,hashed,order,K)
+    kk=st[...,None]+jnp.arange(K,dtype=jnp.int32)
+    idx=jnp.where(jnp.arange(K)<count[...,None],order[jnp.minimum(kk,len(order)-1)],-1)
+    return idx.reshape(len(pts),-1),occ
+
+
+def _compact_burial(pts,own,lo,cell,hashed,order,P,R,bound,K,knn):
+    st,count,occ=_candidate_spans(pts,lo,cell,hashed,order,K); capacity=128
+    def small(_):
+        rank=jnp.broadcast_to(jnp.arange(capacity,dtype=jnp.int32),(len(pts),capacity))
+        off,slot,valid=_compact_slots(count,rank); ii=jnp.take_along_axis(st,off,axis=1)+slot
+        idx=jnp.where(valid,order[jnp.minimum(ii,len(order)-1)],-1)
+        return _burial(pts,own,idx,P,R,bound,knn)
+    def full(_):
+        kk=st[...,None]+jnp.arange(K,dtype=jnp.int32)
+        cand=jnp.where(jnp.arange(K)<count[...,None],order[jnp.minimum(kk,len(order)-1)],-1).reshape(len(pts),-1)
+        return _burial(pts,own,cand,P,R,bound,knn)
+    b,ba=jax.lax.cond(jnp.max(jnp.sum(count,axis=1))<=capacity,small,full,None)
+    return b,ba,occ
+
+
+def _site_burial(pts,own,cand_all,sp,sR,bound,knn):
+ ch=65536; N=len(pts); pad=(-N)%ch
+ ps=jnp.pad(pts,((0,pad),(0,0))).reshape(-1,ch,3)
+ ow=jnp.pad(own,((0,pad),(0,0))).reshape(-1,ch,2)
+ b,ba=jax.lax.map(lambda xs:_burial(xs[0],xs[1],jnp.broadcast_to(cand_all,(ch,len(cand_all))),sp,sR,bound,knn),(ps,ow))
+ return b.reshape(-1)[:N],ba.reshape(-1)[:N]
