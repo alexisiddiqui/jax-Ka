@@ -72,7 +72,7 @@ TAIL = dict(pairs=(2,), curves=(RC.NPH,), sweeps=(3,), maxchange=(3,), rho=(2,))
 # ------------------------------------------------------------------------------------------------ config / provenance
 @dataclass(frozen=True)
 class Config:
-    pb_mode: str = "delphi"              # only "delphi" has ground truth (M7 adds "converged")
+    pb_mode: str = "delphi"              # only "delphi" is supported: it is the PyPKA-parity mode (a converged mode was tried in M7 and dropped)
     backend: str = "auto"                # PB auto/Pallas/XLA; auto MC uses CPU chains or supported GPU kernels; explicit XLA keeps ref MC
     mc_sweeps: int = 200_000
     ph_grid: tuple = tuple(T.PH)         # PyPKA's 73 points -2..16 (fixed: titrate's pH table)
@@ -86,7 +86,7 @@ class Config:
 
     def check(self):
         if self.pb_mode != "delphi":
-            raise NotImplementedError(f"pb_mode {self.pb_mode!r} (only 'delphi' until M7)")
+            raise NotImplementedError(f"pb_mode {self.pb_mode!r} (only 'delphi')")
         if tuple(self.ph_grid) != tuple(T.PH):
             raise ValueError("ph_grid must be PyPKA's 73-point grid (-2..16 step 0.25)")
         if self.backend not in ("auto", "pallas", "xla"):
@@ -408,6 +408,24 @@ def _shard_done(path: str, chash: str, csha: str, plan_ids: List[str]) -> bool:
     return True
 
 
+# Full histories live in run.log.jsonl; bounded recent rows retain the old keys.
+SUMMARY_HISTORY_LIMIT = 256
+
+
+def _history(summary, key, row, log):
+    log(dict(event=key, row=row))
+    rows = summary[key]
+    rows.append(row)
+    if len(rows) > SUMMARY_HISTORY_LIMIT:
+        del rows[0]
+    agg = summary["history_totals"].setdefault(key, dict(count=0, sums={}))
+    agg["count"] += 1
+    if isinstance(row, dict):
+        for name in ("states", "seconds", "bytes", "compiles"):
+            if isinstance(row.get(name), (int, float)):
+                agg["sums"][name] = agg["sums"].get(name, 0) + row[name]
+
+
 def run(items: List[dict], out_dir: str, cfg: Config = Config(), cache: Optional[str] = None,
         max_shards: Optional[int] = None, echo: bool = True) -> dict:
     """Label every item into <out_dir>/labels_<k>.npz (resumable). Returns the run summary (also written to
@@ -438,20 +456,21 @@ def run(items: List[dict], out_dir: str, cfg: Config = Config(), cache: Optional
              cache=cinfo, pb_backend=prov["pb_backend"], mc_backend=prov["mc_backend"]))
     summary = dict(out=out_dir, cfg_hash=chash, code_sha=csha, cache_open=cinfo, shards_skipped=[], shards_written=[],
                    state_timing=dict(count=0, failed=0, totals={}, maxima={}),
-                   titration_batches=[], compiles_after_shard=[], shard_bytes=[])
+                   titration_batches=[], compiles_after_shard=[], shard_bytes=[],
+                   history_limit=SUMMARY_HISTORY_LIMIT, history_totals={}, history_file=log.path)
     T0 = time.perf_counter()
     with CompileCounter() as cc:
         for k, shard in enumerate(plan["shards"]):
             path = os.path.join(out_dir, f"labels_{k:05d}.npz")
             if _shard_done(path, chash, csha, [it["alias"] for it in shard]):
-                summary["shards_skipped"].append(k); log(dict(event="shard_skip", shard=k))
+                _history(summary, "shards_skipped", k, log); log(dict(event="shard_skip", shard=k))
                 continue
-            if max_shards is not None and len(summary["shards_written"]) >= max_shards:
+            if max_shards is not None and summary["history_totals"].get("shards_written", {}).get("count", 0) >= max_shards:
                 break
             _run_shard(k, shard, path, cfg, prov, log, cc, summary)
-            summary["shards_written"].append(k)
-            summary["compiles_after_shard"].append(dict(shard=k, states_done=sum(len(plan["shards"][j]) for j in range(k + 1)),
-                                                        n_compiled=cc.n_compiled, n_cache_hits=cc.n_cache_hits))
+            _history(summary, "shards_written", k, log)
+            _history(summary, "compiles_after_shard", dict(shard=k, states_done=sum(len(plan["shards"][j]) for j in range(k + 1)),
+                                                        n_compiled=cc.n_compiled, n_cache_hits=cc.n_cache_hits), log)
         summary["compiles"] = cc.summary()
     summary["wall_s"] = time.perf_counter() - T0
     if cache:
@@ -516,8 +535,8 @@ def _run_shard(k, shard, path, cfg, prov, log, cc, summary):
         res = titrate([E[i] for i in idx], cfg, chain_ids=[chain_id_of(shard[i]["alias"]) for i in idx],
                       on_batch=onb)
         dt = time.perf_counter() - t0
-        summary["titration_batches"].append(dict(shard=k, Mp=key, states=len(idx), seconds=dt,
-                                                 compiles=cc.n_compiled - c0, launches=bt))
+        _history(summary, "titration_batches", dict(shard=k, Mp=key, states=len(idx), seconds=dt,
+                                                 compiles=cc.n_compiled - c0, launches=bt), log)
         for i, r in zip(idx, res):
             st_tim[i]["t_titr"] = dt / len(idx); st_tim[i]["titr_compiles"] = cc.n_compiled - c0
             _finish(i, r)
@@ -580,9 +599,10 @@ def _run_shard(k, shard, path, cfg, prov, log, cc, summary):
                   states=[st_tim[i] for i in range(len(shard))], host_maxrss_bytes=host_rss_bytes(),
                   gpu_mem=dict(zip(("in_use", "peak", "limit"), gpu_mem())))
     write_shard(path, rows, prov, timing)
-    summary["shard_bytes"].append(dict(shard=k, states=len(shard), bytes=os.path.getsize(path)))
+    _history(summary, "shard_bytes", dict(shard=k, states=len(shard), bytes=os.path.getsize(path)), log)
     agg = summary["state_timing"]
     for row in st_tim.values():
+        log(dict(event="state_timing", shard=k, row=row))
         agg["count"] += 1
         agg["failed"] += int(row.get("failed", False))
         for name, value in row.items():
